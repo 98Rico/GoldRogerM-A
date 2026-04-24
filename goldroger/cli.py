@@ -17,7 +17,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .exporters import generate_excel, generate_pptx
-from .orchestrator import run_analysis, run_ma_analysis, run_pipeline
+from .orchestrator import run_analysis
 
 console = Console()
 

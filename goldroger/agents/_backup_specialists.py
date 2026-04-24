@@ -97,129 +97,125 @@ Return ONLY this JSON:
   "sources": ["Title — https://example.com", "Title — https://example.com"]
 }}"""
 
-class FinancialModelerAgent(BaseAgent):
-    """Agent 3 — STRICT financial data extraction ONLY"""
 
+class FinancialModelerAgent(BaseAgent):
+    """Agent 3 — P&L extraction, margin analysis, 3-year projections."""
     name = "FinancialModeler"
-    max_tokens = 2000
+    max_tokens = 2500
 
     def _system_prompt(self) -> str:
         return (
-            "You are a financial data extraction system inside a deterministic valuation pipeline. "
-            "Your ONLY task is to extract factual financial data from verified sources found via web_search. "
-            "DO NOT forecast. DO NOT model. DO NOT estimate future projections. "
-            "DO NOT reconstruct income statements. "
-            "Return ONLY valid JSON. No explanation, no markdown."
+            "You are a financial analyst specializing in financial modeling. "
+            "Use web_search to find real financial data: annual reports, earnings releases, "
+            "investor presentations, news about revenue figures. "
+            "For private companies, use credible secondary sources and triangulate estimates. "
+            "Respond ONLY with a valid JSON object — no markdown fences, no preamble. "
+            "If exact numbers are unavailable, provide clearly marked estimates (e.g. '$1.2B (est.)')."
         )
 
     def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
         sector = context.get("sector", "")
         business = context.get("business_model", "") or context.get("description", "")
+        if company_type == "public":
+            data_sources = (
+                "Search for their latest annual report, earnings releases, and financial statements. "
+                "Prefer primary filings and investor relations."
+            )
+        else:
+            data_sources = (
+                "Search for disclosed revenue/sales figures from credible secondary sources: "
+                "press interviews, reputable trade publications, industry reports, and well-known sector sites. "
+                "If EBITDA is not disclosed, infer an EBITDA margin range from close peers and clearly mark it as (est.). "
+                "Prefer EUR for European private brands when appropriate."
+            )
+        y0, y1, y2, y3 = CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1, CURRENT_YEAR + 2
+        return f"""Find financial data for "{company}" ({company_type}). {data_sources}
 
-        return f"""
-Extract financial data for "{company}" ({company_type}).
+Context (may be incomplete):
+- Sector: {sector or "N/A"}
+- Company description/business model: {business or "N/A"}
 
-Context:
-- Sector: {sector or "unknown"}
-- Business: {business or "unknown"}
+IMPORTANT (private companies):
+- It is better to return a reasonable estimate range than "N/A" for revenue/EBITDA margin if credible sources exist.
+- Label estimates explicitly: "€1.5B–€2.0B (est.)" or "15–20% (est.)".
+- Use web_search with queries in local language too (e.g. French): "{company} chiffre d'affaires", "{company} ventes", "{company} EBITDA marge".
 
-TASK:
-Use web_search to find ONLY factual historical financial data.
-
-Allowed sources:
-- annual reports
-- earnings releases
-- investor presentations
-- reputable financial databases
-- credible industry reports
-
-STRICT RULES:
-- DO NOT create projections
-- DO NOT infer future growth
-- DO NOT build financial models
-- DO NOT estimate missing values unless explicitly stated in sources
-- DO NOT reconstruct income statements
-
-OUTPUT (STRICT JSON):
-
+Return ONLY this JSON (use "N/A" if data unavailable, never null for string fields):
 {{
-  "currency": "USD or EUR",
-  "revenue_latest": "value or N/A",
-  "revenue_history": [
-    {{"year": 2022, "value": "..." }},
-    {{"year": 2023, "value": "..." }},
-    {{"year": 2024, "value": "..." }}
+  "revenue_current": "latest annual revenue in $ (e.g. '$4.2B')",
+  "revenue_growth": "YoY revenue growth (e.g. '+22%')",
+  "ebitda_margin": "EBITDA margin (e.g. '18%')",
+  "net_margin": "net profit margin (e.g. '12%')",
+  "gross_margin": "gross margin (e.g. '65%')",
+  "debt_to_equity": "D/E ratio or 'N/A'",
+  "free_cash_flow": "latest FCF (e.g. '$800M')",
+  "projections": [
+    {{"year": "{y1}", "revenue": "projected $", "growth": "%", "ebitda_margin": "%"}},
+    {{"year": "{y2}", "revenue": "projected $", "growth": "%", "ebitda_margin": "%"}},
+    {{"year": "{y3}", "revenue": "projected $", "growth": "%", "ebitda_margin": "%"}}
   ],
-  "ebitda_margin": "value or N/A",
-  "net_margin": "value or N/A",
-  "gross_margin": "value or N/A",
-  "free_cash_flow": "value or N/A",
-  "tax_rate": "value or N/A",
-  "capex": "value or N/A",
-  "sources": [
-    "Title — https://...",
-    "Title — https://..."
-  ]
-}}
-"""
+  "key_metrics": [
+    {{"name": "metric relevant to this business", "value": "value", "delta": "YoY change"}}
+  ],
+  "income_statement": [
+    {{"line": "Revenue", "values": ["FY{y0-1}", "FY{y0}", "FY{y1}E", "FY{y2}E"]}},
+    {{"line": "Gross Profit", "values": ["...", "...", "...", "..."]}},
+    {{"line": "EBITDA", "values": ["...", "...", "...", "..."]}},
+    {{"line": "Net Income", "values": ["...", "...", "...", "..."]}}
+  ],
+  "sources": ["Title — https://example.com", "Title — https://example.com"]
+}}"""
+
 
 class ValuationEngineAgent(BaseAgent):
-    """
-    Agent 4 — STRUCTURING ONLY (NO VALUATION)
-    """
-
+    """Agent 4 — DCF, trading comps, transaction comps, football field."""
     name = "ValuationEngine"
     model = "mistral-large-latest"
-    max_tokens = 2000
+    max_tokens = 2048
 
     def _system_prompt(self) -> str:
         return (
-            "You are an investment banking associate. "
-            "You do NOT compute valuation. "
-            "You ONLY extract assumptions needed for valuation models. "
-            "Your output feeds a deterministic Python valuation engine. "
-            "Respond ONLY in JSON."
+            "You are a valuation expert at a top M&A advisory firm. "
+            "Use web_search to find: current stock price, EV/EBITDA multiples of comparable public companies, "
+            "recent M&A transaction multiples in the sector, analyst price targets. "
+            "Respond ONLY with a valid JSON object — no markdown fences, no preamble. "
+            "If the company is private and market prices are unavailable, use a last-round valuation "
+            "or infer a value range from comparable multiples and clearly mark it as an estimate."
         )
 
     def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
-        sector = context.get("sector", "")
         revenue = context.get("revenue_current", "unknown")
+        sector = context.get("sector", "")
+        return f"""Build a valuation for "{company}" (sector: {sector}, latest revenue: {revenue}).
+Search for: comparable public company multiples, recent sector M&A transactions, analyst targets.
 
-        return f"""
-Prepare valuation assumptions for "{company}".
-
-Sector: {sector}
-Revenue: {revenue}
-
-TASK:
-Use web_search to extract:
-
-1. EV/EBITDA range for sector
-2. EV/Revenue range
-3. 5–8 comparable companies
-4. 2–5 precedent transactions
-
-IMPORTANT:
-- DO NOT compute valuation
-- DO NOT output prices
-- ONLY return assumptions for Python engine
-
-Return JSON:
-
+Return ONLY this JSON:
 {{
-  "wacc": 0.10,
-  "ev_ebitda_range": [10, 14],
-  "ev_revenue_range": [2, 4],
-  "tx_multiple": 12,
-  "weights": {{
-    "dcf": 0.5,
-    "comps": 0.3,
-    "transactions": 0.2
+  "current_price": "current stock price or latest valuation/last round $",
+  "currency": "USD or EUR",
+  "methods": [
+    {{"name": "DCF (5Y)", "low": "$X", "mid": "$X", "high": "$X", "current_pct": "% vs current", "weight": 40}},
+    {{"name": "EV/EBITDA Comps", "low": "$X", "mid": "$X", "high": "$X", "current_pct": "%", "weight": 30}},
+    {{"name": "EV/Revenue Comps", "low": "$X", "mid": "$X", "high": "$X", "current_pct": "%", "weight": 20}},
+    {{"name": "Precedent Transactions", "low": "$X", "mid": "$X", "high": "$X", "current_pct": "%", "weight": 10}}
+  ],
+  "implied_value": "weighted average target $",
+  "upside_downside": "+X% or -X%",
+  "recommendation": "BUY or HOLD or SELL",
+  "dcf_assumptions": {{
+    "wacc": "X%",
+    "terminal_growth": "X%",
+    "projection_years": "5"
   }},
-  "comparable_companies": ["A", "B", "C"],
-  "sources": ["Title — URL"]
-}}
-"""
+  "comparable_multiples": {{
+    "ev_ebitda": "Xx",
+    "ev_revenue": "Xx",
+    "pe": "Xx"
+  }},
+  "sources": ["Title — https://example.com", "Title — https://example.com"]
+}}"""
+
+
 class ReportWriterAgent(BaseAgent):
     """Agent 5 — Investment thesis, scenarios, catalysts."""
     name = "ReportWriter"
