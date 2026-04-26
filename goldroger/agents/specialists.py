@@ -8,48 +8,55 @@ from .base import BaseAgent
 CURRENT_YEAR = datetime.now().year
 
 
-class DataCollectorAgent(BaseAgent):
-    """Agent 1 — Collects fundamentals, business model, competitive position."""
-    name = "DataCollector"
+class DataCollectorAgent:
+    def __init__(self, client):
+        self.client = client
 
-    def _system_prompt(self) -> str:
-        return (
-            "You are a senior equity research analyst at a top investment bank. "
-            "You MUST use web_search to find real, current information about the company. "
-            "Search for the company's official website, Wikipedia, press releases, "
-            "annual reports, and recent news articles. "
-            "Respond ONLY with a valid JSON object — no markdown fences, no preamble, no explanation. "
-            "Never wrap the JSON in ``` and do not include comments."
-        )
+    def run(self, company: str, company_type: str, context: dict = None):
 
-    def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
-        data_hint = (
-            "Find their latest annual report, investor relations page, and SEC/AMF filings."
-            if company_type == "public"
-            else "Find their latest funding rounds, Crunchbase profile, LinkedIn, and any press coverage."
-        )
-        return f"""Search for "{company}" ({company_type} company). {data_hint}
+        prompt = f"""
+You are a financial data extraction system.
 
-Return ONLY this JSON object with real data found:
+Return ONLY valid JSON.
+
+Company: {company}
+Type: {company_type}
+
+Schema:
 {{
-  "company_name": "full official name",
-  "ticker": "stock ticker or null",
-  "sector": "specific industry sector",
-  "founded": "founding year",
-  "headquarters": "city, country",
-  "employees": "approximate headcount",
-  "description": "2-3 sentence factual description",
-  "business_model": "detailed paragraph on revenue model and how they make money",
-  "competitive_advantages": ["specific advantage 1", "advantage 2", "advantage 3"],
-  "key_risks": [
-    {{"level": "high", "text": "specific risk description"}},
-    {{"level": "med", "text": "specific risk description"}},
-    {{"level": "low", "text": "specific risk description"}}
-  ],
-  "market_position": "brief statement on market leadership or position"
-  ,"sources": ["Title — https://example.com", "Title — https://example.com"]
-}}"""
+  "company_name": "{company}",
+  "description": "short description",
+  "business_model": "how it makes money",
+  "sector": "industry sector"
+}}
 
+Rules:
+- ONLY JSON
+- NO markdown
+- NO text before or after
+- if unknown, guess conservatively
+- max 150 tokens
+"""
+
+        try:
+            response = self.client.chat.complete(
+                model="mistral-large-latest",
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            if not response or not response.choices:
+                return "{}"
+
+            content = response.choices[0].message.content
+
+            if not content:
+                return "{}"
+
+            return content
+
+        except Exception as e:
+            print("[ERROR DataCollectorAgent]", e)
+            return "{}"
 
 class SectorAnalystAgent(BaseAgent):
     """Agent 2 — Market sizing, competitive landscape, trends."""

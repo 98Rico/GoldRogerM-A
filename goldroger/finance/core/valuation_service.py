@@ -6,16 +6,10 @@ from goldroger.finance.valuation.aggregator import compute_weighted_valuation
 
 class ValuationService:
     """
-    Production-grade deterministic valuation engine.
-    - strict numeric normalization
-    - safe fallbacks
-    - schema-agnostic input handling
+    Safe deterministic valuation engine (production-ready)
     """
 
-    # ─────────────────────────────
-    # SAFE CONVERSION
-    # ─────────────────────────────
-    def _f(self, v, default=0.0) -> float:
+    def _f(self, v, default=0.0):
         try:
             if v is None:
                 return default
@@ -25,9 +19,6 @@ class ValuationService:
         except:
             return default
 
-    # ─────────────────────────────
-    # REVENUE SERIES GUARANTEE
-    # ─────────────────────────────
     def _revenue_series(self, financials: dict):
         rs = financials.get("revenue_series")
         if isinstance(rs, list) and len(rs) >= 3:
@@ -44,9 +35,6 @@ class ValuationService:
             base * (1 + g) ** 4,
         ]
 
-    # ─────────────────────────────
-    # DCF
-    # ─────────────────────────────
     def run_dcf(self, financials: dict, wacc: float):
         inp = DCFInput(
             revenue=self._revenue_series(financials),
@@ -59,9 +47,6 @@ class ValuationService:
         )
         return compute_dcf(inp)
 
-    # ─────────────────────────────
-    # COMPS
-    # ─────────────────────────────
     def run_comps(self, financials: dict, multiple_range: tuple):
         revenue = self._f(financials.get("revenue_current"), 1000.0)
         ebitda = revenue * self._f(financials.get("ebitda_margin"), 0.2)
@@ -73,9 +58,6 @@ class ValuationService:
             )
         )
 
-    # ─────────────────────────────
-    # TRANSACTIONS
-    # ─────────────────────────────
     def run_transactions(self, financials: dict, multiple: float):
         return compute_transaction(
             TransactionInput(
@@ -84,11 +66,7 @@ class ValuationService:
             )
         )
 
-    # ─────────────────────────────
-    # FULL
-    # ─────────────────────────────
     def run_full_valuation(self, financials: dict, assumptions: dict):
-
         dcf = self.run_dcf(financials, assumptions.get("wacc", 0.1))
         comps = self.run_comps(financials, assumptions.get("ev_ebitda_range", (8, 12)))
         tx = self.run_transactions(financials, assumptions.get("tx_multiple", 2.5))

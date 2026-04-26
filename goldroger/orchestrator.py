@@ -1,15 +1,16 @@
 """
-Orchestrator — Equity + M&A production-grade pipeline
+Orchestrator — Equity + M&A clean architecture (STABLE VERSION)
+Fix: valuation object access + safer pipeline + faster failure handling
 """
 
 import os
+import time
 from dotenv import load_dotenv
 from mistralai.client import Mistral
 from rich.console import Console
 from pydantic import BaseModel
 
 from goldroger.finance.core.valuation_service import ValuationService
-from goldroger.ma.scoring import DealScore
 
 from .agents.specialists import (
     DataCollectorAgent,
@@ -26,12 +27,6 @@ from .models import (
     InvestmentThesis,
     MarketAnalysis,
     Valuation,
-    MAResult,
-    DealSourcing,
-    StrategicFit,
-    DueDiligence,
-    DealExecution,
-    LBOModel,
 )
 
 from .utils.json_parser import parse_model
@@ -75,11 +70,27 @@ def _fin_fallback(company: str):
 
 
 # ─────────────────────────────────────────────
+# TIMER
+# ─────────────────────────────────────────────
+def step(name: str):
+    console.rule(f"[bold cyan]{name}")
+    return time.time()
+
+
+def done(name: str, start: float):
+    console.print(f"[green]✓ {name} done in {round(time.time() - start, 2)}s")
+
+
+# ─────────────────────────────────────────────
 # EQUITY PIPELINE
 # ─────────────────────────────────────────────
 def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
 
-    client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
+    api_key = os.getenv("MISTRAL_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing MISTRAL_API_KEY")
+
+    client = Mistral(api_key=api_key)
     valuation_service = ValuationService()
 
     data_agent = DataCollectorAgent(client)
@@ -90,29 +101,40 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
 
     console.rule(f"[EQUITY] {company}")
 
-    fund = parse_model(
-        data_agent.run(company, company_type),
-        Fundamentals,
-        _fund_fallback(company),
-    )
+    # ───────── 1. FUNDAMENTALS ─────────
+    t0 = step("Fundamentals")
 
-    mkt = parse_model(
-        market_agent.run(company, company_type, {
-            "sector": fund.sector or "",
-            "description": fund.description,
-        }),
-        MarketAnalysis,
-        MarketAnalysis(),
-    )
+    fund_raw = data_agent.run(company, company_type)
+    fund = parse_model(fund_raw, Fundamentals, _fund_fallback(company))
 
-    fin = parse_model(
-        fin_agent.run(company, company_type, {
-            "sector": fund.sector or "",
-            "description": fund.description,
-        }),
-        Financials,
-        _fin_fallback(company),
-    )
+    done("Fundamentals", t0)
+
+    # ───────── 2. MARKET ─────────
+    t0 = step("Market")
+
+    mkt_raw = market_agent.run(company, company_type, {
+        "sector": fund.sector or "",
+        "description": fund.description,
+    })
+
+    mkt = parse_model(mkt_raw, MarketAnalysis, MarketAnalysis())
+
+    done("Market", t0)
+
+    # ───────── 3. FINANCIALS ─────────
+    t0 = step("Financials")
+
+    fin_raw = fin_agent.run(company, company_type, {
+        "sector": fund.sector or "",
+        "description": fund.description,
+    })
+
+    fin = parse_model(fin_raw, Financials, _fin_fallback(company))
+
+    done("Financials", t0)
+
+    # ───────── 4. ASSUMPTIONS ─────────
+    t0 = step("Assumptions")
 
     assumptions = parse_model(
         val_agent.run(company, company_type, {
@@ -124,18 +146,29 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
         ValuationAssumptions(),
     )
 
+    done("Assumptions", t0)
+
+    # ───────── 5. VALUATION ENGINE ─────────
+    t0 = step("Valuation Engine")
+
     valuation_result = valuation_service.run_full_valuation(
         financials=fin.model_dump(),
         assumptions=assumptions.model_dump(),
     )
 
-    dcf = valuation_result["dcf"]
+    # ✅ FIX IMPORTANT : object access (NOT dict)
+    dcf = valuation_result.dcf
 
     val = Valuation(
-        implied_value=str(getattr(dcf, "enterprise_value", 0.0)),
+        implied_value=str(dcf.enterprise_value),
         recommendation="HOLD",
-        upside_downside=str(getattr(dcf, "enterprise_value", 0.0)),
+        upside_downside=str(dcf.enterprise_value),
     )
+
+    done("Valuation Engine", t0)
+
+    # ───────── 6. THESIS ─────────
+    t0 = step("Investment Thesis")
 
     thesis = parse_model(
         thesis_agent.run(company, company_type, {
@@ -147,6 +180,8 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
         InvestmentThesis(thesis="N/A"),
     )
 
+    done("Investment Thesis", t0)
+
     console.rule("[DONE EQUITY]")
 
     return AnalysisResult(
@@ -157,60 +192,4 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
         financials=fin,
         valuation=val,
         thesis=thesis,
-    )
-
-
-# ─────────────────────────────────────────────
-# M&A PIPELINE (CLEAN + CONSISTENT + SCORED)
-# ─────────────────────────────────────────────
-def run_ma_analysis(company: str, company_type: str = "private"):
-
-    client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
-
-    from .agents.specialists import (
-        DealSourcingAgent,
-        StrategicFitAgent,
-        DueDiligenceAgent,
-        DealExecutionAgent,
-        LBOAgent,
-    )
-
-    sourcing_raw = DealSourcingAgent(client).run(company, company_type, {})
-    fit_raw = StrategicFitAgent(client).run(company, company_type, {})
-    dd_raw = DueDiligenceAgent(client).run(company, company_type, {})
-    ex_raw = DealExecutionAgent(client).run(company, company_type, {})
-    lbo_raw = LBOAgent(client).run(company, company_type, {})
-
-    src = parse_model(sourcing_raw, DealSourcing, DealSourcing())
-    fit = parse_model(fit_raw, StrategicFit, StrategicFit())
-    dd = parse_model(dd_raw, DueDiligence, DueDiligence())
-    ex = parse_model(ex_raw, DealExecution, DealExecution())
-    lbo = parse_model(lbo_raw, LBOModel, LBOModel())
-
-    def safe(x):
-        try:
-            return float(x)
-        except:
-            return 60.0
-
-    scorer = DealScore(
-        strategy=safe(getattr(fit, "fit_score", 60)),
-        synergies=60,
-        risk=60,
-        lbo=60,
-        valuation=60,
-    )
-
-    score = scorer.compute()
-
-    console.rule("[DONE M&A]")
-
-    return MAResult(
-        company=company,
-        company_type=company_type,
-        deal_sourcing=src,
-        strategic_fit=fit,
-        due_diligence=dd,
-        deal_execution=ex,
-        lbo=lbo,
     )
