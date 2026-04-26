@@ -62,17 +62,23 @@ class IncomeStatementRow(Model):
 
 
 class Financials(Model):
+    revenue_series: list[float] = Field(default_factory=list)
+
     revenue_current: Optional[str] = None
     revenue_growth: Optional[str] = None
+
     ebitda_margin: Optional[str] = None
     net_margin: Optional[str] = None
     gross_margin: Optional[str] = None
+
     debt_to_equity: Optional[str] = None
     free_cash_flow: Optional[str] = None
-    projections: list[Projection] = []
-    key_metrics: list[KeyMetric] = []
-    income_statement: list[IncomeStatementRow] = []
-    sources: list[str] = []
+
+    projections: list[Projection] = Field(default_factory=list)
+    key_metrics: list[KeyMetric] = Field(default_factory=list)
+    income_statement: list[IncomeStatementRow] = Field(default_factory=list)
+
+    sources: list[str] = Field(default_factory=list)
 
 
 class ValuationMethod(Model):
