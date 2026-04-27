@@ -166,6 +166,7 @@ class ValuationEngineAgent(BaseAgent):
     name = "ValuationEngine"
     model = "mistral-large-latest"
     max_tokens = 2000
+    use_tools = False  # all data already in context, no web search needed
 
     def _system_prompt(self) -> str:
         return (
@@ -220,6 +221,7 @@ class ReportWriterAgent(BaseAgent):
     name = "ReportWriter"
     model = "mistral-large-latest"
     max_tokens = 2048
+    use_tools = False  # synthesizes from prior agent outputs, no web search needed
 
     def _system_prompt(self) -> str:
         return (
@@ -381,6 +383,7 @@ class DealExecutionAgent(BaseAgent):
     name = "DealExecution"
     model = "mistral-small-latest"
     max_tokens = 2000
+    use_tools = False
 
     def _system_prompt(self) -> str:
         return (
@@ -417,6 +420,7 @@ class LBOAgent(BaseAgent):
     name = "LBO"
     model = "mistral-large-latest"
     max_tokens = 2000
+    use_tools = False
 
     def _system_prompt(self) -> str:
         return (

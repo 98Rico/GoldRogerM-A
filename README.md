@@ -246,6 +246,20 @@ DEFAULT_REGISTRY.register(MyProvider())
 
 ---
 
+## Performance
+
+Temps typiques par run (après optimisations v6) :
+
+| Scénario | Durée estimée |
+|----------|--------------|
+| Equity publique (NVIDIA) | ~5–10 min |
+| Société privée (Longchamp) | ~8–12 min |
+| Pipeline sourcing `--quick` | ~1–2 min |
+| Pipeline sourcing standard | ~4–6 min |
+
+Agents qui font des recherches web (cap 3 rounds) : Fundamentals, Market Analysis, FinancialModeler (privées), PeerFinder.
+Agents sans web search (réponse directe) : ValuationAssumptions, ReportWriter, LBO, DealExecution.
+
 ## Tests
 
 ```bash

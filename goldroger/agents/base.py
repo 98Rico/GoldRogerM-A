@@ -17,7 +17,7 @@ load_dotenv()
 
 # Global rate limiter: enforce minimum gap between Mistral API calls (free tier safe)
 _last_api_call: float = 0.0
-_MIN_CALL_GAP = 3.0  # seconds between calls
+_MIN_CALL_GAP = 1.0  # seconds between calls — 429 backoff handles actual rate limits
 
 
 def _rate_limit_wait() -> None:
@@ -207,7 +207,8 @@ class BaseAgent:
     model: str = "mistral-small-latest"
     max_tokens: int = 2048
     max_retries: int = 3
-    max_tool_rounds: int = 6
+    max_tool_rounds: int = 3  # max web_search iterations per call
+    use_tools: bool = True    # set False for synthesis-only agents (no web search)
 
     def __init__(self, client: Mistral | None = None):
         if client is not None:
@@ -246,6 +247,11 @@ class BaseAgent:
             {"role": "user", "content": self._user_prompt(company, company_type, context)},
         ]
 
+        _tools_kwargs = (
+            {"tools": [WEB_SEARCH_TOOL], "tool_choice": "auto"}
+            if self.use_tools else {}
+        )
+
         for attempt in range(self.max_retries + 1):
             try:
                 _rate_limit_wait()
@@ -253,9 +259,8 @@ class BaseAgent:
                     model=self.model,
                     max_tokens=self.max_tokens,
                     messages=messages,
-                    tools=[WEB_SEARCH_TOOL],
-                    tool_choice="auto",
                     timeout_ms=60_000,
+                    **_tools_kwargs,
                 )
 
                 tool_rounds = 0
@@ -302,9 +307,8 @@ class BaseAgent:
                         model=self.model,
                         max_tokens=self.max_tokens,
                         messages=messages,
-                        tools=[WEB_SEARCH_TOOL],
-                        tool_choice="auto",
                         timeout_ms=60_000,
+                        **_tools_kwargs,
                     )
 
                 return response.choices[0].message.content or ""

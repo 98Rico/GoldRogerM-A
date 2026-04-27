@@ -366,13 +366,24 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
     ic_summary: ICScoreSummary | None = None
     try:
         revenue_series, _ = svc._build_revenue_series(fin.model_dump(), market_data, [])
+        _ebitda_margin = svc._resolve_ebitda_margin(fin.model_dump(), market_data, [])[0]
+        # back-calculate EV/EBITDA multiples from EV outputs — comps.low/high are EVs not multiples
+        _last_ebitda = (revenue_series[-1] * _ebitda_margin) if revenue_series else 1.0
+        if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
+            _comps_low = peer_multiples.ev_ebitda_low
+            _comps_high = peer_multiples.ev_ebitda_high
+        elif _last_ebitda > 0:
+            _comps_low = result.comps.low / _last_ebitda
+            _comps_high = result.comps.high / _last_ebitda
+        else:
+            _comps_low, _comps_high = 8.0, 14.0
         scenarios_out = run_scenarios(
             base_revenue=revenue_series,
-            base_ebitda_margin=svc._resolve_ebitda_margin(fin.model_dump(), market_data, [])[0],
+            base_ebitda_margin=_ebitda_margin,
             base_wacc=result.wacc_used,
             base_terminal_growth=result.terminal_growth_used,
-            base_comps_low=result.comps.low,
-            base_comps_high=result.comps.high,
+            base_comps_low=_comps_low,
+            base_comps_high=_comps_high,
             base_tx_multiple=result.transactions.implied_value / revenue_series[-1]
                 if revenue_series and revenue_series[-1] > 0 else 2.0,
             tax_rate=svc._resolve_tax_rate(fin.model_dump(), market_data),

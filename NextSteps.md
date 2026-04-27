@@ -35,6 +35,8 @@
 | 6 | **Pipeline: 3 targets, mistral-small, `--quick` flag** | `specialists.py`, `cli.py` | ✅ |
 | 6 | **Pipeline retry on 0 targets** + Optional fields on PipelineTarget | `orchestrator.py`, `models/__init__.py` | ✅ |
 | 6 | **run_pipeline / run_ma_analysis imported in CLI** (NameError fix) | `cli.py` | ✅ |
+| 6 | **Football field unit bug** (EV passed as multiple → absurd values) | `orchestrator.py` | ✅ |
+| 6 | **Agent speed** — rate gap 3s→1s, tool rounds 6→3, synthesis agents no web search | `agents/base.py`, `specialists.py` | ✅ |
 
 ---
 
