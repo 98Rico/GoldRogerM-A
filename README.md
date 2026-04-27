@@ -153,24 +153,56 @@ Le `SourcingAgent` identifie des cibles, puis `run_pipeline()` fait tourner une 
 
 ## Commandes
 
+Tous les exports (PPT + Excel) sont automatiquement sauvegardés dans un sous-dossier horodaté :
+`outputs/<Company>_<YYYYMMDD_HHMMSS>/`
+
+### 1. Equity publique — NVIDIA
+
 ```bash
-# Analyse equity publique
-uv run python -m goldroger.cli --company "NVIDIA"
+uv run python -m goldroger.cli --company "NVIDIA" --excel --pptx
+```
 
-# Banque (path P/E + P/B)
-uv run python -m goldroger.cli --company "JPM"
+Output : `outputs/NVIDIA_20260427_143022/NVIDIA_analysis.xlsx` + `NVIDIA_analysis.pptx`
 
-# Société privée
-uv run python -m goldroger.cli --company "Longchamp" --type private
+### 2. Société privée — Longchamp
 
-# Avec export PPT
-uv run python -m goldroger.cli --company "LVMH" --pptx --outdir outputs/
+```bash
+uv run python -m goldroger.cli --company "Longchamp" --type private --excel --pptx
+```
 
-# M&A (acquéreur → cible)
-uv run python -m goldroger.cli --company "Figma" --mode ma --acquirer "Adobe"
+Output : `outputs/Longchamp_20260427_143022/Longchamp_analysis.xlsx` + `Longchamp_analysis.pptx`
 
-# Pipeline d'acquisitions (secteur)
-uv run python -m goldroger.cli --mode pipeline --buyer "LVMH" --focus "Premium beauty brands Europe"
+### 3. Pipeline sourcing — Carlyle / B2B SaaS Europe
+
+```bash
+# Standard (avec web search, ~5 min)
+uv run python -m goldroger.cli \
+  --mode pipeline \
+  --company "sourcing" \
+  --buyer "Carlyle Group" \
+  --focus "European B2B SaaS, ARR €5M–€50M, founder-led" \
+  --pptx
+
+# Rapide pour démo (sans web search, ~1 min)
+uv run python -m goldroger.cli \
+  --mode pipeline \
+  --company "sourcing" \
+  --buyer "Carlyle Group" \
+  --focus "European B2B SaaS, ARR €5M–€50M, founder-led" \
+  --pptx --quick
+```
+
+Output : `outputs/sourcing_20260427_143022/pipeline_deck.pptx`
+Retourne 3 cibles avec IC scoring, football field, et rationale de valorisation.
+
+### Autres exemples
+
+```bash
+# Banque (path P/E + P/B automatique)
+uv run python -m goldroger.cli --company "JPM" --excel --pptx
+
+# M&A (acquéreur → cible spécifique)
+uv run python -m goldroger.cli --company "Figma" --mode ma --acquirer "Adobe" --pptx
 ```
 
 ---

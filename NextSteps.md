@@ -31,6 +31,10 @@
 | 5 | **LBO skippé mega-caps** (MCap > $500B) | `valuation_service.py` | ✅ |
 | 5 | **Rate limit Mistral** (backoff 60s + global 3s) | `agents/base.py` | ✅ |
 | 5 | **20 tests unitaires** (WACC, DCF, LBO, scenarios) | `tests/` | ✅ |
+| 6 | **Auto output subfolder** `outputs/<name>_<ts>/` | `cli.py` | ✅ |
+| 6 | **Pipeline: 3 targets, mistral-small, `--quick` flag** | `specialists.py`, `cli.py` | ✅ |
+| 6 | **Pipeline retry on 0 targets** + Optional fields on PipelineTarget | `orchestrator.py`, `models/__init__.py` | ✅ |
+| 6 | **run_pipeline / run_ma_analysis imported in CLI** (NameError fix) | `cli.py` | ✅ |
 
 ---
 

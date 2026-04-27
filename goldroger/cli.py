@@ -9,7 +9,9 @@ Usage:
 """
 import argparse
 import json
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -17,7 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .exporters import generate_excel, generate_pptx
-from .orchestrator import run_analysis
+from .orchestrator import run_analysis, run_ma_analysis, run_pipeline
 
 console = Console()
 
@@ -108,6 +110,7 @@ def main():
     parser.add_argument("--excel", action="store_true", help="Generate Excel DCF workbook")
     parser.add_argument("--pptx", action="store_true", help="Generate PowerPoint deck")
     parser.add_argument("--outdir", default="outputs", help="Output directory for files")
+    parser.add_argument("--quick", action="store_true", help="Skip web search in pipeline (faster, uses training knowledge)")
     args = parser.parse_args()
 
     try:
@@ -117,7 +120,7 @@ def main():
                 "Premium beauty and wellness; high-growth founder-led private companies in Europe; "
                 "skincare, wellness, premium personal care; younger consumers; DTC"
             )
-            result = run_pipeline(buyer=buyer, focus=focus)
+            result = run_pipeline(buyer=buyer, focus=focus, quick=args.quick)
             console.print(Panel(
                 f"[bold]{buyer}[/]\n{focus}\n\nTargets: {len(result.targets)}",
                 title="[bold cyan]Pipeline Summary[/]",
@@ -149,20 +152,20 @@ def main():
             console.print(f"\n[green]✓[/] Saved to {path}")
 
         if args.excel or args.pptx:
-            outdir = Path(args.outdir)
+            slug = re.sub(r"[^a-zA-Z0-9]+", "_", args.company).strip("_")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            outdir = Path(args.outdir) / f"{slug}_{ts}"
             outdir.mkdir(parents=True, exist_ok=True)
 
         if args.excel and args.mode == "equity":
-            xlsx = outdir / f"{args.company}_analysis.xlsx".replace(" ", "_")
+            xlsx = outdir / f"{slug}_analysis.xlsx"
             generate_excel(result, str(xlsx))
             console.print(f"\n[green]✓[/] Excel generated: {xlsx}")
         elif args.excel and args.mode != "equity":
             console.print("\n[yellow]Excel export is only available in equity mode for now.[/]")
 
         if args.pptx:
-            deck_name = (
-                f"{args.company}_analysis.pptx" if args.mode != "pipeline" else "pipeline_deck.pptx"
-            ).replace(" ", "_")
+            deck_name = f"{slug}_analysis.pptx" if args.mode != "pipeline" else "pipeline_deck.pptx"
             deck = outdir / deck_name
             generate_pptx(result, str(deck))
             console.print(f"\n[green]✓[/] PowerPoint generated: {deck}")

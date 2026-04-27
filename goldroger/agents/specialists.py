@@ -445,13 +445,12 @@ class PipelineBuilderAgent(BaseAgent):
     """M&A — Build an acquisition pipeline (targets + private valuation estimates)."""
 
     name = "PipelineBuilder"
-    model = "mistral-large-latest"
+    model = "mistral-small-latest"
     max_tokens = 3000
 
     def _system_prompt(self) -> str:
         return (
             "You are a top-tier M&A analyst preparing an acquisition pipeline for an investment committee. "
-            "You MUST use web_search and triangulate private-company estimates from credible secondary sources. "
             "You must generate targets yourself (do not ask the user for company names). "
             "Respond ONLY with valid JSON (no markdown/code fences). "
             "CRITICAL: revenue_range, revenue_working, ebitda_margin, implied_ev must NEVER be 'N/A'. "
@@ -465,13 +464,20 @@ class PipelineBuilderAgent(BaseAgent):
             "focus",
             "premium beauty and wellness; high-growth founder-led private companies in Europe; skincare, wellness, premium personal care; younger consumers; DTC",
         )
+        quick = context.get("quick", False)
+        search_instruction = (
+            "Use your training knowledge — do not perform web searches."
+            if quick else
+            "Triangulate estimates from credible secondary sources (press, trade publications, peer benchmarking)."
+        )
         return f"""Scenario:
 Buyer: {buyer}
 Focus: {focus}
 
 Task:
-1) Identify a shortlist of 8–12 PRIVATE, founder-led companies in Europe that fit the focus.
+1) Identify a shortlist of exactly 3 companies that fit the focus.
 2) For EACH target, provide an estimated valuation with triangulated revenue and EBITDA assumptions.
+{search_instruction}
 
 Rules:
 - Prefer premium positioning, strong brand/loyalty, DTC/digital strength, international expansion potential.

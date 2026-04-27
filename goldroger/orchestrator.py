@@ -671,6 +671,7 @@ def run_pipeline(
     buyer: str,
     focus: str = "",
     company_type: str = "private",
+    quick: bool = False,
 ) -> AcquisitionPipeline:
     log = new_run(buyer, "pipeline")
     client = _client()
@@ -680,16 +681,16 @@ def run_pipeline(
     console.rule(f"[PIPELINE] {buyer}")
 
     t0 = _step("Pipeline Generation")
-    raw = pipeline_agent.run(
-        buyer,
-        company_type,
-        {"buyer": buyer, "focus": focus},
-    )
-    pipeline = parse_model(raw, AcquisitionPipeline, AcquisitionPipeline(
-        buyer=buyer,
-        thesis="N/A",
-        focus=focus,
-    ))
+    ctx = {"buyer": buyer, "focus": focus, "quick": quick}
+    raw = pipeline_agent.run(buyer, company_type, ctx)
+    fallback = AcquisitionPipeline(buyer=buyer, thesis="N/A", focus=focus)
+    pipeline = parse_model(raw, AcquisitionPipeline, fallback)
+    if did_fallback(pipeline) or not pipeline.targets:
+        console.print("  [yellow]Retrying pipeline with strict JSON prompt…[/]")
+        raw2 = pipeline_agent.run(buyer, company_type, {**ctx, "__strict_json_hint": True})
+        pipeline2 = parse_model(raw2, AcquisitionPipeline, fallback, _retry=True)
+        if pipeline2.targets:
+            pipeline = pipeline2
     _done("Pipeline Generation", t0)
 
     # ── Light IC scoring for each target ─────────────────────────────────

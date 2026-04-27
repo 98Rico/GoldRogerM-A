@@ -276,10 +276,10 @@ class PipelineTarget(Model):
     synergies: list[str] = []
     key_risks: list[str] = []
 
-    revenue_range: str  # must not be N/A
-    revenue_working: str  # must not be N/A
-    ebitda_margin: str  # must not be N/A
-    implied_ev: str  # must not be N/A (range or point)
+    revenue_range: Optional[str] = "(est. unavailable)"
+    revenue_working: Optional[str] = "(est. unavailable)"
+    ebitda_margin: Optional[str] = "(est. unavailable)"
+    implied_ev: Optional[str] = "(est. unavailable)"
     valuation_rationale: list[str] = []
     sources: list[str] = []  # short source hints (no URLs required)
 
