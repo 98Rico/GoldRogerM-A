@@ -1,127 +1,212 @@
-# Gold Roger — Roadmap Produit
+# Gold Roger — Moteur de Valorisation Institutionnel
 
-## ✅ ÉTAT ACTUEL (Phases 1–4 complétées — Avril 2025)
-
-Gold Roger est un moteur de valorisation institutionnel avec pipeline M&A complet, LBO engine, et couche data vérifiée.
-
-### Ce qui fonctionne aujourd'hui :
-
-**Valorisation (Phase 1 + 2)**
-✔ Données financières vérifiées via **yfinance** (revenus, marges, beta, market cap, net debt)  
-✔ **Estimations forward analystes** (consensus 1 an) utilisées en priorité sur le CAGR historique  
-✔ WACC dérivé par **CAPM** — β réel, Rf=4.5%, ERP=5.5%, coût de la dette = intérêts / dette  
-✔ **DCF institutionnel** : FCFF = EBITDA(1-T) + D&A×T - CapEx - ΔNWC (NWC incrémental)  
-✔ **Path financier P/E + P/B** pour banques, assureurs, asset managers (détection automatique)  
-✔ **Trading comps** ancrées au EV/EBITDA de marché live ; 20+ tables sectorielles de fallback  
-✔ **BUY / HOLD / SELL** déterministe : EV blended − Net Debt / Shares vs prix actuel (±15%)  
-✔ **Matrice de sensibilité** WACC × terminal growth (5×5)  
-✔ **Confidence tagging** : `verified` / `estimated` / `inferred`  
-
-**LBO Engine (Phase 2)**  
-✔ Modèle LBO déterministe : entry EV → leverage → FCF sweep → exit → **IRR / MOIC**  
-✔ Gates de faisabilité : leverage < 6.5x, IRR > 15% hurdle  
-✔ Attaché automatiquement à chaque valorisation equity  
-
-**SOTP (Phase 2)**  
-✔ Sum-of-the-Parts : valorisation segment par segment avec holdco discount  
-✔ Multiples sectoriels par segment  
-
-**Deal Sourcing & M&A (Phase 3)**  
-✔ `run_ma_analysis()` : pipeline M&A complet (sourcing → fit → DD → execution → LBO → IC scoring)  
-✔ `run_pipeline()` : génération automatique d'un pipeline d'acquisitions avec IC scoring par cible  
-✔ **IC Scoring institutionnel** (0–100) : 6 dimensions (stratégie, synergies, financial, LBO, intégration, risque)  
-✔ Gates durs : si LBO / risk / financial < seuil minimum → NO GO automatique  
-✔ Next steps générés automatiquement par niveau de recommandation  
-
-**Infrastructure (Phase 4)**  
-✔ **Cache TTL** (1h yfinance, 24h ticker) — plus de requêtes redondantes  
-✔ **Logging structuré JSON-lines** : run_id, timings par step, WACC method, audit trail  
-✔ Exports Excel (5 feuilles) + PowerPoint institutionnel  
-✔ API FastAPI + CLI  
-
----
-
-## Architecture des données (pipeline actuel)
+## Architecture Globale
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              REAL DATA LAYER (Phase 0)                      │
-│  resolve_ticker() → fetch_market_data() → MarketData        │
-│  [verified: price, beta, margins, forward estimates, P/B]   │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│              LLM LAYER (qualitative only)                   │
-│  Fundamentals · Market · Assumptions · Thesis               │
-│  M&A: Sourcing · Strategic Fit · DD · Execution             │
-│  [NO financial numbers from LLM]                            │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│         VALUATION ENGINE (pure Python, deterministic)       │
-│                                                             │
-│  Path A: Standard  → DCF + EV/EBITDA + EV/Revenue          │
-│  Path B: Financial → DCF + P/E + P/B  (banks/insurers)     │
-│  Path C: SOTP      → Segment × sector multiple             │
-│                                                             │
-│  WACC: CAPM (β réel) → LLM assumption → sector default     │
-│  Growth: forward analyst → CAGR historique → sector default │
-│  Blended EV (50/30/20) → BUY/HOLD/SELL                     │
-│  LBO engine (toujours calculé, peut être INFEASIBLE)        │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│              M&A SCORING (IC layer)                         │
-│  6 dimensions · gates durs · STRONG BUY / BUY / WATCH / NO GO │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│              EXPORT LAYER                                   │
-│  Excel (DCF workbook + sensitivity) · PowerPoint · API      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    DATA LAYER (pluggable)                         │
+│  Bloomberg → Capital IQ → Refinitiv → yfinance → SEC EDGAR       │
+│  DataRegistry: priority chain, auto-fallback, credential-gated   │
+│  PeerFinder: 4-6 listed peers fetched live via yfinance           │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────────────────┐
+│                    LLM LAYER (qualitative only)                   │
+│  Fundamentals · Market · Financials · Assumptions · Thesis        │
+│  M&A: Sourcing · Strategic Fit · DD · Execution · LBO            │
+│  PeerFinder: identifies comparable listed companies               │
+│  [RULE: LLM never produces financial numbers used in valuation]  │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────────────────┐
+│              VALUATION ENGINE (pure Python, deterministic)        │
+│                                                                   │
+│  Path A: Standard  → DCF + EV/EBITDA comps + EV/Revenue tx       │
+│  Path B: Financial → P/E + P/B  (banks, insurers, asset mgrs)    │
+│  Path C: SOTP      → Segment × sector multiple                   │
+│                                                                   │
+│  Comps anchored to REAL peer multiples (not sector table avg)     │
+│  WACC: CAPM (β réel) → LLM assumption → sector default           │
+│  Growth: analyst forward estimate (fade curve 5Y) → CAGR → def.  │
+│  Bear/Base/Bull: 3 full DCF scenarios with driver-level deltas    │
+│  LBO engine: IRR/MOIC/feasibility (skipped for mega-caps >$500B) │
+│  IC Scoring: 6 dimensions from agent outputs, not neutral 5/10   │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────────────────┐
+│                    EXPORT LAYER                                   │
+│  PowerPoint (10 slides):                                          │
+│    Title · Overview · Market · Financials · Valuation Summary     │
+│    Football Field · Peer Comps · IC Score · Thesis · Risks        │
+│  Excel: DCF workbook + sensitivity matrix                         │
+│  API: FastAPI · CLI                                               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🎯 PROCHAINES PRIORITÉS
+## Ce qui fonctionne (Phases 1–5)
 
-### À faire (court terme)
+### Données & Sources
 
-| # | Priorité | Item | Impact |
-|---|----------|------|--------|
-| 1 | HIGH | Pondération DCF=0% pour les financières (DCF tire le blended vers le bas pour les banques) | Précision JPM/GS |
-| 2 | HIGH | Tests unitaires sur le valuation engine | Fiabilité prod |
-| 3 | MED | Timeout par agent LLM (20-40s max) | Robustesse CLI |
-| 4 | MED | Retry LLM si JSON invalide (max 2x) | Stabilité |
-| 5 | MED | Scénarios DCF : bear/base/bull | Qualité output |
-| 6 | LOW | SaaS UI Next.js | Produit |
+| Source | Disponibilité | Données |
+|--------|--------------|---------|
+| **yfinance** | Toujours (gratuit) | Prix, beta, marges, EV, forward estimates |
+| **SEC EDGAR** | Toujours (gratuit) | Revenus annuels US (10-K) |
+| **Web Search** | Toujours (DuckDuckGo) | Données privées, presse, rapports |
+| **Bloomberg BLP** | Si `BLOOMBERG_API_KEY` | Tout (temps réel, privé, M&A comps) |
+| **Capital IQ** | Si `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD` | M&A comps, transactions, private |
+| **Refinitiv** | Si `REFINITIV_APP_KEY` | Équivalent Capital IQ |
 
-### Banques / financières — fix précision
-Le DCF donne une EV très basse pour les banques (EBITDA margin ≈ 0%) ce qui tire le blended vers le bas.  
-Fix : détecter le secteur financier → mettre le poids DCF à 0%, redistribuer sur P/E (60%) + P/B (40%).
+Pour activer Bloomberg/CapIQ : ajouter les variables dans `.env`.
+
+### Data Provider Registry
+
+```python
+from goldroger.data.registry import DEFAULT_REGISTRY
+
+# Voir quelles sources sont actives
+print(DEFAULT_REGISTRY.available_providers())  # ['yfinance', 'sec_edgar']
+
+# Fetch avec fallback automatique
+data = DEFAULT_REGISTRY.fetch("AAPL")  # essaie Bloomberg → CapIQ → yfinance → EDGAR
+```
+
+### Peer Comparables (nouveau — Phase 5)
+
+Pour toute société (publique ou privée), le système identifie automatiquement 4–6 sociétés cotées comparables via LLM, puis récupère leurs vrais multiples de marché via yfinance.
+
+- **Privées** : les multiples sectoriels codés en dur sont remplacés par de vrais comparables
+- **Publiques** : les comps sont ancrées aux multiples réels du secteur live
+- Les multiples peers (médiane P25/P75) alimentent directement le DCF et le football field
+
+### Scénarios Bear / Base / Bull (nouveau — Phase 5)
+
+Chaque analyse produit 3 DCF complets avec des hypothèses indépendantes :
+
+| Driver | Bear | Base | Bull |
+|--------|------|------|------|
+| Revenue growth delta | −5pp | 0 | +5pp |
+| EBITDA margin delta | −200bps | 0 | +200bps |
+| WACC delta | +150bps | 0 | −100bps |
+| Terminal growth delta | −50bps | 0 | +50bps |
+| Exit multiple factor | 0.80× | 1.0× | 1.20× |
+
+Output : football field EV par méthode (DCF / Comps / Blended) × scénario.
+
+### IC Scoring enrichi (nouveau — Phase 5)
+
+Les 6 dimensions sont maintenant dérivées des outputs agents, pas neutres à 5.0/10 :
+
+| Dimension | Source |
+|-----------|--------|
+| Strategy | `strategic_fit.fit_score` (High=8.5, Med=6.5, Low=3.0) |
+| Synergies | `strategic_fit.key_synergies` count + impact quality |
+| Integration | `strategic_fit.integration_complexity` (inverse) |
+| Risk | `due_diligence.red_flags` severity count |
+| Financial | `upside_pct` from valuation engine |
+| LBO | `lbo_output.irr` from deterministic engine |
+
+### Private Company Handling
+
+Pour une société privée :
+1. **yfinance** → None (pas de ticker)
+2. **FinancialModelerAgent** → web search pour revenus/marges (presse, Crunchbase, etc.)
+   - Autorisé à estimer si pas de données vérifiées
+   - Retourne les bons champs (`revenue_current`, `revenue_series`)
+3. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
+4. **Valuation** : DCF avec WACC sectoriel + comps peers réels + bear/base/bull
+5. **Pas de BUY/HOLD/SELL** (pas de prix coté) → IC scoring M&A uniquement
+
+### PowerPoint Output (10 slides)
+
+1. **Title** — Nom, secteur, recommandation, implied value, upside
+2. **Company Overview** — Business model, avantages compétitifs
+3. **Market & Competition** — TAM, CAGR, concurrents, trends
+4. **Financial Snapshot** — KPIs + projections
+5. **Valuation Summary** — DCF / Comps / Transactions (table + conclusion)
+6. **Football Field** *(nouveau)* — Bear/Base/Bull × méthode, ranges
+7. **Peer Comparables** *(nouveau)* — Table des comparables réels avec médiane
+8. **IC Score Breakdown** *(nouveau)* — 6 dimensions + rationale + next steps
+9. **Investment Thesis** — Thesis + Bull/Base/Bear narrative
+10. **Catalysts & Risks** — Catalysts + risques clés
 
 ---
 
-## ⚠️ RÈGLE ABSOLUE
+## Commandes
+
+```bash
+# Analyse equity publique
+uv run python -m goldroger.cli --company "NVIDIA"
+
+# Banque (path P/E + P/B)
+uv run python -m goldroger.cli --company "JPM"
+
+# Société privée
+uv run python -m goldroger.cli --company "Longchamp" --type private
+
+# Avec export PPT
+uv run python -m goldroger.cli --company "LVMH" --pptx --outdir outputs/
+
+# M&A (acquéreur → cible)
+uv run python -m goldroger.cli --company "Figma" --mode ma --acquirer "Adobe"
+
+# Pipeline d'acquisitions
+uv run python -m goldroger.cli --mode pipeline --buyer "LVMH" --focus "Premium beauty brands Europe"
+```
+
+---
+
+## Règle Absolue
 
 **Le LLM ne produit JAMAIS de chiffres financiers finaux.**
 
-Hiérarchie des sources :
-1. `yfinance` (verified) — toujours prioritaire
-2. Estimations LLM (estimated) — fallback pour sociétés privées
-3. Defaults sectoriels (inferred) — dernier recours
-
-Dans cet ordre. Toujours.
+Hiérarchie des sources (dans l'ordre, toujours) :
+1. **Providers premium** (Bloomberg, CapIQ) — si credentials
+2. **yfinance / SEC EDGAR** — gratuit, sociétés cotées
+3. **Estimations LLM** (web search) — fallback sociétés privées, taggé `estimated`
+4. **Defaults sectoriels** — dernier recours, taggé `inferred`
 
 ---
 
-## 🏁 DEFINITION OF DONE — V1.0
+## Ajouter une source de données
+
+Implémenter `DataProvider` :
+
+```python
+from goldroger.data.providers.base import DataProvider
+from goldroger.data.fetcher import MarketData
+
+class MyProvider(DataProvider):
+    name = "my_source"
+    requires_credentials = True
+
+    def is_available(self):
+        return bool(os.getenv("MY_API_KEY"))
+
+    def fetch(self, ticker: str) -> MarketData | None:
+        # ... fetch and return MarketData
+        ...
+
+# Enregistrer en tête de liste
+from goldroger.data.registry import DEFAULT_REGISTRY
+DEFAULT_REGISTRY.register(MyProvider())
+```
+
+---
+
+## Definition of Done — V1.0
 
 ✔ 0 crash CLI  
 ✔ Données financières vérifiées (yfinance) pour toute société publique  
 ✔ WACC CAPM sur données réelles  
 ✔ DCF + LBO stables et défendables  
+✔ Bear/Base/Bull football field  
+✔ Peer comparables réels (pas de sector table hardcodé)  
+✔ IC scoring dérivé des agents (pas 5.0/10 neutral)  
 ✔ BUY/HOLD/SELL fiable vs market cap  
 ✔ M&A pipeline complet (sourcing → IC scoring)  
+✔ PPT 10 slides institutionnel  
 ✔ Exports fiables Excel + PPT  
 ✔ Cache + logging en production  
+✔ Architecture data pluggable (Bloomberg/CapIQ prêts à brancher)  

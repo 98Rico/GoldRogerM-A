@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from goldroger.data.fetcher import fetch_market_data, resolve_ticker, MarketData
 from goldroger.finance.core.valuation_service import ValuationService
-from goldroger.ma.scoring import auto_score_from_valuation, score_from_analysis
+from goldroger.ma.scoring import score_from_analysis
 from goldroger.utils.logger import new_run
 
 from .agents.specialists import (
@@ -45,12 +45,22 @@ from .agents.specialists import (
     DueDiligenceAgent,
     FinancialModelerAgent,
     LBOAgent,
+    PeerFinderAgent,
     PipelineBuilderAgent,
     ReportWriterAgent,
     SectorAnalystAgent,
     StrategicFitAgent,
     ValuationEngineAgent,
 )
+from .data.comparables import (
+    build_peer_multiples,
+    parse_peer_agent_output,
+    resolve_peer_tickers,
+    PeerMultiples,
+)
+from .data.registry import DEFAULT_REGISTRY
+from .finance.core.scenarios import run_scenarios, ScenariosOutput
+from .ma.scoring import score_from_ma_agents
 
 from .models import (
     AnalysisResult,
@@ -60,11 +70,16 @@ from .models import (
     DealSourcing,
     DueDiligence,
     Financials,
+    FootballField,
     Fundamentals,
+    ICScoreSummary,
     InvestmentThesis,
     LBOModel,
     MAResult,
     MarketAnalysis,
+    PeerComp,
+    PeerCompsTable,
+    ScenarioSummary,
     StrategicFit,
     Valuation,
     ValuationMethod,
@@ -99,7 +114,7 @@ def _fund_fallback(company: str) -> Fundamentals:
 
 
 def _fin_fallback() -> Financials:
-    return Financials(revenue_series=[0.0], revenue_current="0", ebitda_margin="0")
+    return Financials()
 
 
 def _fin_from_market(md: MarketData) -> Financials:
@@ -151,6 +166,7 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
     fin_agent = FinancialModelerAgent(client)
     val_agent = ValuationEngineAgent(client)
     thesis_agent = ReportWriterAgent(client)
+    peer_agent = PeerFinderAgent(client)
 
     console.rule(f"[EQUITY] {company}")
 
@@ -200,6 +216,52 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
     log.end_step("market_analysis", t0)
     _done("Market Analysis", t0)
 
+    # ── 2b. PEER COMPARABLES ──────────────────────────────────────────────
+    t0 = _step("Peer Comparables")
+    peer_comps_table: PeerCompsTable | None = None
+    peer_multiples = None
+    try:
+        raw_peers = peer_agent.run(company, company_type, {
+            "sector": fund.sector or "",
+            "description": fund.description or "",
+        })
+        peer_list = parse_peer_agent_output(raw_peers)
+        peer_tickers = resolve_peer_tickers(peer_list)
+        if peer_tickers:
+            peer_multiples = build_peer_multiples(peer_tickers)
+            if peer_multiples.n_peers > 0:
+                console.print(
+                    f"  [cyan]{peer_multiples.n_peers} peers found:[/cyan] "
+                    + ", ".join(p.ticker for p in peer_multiples.peers[:6])
+                )
+                if peer_multiples.ev_ebitda_median:
+                    console.print(
+                        f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x  "
+                        f"EV/Rev: {peer_multiples.ev_revenue_median:.1f}x"
+                        if peer_multiples.ev_revenue_median else
+                        f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x"
+                    )
+                peer_comps_table = PeerCompsTable(
+                    peers=[
+                        PeerComp(
+                            name=p.name,
+                            ticker=p.ticker,
+                            ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
+                            ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
+                            ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
+                            revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
+                        )
+                        for p in peer_multiples.peers
+                    ],
+                    median_ev_ebitda=f"{peer_multiples.ev_ebitda_median:.1f}x" if peer_multiples.ev_ebitda_median else None,
+                    median_ev_revenue=f"{peer_multiples.ev_revenue_median:.1f}x" if peer_multiples.ev_revenue_median else None,
+                    median_ebitda_margin=f"{peer_multiples.ebitda_margin_median:.1%}" if peer_multiples.ebitda_margin_median else None,
+                    n_peers=peer_multiples.n_peers,
+                )
+    except Exception as e:
+        console.print(f"  [yellow]Peer finder skipped: {e}[/yellow]")
+    _done("Peer Comparables", t0)
+
     # ── 3. FINANCIALS ─────────────────────────────────────────────────────
     t0 = _step("Financials")
     if market_data:
@@ -233,9 +295,22 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
 
     # ── 5. VALUATION ENGINE ───────────────────────────────────────────────
     t0 = _step("Valuation Engine")
+
+    # If peer multiples available, override comps range with real peer data
+    assumptions_dict = assumptions.model_dump()
+    if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
+        assumptions_dict["ev_ebitda_range"] = [
+            peer_multiples.ev_ebitda_low,
+            peer_multiples.ev_ebitda_high,
+        ]
+        console.print(
+            f"  [cyan]Comps anchored to {peer_multiples.n_peers} real peers: "
+            f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
+        )
+
     result = svc.run_full_valuation(
         financials=fin.model_dump(),
-        assumptions=assumptions.model_dump(),
+        assumptions=assumptions_dict,
         market_data=market_data,
         sector=fund.sector or "",
     )
@@ -279,15 +354,102 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
             f"{lbo.leverage_at_entry:.1f}x entry leverage"
         )
 
+    for note in result.notes:
+        console.print(f"  [dim]• {note}[/dim]")
+
+    # ── 5b. BEAR / BASE / BULL SCENARIOS ─────────────────────────────────
+    football_field: FootballField | None = None
+    ic_summary: ICScoreSummary | None = None
+    try:
+        revenue_series, _ = svc._build_revenue_series(fin.model_dump(), market_data, [])
+        scenarios_out = run_scenarios(
+            base_revenue=revenue_series,
+            base_ebitda_margin=svc._resolve_ebitda_margin(fin.model_dump(), market_data, [])[0],
+            base_wacc=result.wacc_used,
+            base_terminal_growth=result.terminal_growth_used,
+            base_comps_low=result.comps.low,
+            base_comps_high=result.comps.high,
+            base_tx_multiple=result.transactions.implied_value / revenue_series[-1]
+                if revenue_series and revenue_series[-1] > 0 else 2.0,
+            tax_rate=svc._resolve_tax_rate(fin.model_dump(), market_data),
+            capex_pct=svc._resolve_capex_pct(fin.model_dump(), market_data, revenue_series[-1] if revenue_series else 1000),
+            nwc_pct=float(fin.model_dump().get("nwc_pct") or 0.02),
+            da_pct=svc._resolve_da_pct(market_data, revenue_series[-1] if revenue_series else None),
+        )
+
+        def _fmt_ev(v: float) -> str:
+            return f"${v/1000:.1f}B" if v >= 1000 else f"${v:.0f}M"
+
+        football_field = FootballField(
+            bear=ScenarioSummary(
+                name="Bear",
+                dcf_ev=_fmt_ev(scenarios_out.bear.dcf_ev),
+                comps_ev=_fmt_ev(scenarios_out.bear.comps_ev_mid),
+                blended_ev=_fmt_ev(scenarios_out.bear.blended_ev),
+                wacc=f"{scenarios_out.bear.wacc_used:.1%}",
+                ebitda_margin=f"{scenarios_out.bear.ebitda_margin_used:.1%}",
+            ),
+            base=ScenarioSummary(
+                name="Base",
+                dcf_ev=_fmt_ev(scenarios_out.base.dcf_ev),
+                comps_ev=_fmt_ev(scenarios_out.base.comps_ev_mid),
+                blended_ev=_fmt_ev(scenarios_out.base.blended_ev),
+                wacc=f"{scenarios_out.base.wacc_used:.1%}",
+                ebitda_margin=f"{scenarios_out.base.ebitda_margin_used:.1%}",
+            ),
+            bull=ScenarioSummary(
+                name="Bull",
+                dcf_ev=_fmt_ev(scenarios_out.bull.dcf_ev),
+                comps_ev=_fmt_ev(scenarios_out.bull.comps_ev_mid),
+                blended_ev=_fmt_ev(scenarios_out.bull.blended_ev),
+                wacc=f"{scenarios_out.bull.wacc_used:.1%}",
+                ebitda_margin=f"{scenarios_out.bull.ebitda_margin_used:.1%}",
+            ),
+            dcf_range=f"{_fmt_ev(scenarios_out.bear.dcf_ev)} — {_fmt_ev(scenarios_out.bull.dcf_ev)}",
+            comps_range=f"{_fmt_ev(scenarios_out.bear.comps_ev_mid)} — {_fmt_ev(scenarios_out.bull.comps_ev_mid)}",
+            blended_range=f"{_fmt_ev(scenarios_out.bear.blended_ev)} — {_fmt_ev(scenarios_out.bull.blended_ev)}",
+        )
+        console.print(
+            f"  [bold]Football field:[/bold] Bear {_fmt_ev(scenarios_out.bear.blended_ev)} "
+            f"/ Base {_fmt_ev(scenarios_out.base.blended_ev)} "
+            f"/ Bull {_fmt_ev(scenarios_out.bull.blended_ev)}"
+        )
+    except Exception as e:
+        console.print(f"  [yellow]Scenarios skipped: {e}[/yellow]")
+
+    # ── 5c. IC SCORING (equity standalone) ───────────────────────────────
+    try:
+        from goldroger.ma.scoring import auto_score_from_valuation
+        ic_result = auto_score_from_valuation(
+            lbo_output=result.lbo,
+            upside_pct=rec.upside_pct,
+            sector=fund.sector or "",
+            company=company,
+        )
+        ic_summary = ICScoreSummary(
+            ic_score=f"{ic_result.ic_score:.0f}/100",
+            recommendation=ic_result.recommendation,
+            strategy=f"{ic_result.dimension_scores.get('strategy', 5):.1f}/10",
+            synergies=f"{ic_result.dimension_scores.get('synergies', 5):.1f}/10",
+            financial=f"{ic_result.dimension_scores.get('financial', 5):.1f}/10",
+            lbo=f"{ic_result.dimension_scores.get('lbo', 5):.1f}/10",
+            integration=f"{ic_result.dimension_scores.get('integration', 5):.1f}/10",
+            risk=f"{ic_result.dimension_scores.get('risk', 5):.1f}/10",
+            rationale=ic_result.rationale,
+            next_steps=ic_result.next_steps,
+        )
+        console.print(
+            f"  IC Score: [bold]{ic_result.ic_score:.0f}/100[/bold] → {ic_result.recommendation}"
+        )
+    except Exception as e:
+        console.print(f"  [yellow]IC scoring skipped: {e}[/yellow]")
+
     log.data_confidence = result.data_confidence
     log.wacc_method = "capm" if result.data_confidence == "verified" else "estimated"
     log.valuation_notes = result.notes
     log.recommendation = rec.recommendation
     log.upside_pct = rec.upside_pct
     log.blended_ev = blended_ev
-
-    for note in result.notes:
-        console.print(f"  [dim]• {note}[/dim]")
 
     log.end_step("valuation", t0)
     _done("Valuation Engine", t0)
@@ -320,6 +482,9 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
         financials=fin,
         valuation=val,
         thesis=thesis,
+        football_field=football_field,
+        peer_comps=peer_comps_table,
+        ic_score=ic_summary,
     )
 
 
@@ -436,27 +601,46 @@ def run_ma_analysis(
 
     _done("LBO Analysis", t0)
 
-    # ── 6. IC SCORING ─────────────────────────────────────────────────────
+    # ── 6. IC SCORING (enriched from all agent outputs) ───────────────────
     t0 = _step("IC Scoring")
     upside = None
-    if market_data and lbo_engine:
-        val_result = svc.run_full_valuation(
-            financials={},
-            assumptions={},
-            market_data=market_data,
-            sector=context.get("sector", ""),
-        )
-        upside = val_result.recommendation.upside_pct
+    if market_data:
+        try:
+            val_result = svc.run_full_valuation(
+                financials={},
+                assumptions={},
+                market_data=market_data,
+                sector=context.get("sector", ""),
+            )
+            upside = val_result.recommendation.upside_pct
+        except Exception:
+            pass
 
-    ic = auto_score_from_valuation(
+    ic = score_from_ma_agents(
+        strategic_fit=fit,
+        due_diligence=dd,
         lbo_output=lbo_engine,
         upside_pct=upside,
-        sector=context.get("sector", ""),
         company=target,
+        acquirer=acquirer or "",
+        sector=context.get("sector", ""),
     )
     console.print(
         f"  IC Score: [bold]{ic.ic_score:.0f}/100[/bold] → "
         f"[{'green' if 'BUY' in ic.recommendation else 'yellow'}]{ic.recommendation}[/]"
+    )
+
+    ic_summary = ICScoreSummary(
+        ic_score=f"{ic.ic_score:.0f}/100",
+        recommendation=ic.recommendation,
+        strategy=f"{ic.dimension_scores.get('strategy', 5):.1f}/10",
+        synergies=f"{ic.dimension_scores.get('synergies', 5):.1f}/10",
+        financial=f"{ic.dimension_scores.get('financial', 5):.1f}/10",
+        lbo=f"{ic.dimension_scores.get('lbo', 5):.1f}/10",
+        integration=f"{ic.dimension_scores.get('integration', 5):.1f}/10",
+        risk=f"{ic.dimension_scores.get('risk', 5):.1f}/10",
+        rationale=ic.rationale,
+        next_steps=ic.next_steps,
     )
     _done("IC Scoring", t0)
 
@@ -472,6 +656,7 @@ def run_ma_analysis(
         due_diligence=dd,
         deal_execution=execution,
         lbo=lbo_text,
+        ic_score=ic_summary,
     )
 
 

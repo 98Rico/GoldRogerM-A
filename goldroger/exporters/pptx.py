@@ -30,7 +30,7 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-from ..models import AcquisitionPipeline, AnalysisResult, MAResult
+from ..models import AcquisitionPipeline, AnalysisResult, FootballField, ICScoreSummary, MAResult, PeerCompsTable
 
 
 # Simple, consistent styling (kept minimal to avoid template dependencies)
@@ -321,7 +321,104 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
         methods_rows,
     )
 
-    # 6) Investment Thesis
+    # 6) Football Field — Bear / Base / Bull
+    ff = result.football_field
+    if ff:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        _add_header(slide, "Valuation Football Field — Bear / Base / Bull")
+        ff_rows = []
+        for scenario in [ff.bear, ff.base, ff.bull]:
+            if scenario:
+                ff_rows.append([
+                    scenario.name,
+                    _safe_str(scenario.dcf_ev),
+                    _safe_str(scenario.comps_ev),
+                    _safe_str(scenario.blended_ev),
+                    _safe_str(scenario.wacc),
+                    _safe_str(scenario.ebitda_margin),
+                ])
+        if ff_rows:
+            _add_table(
+                slide,
+                Inches(0.75), Inches(1.3), Inches(12.1), Inches(3.5),
+                "Scenario Analysis",
+                ["Scenario", "DCF EV", "Comps EV", "Blended EV", "WACC", "EBITDA Margin"],
+                ff_rows,
+            )
+        _add_bullets(
+            slide,
+            Inches(0.75), Inches(5.0), Inches(12.2), Inches(2.2),
+            "Ranges",
+            [
+                f"DCF range:     {_safe_str(ff.dcf_range)}",
+                f"Comps range:   {_safe_str(ff.comps_range)}",
+                f"Blended range: {_safe_str(ff.blended_range)}",
+            ],
+        )
+
+    # 7) Peer Comparables
+    pc = result.peer_comps
+    if pc and pc.peers:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        _add_header(
+            slide,
+            "Peer Comparables",
+            f"{pc.n_peers} listed peers — real market data via yfinance",
+        )
+        peer_rows = [
+            [
+                p.name, p.ticker,
+                _safe_str(p.ev_ebitda, "—"),
+                _safe_str(p.ev_revenue, "—"),
+                _safe_str(p.ebitda_margin, "—"),
+                _safe_str(p.revenue_growth, "—"),
+            ]
+            for p in pc.peers
+        ]
+        peer_rows.append([
+            "MEDIAN", "—",
+            _safe_str(pc.median_ev_ebitda, "—"),
+            _safe_str(pc.median_ev_revenue, "—"),
+            _safe_str(pc.median_ebitda_margin, "—"),
+            "—",
+        ])
+        _add_table(
+            slide,
+            Inches(0.75), Inches(1.3), Inches(12.1), Inches(5.8),
+            "Trading Comps",
+            ["Company", "Ticker", "EV/EBITDA", "EV/Revenue", "EBITDA Margin", "Rev Growth"],
+            peer_rows,
+        )
+
+    # 8) IC Score Breakdown
+    ic = result.ic_score
+    if ic:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        rec_label = _safe_str(ic.recommendation)
+        _add_header(slide, f"IC Score — {rec_label}", f"Investment Committee Scorecard")
+        _add_table(
+            slide,
+            Inches(0.75), Inches(1.2), Inches(5.8), Inches(4.5),
+            "Dimension Scores",
+            ["Dimension", "Score"],
+            [
+                ["Strategy",    _safe_str(ic.strategy)],
+                ["Synergies",   _safe_str(ic.synergies)],
+                ["Financial",   _safe_str(ic.financial)],
+                ["LBO",         _safe_str(ic.lbo)],
+                ["Integration", _safe_str(ic.integration)],
+                ["Risk",        _safe_str(ic.risk)],
+                ["TOTAL",       _safe_str(ic.ic_score)],
+            ],
+        )
+        _add_bullets(
+            slide,
+            Inches(7.0), Inches(1.2), Inches(5.8), Inches(4.5),
+            "Rationale & Next Steps",
+            [_safe_str(ic.rationale, "N/A")] + _safe_list(ic.next_steps),
+        )
+
+    # 9) Investment Thesis
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _add_header(slide, "Investment Thesis")
     _add_bullets(
@@ -331,10 +428,15 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
         Inches(12.2),
         Inches(5.5),
         "Thesis",
-        [_safe_str(t.thesis, "Thesis unavailable."), f"Bull: {_safe_str(t.bull_case)}", f"Base: {_safe_str(t.base_case)}", f"Bear: {_safe_str(t.bear_case)}"],
+        [
+            _safe_str(t.thesis, "Thesis unavailable."),
+            f"Bull: {_safe_str(t.bull_case)}",
+            f"Base: {_safe_str(t.base_case)}",
+            f"Bear: {_safe_str(t.bear_case)}",
+        ],
     )
 
-    # 7) Catalysts & Risks
+    # 10) Catalysts & Risks
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _add_header(slide, "Catalysts & Risks")
     risks = [f"{r.level.upper()}: {r.text}" for r in (f.key_risks or [])]

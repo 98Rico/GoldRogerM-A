@@ -112,61 +112,49 @@ class FinancialModelerAgent(BaseAgent):
 
     def _system_prompt(self) -> str:
         return (
-            "You are a financial data extraction system inside a deterministic valuation pipeline. "
-            "Your ONLY task is to extract factual financial data from verified sources found via web_search. "
-            "DO NOT forecast. DO NOT model. DO NOT estimate future projections. "
-            "DO NOT reconstruct income statements. "
-            "Return ONLY valid JSON. No explanation, no markdown."
+            "You are a financial data extraction specialist inside a valuation engine. "
+            "Search for real financial data. For public companies use verified filings. "
+            "For private companies, use press reports, industry databases, and credible estimates — "
+            "clearly tag estimated values. Return ONLY valid JSON. No markdown, no explanation."
         )
 
     def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
         sector = context.get("sector", "")
-        business = context.get("business_model", "") or context.get("description", "")
+        description = context.get("business_model", "") or context.get("description", "")
+        is_private = company_type == "private"
 
-        return f"""
-Extract financial data for "{company}" ({company_type}).
+        private_note = (
+            "\nThis is a PRIVATE company. Public filings may not exist. "
+            "Use press reports, industry research, Crunchbase, LinkedIn Revenue Estimates, "
+            "or credible analyst estimates. Reasonable estimates are REQUIRED — do not return N/A "
+            "if industry knowledge or press reports can provide an approximation."
+        ) if is_private else ""
 
-Context:
-- Sector: {sector or "unknown"}
-- Business: {business or "unknown"}
+        return f"""Find financial data for "{company}" ({company_type}, sector: {sector or "unknown"}).
+{private_note}
+Description: {description or "N/A"}
 
-TASK:
-Use web_search to find ONLY factual historical financial data.
+Use web_search to retrieve the most recent available financials.
 
-Allowed sources:
-- annual reports
-- earnings releases
-- investor presentations
-- reputable financial databases
-- credible industry reports
+RULES:
+- All monetary values in USD millions (convert EUR/GBP at current rates if needed)
+- revenue_series = list of annual revenues as plain numbers (most recent last), e.g. [450.0, 520.0, 610.0]
+- revenue_current = most recent annual revenue as a plain number string, e.g. "610"
+- Margins as decimals, e.g. "0.18" for 18%
+- For private companies: use best available estimate; tag with "(est)" in sources
 
-STRICT RULES:
-- DO NOT create projections
-- DO NOT infer future growth
-- DO NOT build financial models
-- DO NOT estimate missing values unless explicitly stated in sources
-- DO NOT reconstruct income statements
-
-OUTPUT (STRICT JSON):
+OUTPUT — return EXACTLY this JSON structure, no other keys:
 
 {{
-  "currency": "USD or EUR",
-  "revenue_latest": "value or N/A",
-  "revenue_history": [
-    {{"year": 2022, "value": "..." }},
-    {{"year": 2023, "value": "..." }},
-    {{"year": 2024, "value": "..." }}
-  ],
-  "ebitda_margin": "value or N/A",
-  "net_margin": "value or N/A",
-  "gross_margin": "value or N/A",
-  "free_cash_flow": "value or N/A",
-  "tax_rate": "value or N/A",
-  "capex": "value or N/A",
-  "sources": [
-    "Title — https://...",
-    "Title — https://..."
-  ]
+  "revenue_current": "<number in USD millions, or null>",
+  "revenue_series": [<year-1 revenue>, <year-2 revenue>, <year-3 revenue>],
+  "revenue_growth": "<decimal growth rate, e.g. 0.08, or null>",
+  "ebitda_margin": "<decimal, e.g. 0.18, or null>",
+  "net_margin": "<decimal or null>",
+  "gross_margin": "<decimal or null>",
+  "free_cash_flow": "<USD millions or null>",
+  "debt_to_equity": "<decimal or null>",
+  "sources": ["<source description>"]
 }}
 """
 
@@ -520,4 +508,45 @@ Return ONLY this JSON:
     }}
   ],
   "next_steps": ["next step 1", "next step 2", "next step 3"]
+}}"""
+
+
+class PeerFinderAgent(BaseAgent):
+    """
+    Identifies 4–6 publicly listed comparable companies for a given target.
+    Used to build real-market-data peer multiples instead of sector table averages.
+    Critical for private company valuation accuracy.
+    """
+    name = "PeerFinder"
+    max_tokens = 800
+
+    def _system_prompt(self) -> str:
+        return (
+            "You are a sell-side equity research analyst. "
+            "Your task is to identify the most relevant publicly listed comparable companies "
+            "for a given target. Focus on business model similarity, sector, size, and geography. "
+            "Return ONLY valid JSON. No markdown, no explanation."
+        )
+
+    def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
+        sector = context.get("sector", "unknown")
+        description = context.get("description", "")
+        return f"""Find 4–6 publicly listed companies comparable to "{company}".
+
+Context:
+- Sector: {sector}
+- Description: {description or "N/A"}
+- Company type: {company_type}
+
+Instructions:
+- Choose peers based on: business model, revenue scale, geography, growth profile
+- Prefer well-known listed companies with liquid stocks (avoid micro-caps)
+- Use web_search if needed to verify current listings
+
+Return ONLY this JSON:
+{{
+  "peers": [
+    {{"name": "Company Name", "ticker": "TICK", "exchange": "NYSE/NASDAQ/LSE/etc", "rationale": "why comparable"}},
+    {{"name": "Company Name", "ticker": "TICK", "exchange": "NYSE/NASDAQ/LSE/etc", "rationale": "why comparable"}}
+  ]
 }}"""

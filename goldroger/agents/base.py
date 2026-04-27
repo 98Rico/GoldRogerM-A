@@ -2,6 +2,8 @@
 Base agent — wraps Mistral AI API with web_search tool + retry logic.
 All specialized agents inherit from this.
 """
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -12,6 +14,18 @@ from dotenv import load_dotenv
 from mistralai.client import Mistral
 
 load_dotenv()
+
+# Global rate limiter: enforce minimum gap between Mistral API calls (free tier safe)
+_last_api_call: float = 0.0
+_MIN_CALL_GAP = 3.0  # seconds between calls
+
+
+def _rate_limit_wait() -> None:
+    global _last_api_call
+    elapsed = time.monotonic() - _last_api_call
+    if elapsed < _MIN_CALL_GAP:
+        time.sleep(_MIN_CALL_GAP - elapsed)
+    _last_api_call = time.monotonic()
 
 WEB_SEARCH_TOOL = {
     "type": "function",
@@ -192,7 +206,7 @@ class BaseAgent:
     name: str = "BaseAgent"
     model: str = "mistral-small-latest"
     max_tokens: int = 2048
-    max_retries: int = 2
+    max_retries: int = 3
     max_tool_rounds: int = 6
 
     def __init__(self, client: Mistral | None = None):
@@ -230,12 +244,14 @@ class BaseAgent:
 
         for attempt in range(self.max_retries + 1):
             try:
+                _rate_limit_wait()
                 response = self.client.chat.complete(
                     model=self.model,
                     max_tokens=self.max_tokens,
                     messages=messages,
                     tools=[WEB_SEARCH_TOOL],
                     tool_choice="auto",
+                    timeout_ms=60_000,
                 )
 
                 tool_rounds = 0
@@ -277,20 +293,25 @@ class BaseAgent:
                             }
                         )
 
+                    _rate_limit_wait()
                     response = self.client.chat.complete(
                         model=self.model,
                         max_tokens=self.max_tokens,
                         messages=messages,
                         tools=[WEB_SEARCH_TOOL],
                         tool_choice="auto",
+                        timeout_ms=60_000,
                     )
 
                 return response.choices[0].message.content or ""
 
             except Exception as exc:
+                exc_str = str(exc).lower()
+                is_rate_limit = "429" in str(exc) or "rate_limit" in exc_str or "rate limit" in exc_str
                 if attempt < self.max_retries:
-                    print(f"[{self.name}] Attempt {attempt + 1} failed: {exc} — retrying...")
-                    time.sleep(2**attempt)
+                    wait = 60 if is_rate_limit else 2 ** attempt
+                    print(f"[{self.name}] Attempt {attempt + 1} failed: {exc} — retrying in {wait}s...")
+                    time.sleep(wait)
                 else:
                     raise
         return ""

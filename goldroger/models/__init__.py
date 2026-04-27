@@ -118,6 +118,59 @@ class InvestmentThesis(Model):
     sources: list[str] = []
 
 
+class ScenarioSummary(Model):
+    """Football field row — one scenario (bear/base/bull)."""
+    name: str                          # Bear / Base / Bull
+    dcf_ev: Optional[str] = None       # USD millions
+    comps_ev: Optional[str] = None
+    blended_ev: Optional[str] = None
+    wacc: Optional[str] = None
+    ebitda_margin: Optional[str] = None
+
+
+class FootballField(Model):
+    """Bear/Base/Bull scenario table + ranges per valuation method."""
+    bear: Optional[ScenarioSummary] = None
+    base: Optional[ScenarioSummary] = None
+    bull: Optional[ScenarioSummary] = None
+    dcf_range: Optional[str] = None       # "Bear $Xm — Bull $Ym"
+    comps_range: Optional[str] = None
+    blended_range: Optional[str] = None
+
+
+class PeerComp(Model):
+    """Single peer company multiple."""
+    name: str
+    ticker: str
+    ev_ebitda: Optional[str] = None
+    ev_revenue: Optional[str] = None
+    ebitda_margin: Optional[str] = None
+    revenue_growth: Optional[str] = None
+
+
+class PeerCompsTable(Model):
+    """Peer comparables table with medians."""
+    peers: list[PeerComp] = []
+    median_ev_ebitda: Optional[str] = None
+    median_ev_revenue: Optional[str] = None
+    median_ebitda_margin: Optional[str] = None
+    n_peers: int = 0
+
+
+class ICScoreSummary(Model):
+    """IC scoring breakdown for PPT."""
+    ic_score: Optional[str] = None        # "72/100"
+    recommendation: Optional[str] = None  # STRONG BUY / BUY / WATCH / NO GO
+    strategy: Optional[str] = None
+    synergies: Optional[str] = None
+    financial: Optional[str] = None
+    lbo: Optional[str] = None
+    integration: Optional[str] = None
+    risk: Optional[str] = None
+    rationale: Optional[str] = None
+    next_steps: list[str] = []
+
+
 class AnalysisResult(Model):
     company: str
     company_type: str  # "public" or "private"
@@ -126,6 +179,9 @@ class AnalysisResult(Model):
     financials: Financials
     valuation: Valuation
     thesis: InvestmentThesis
+    football_field: Optional[FootballField] = None
+    peer_comps: Optional[PeerCompsTable] = None
+    ic_score: Optional[ICScoreSummary] = None
 
 
 # ── M&A Extensions ──────────────────────────────────────────────────────────
@@ -202,6 +258,9 @@ class MAResult(Model):
     due_diligence: DueDiligence = DueDiligence()
     deal_execution: DealExecution = DealExecution()
     lbo: LBOModel = LBOModel()
+    ic_score: Optional[ICScoreSummary] = None
+    football_field: Optional[FootballField] = None
+    peer_comps: Optional[PeerCompsTable] = None
 
 
 class PipelineTarget(Model):

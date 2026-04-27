@@ -149,14 +149,20 @@ class ValuationService:
             valuation_path = "ev_ebitda"
 
         # ── 5. Blended EV ─────────────────────────────────────────────────
-        weights = assumptions.get("weights") or {
-            "dcf": 0.5, "comps": 0.3, "transactions": 0.2
-        }
+        if use_financial_path:
+            # DCF inapplicable for banks/insurers (EBITDA ≈ 0) — exclude it
+            weights = assumptions.get("weights") or {
+                "dcf": 0.0, "comps": 0.6, "transactions": 0.4
+            }
+        else:
+            weights = assumptions.get("weights") or {
+                "dcf": 0.5, "comps": 0.3, "transactions": 0.2
+            }
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)
 
-        # ── 6. LBO (always run, may be infeasible) ────────────────────────
+        # ── 6. LBO (always run, may be infeasible; skipped for mega-caps) ──
         lbo = self._run_lbo(
-            blended.blended, ebitda, revenue_series, ebitda_margin, capex_pct, tax_rate
+            blended.blended, ebitda, revenue_series, ebitda_margin, capex_pct, tax_rate, market_data
         )
 
         # ── 7. BUY / HOLD / SELL ─────────────────────────────────────────
@@ -261,32 +267,48 @@ class ValuationService:
     # ── Revenue & assumption helpers ──────────────────────────────────────────
 
     def _build_revenue_series(self, financials, market_data, notes):
-        # Priority 1: verified yfinance history
+        # Priority 1: verified yfinance — project FORWARD from most recent year
         if market_data and market_data.revenue_history and len(market_data.revenue_history) >= 2:
             hist = market_data.revenue_history
-            # Use forward analyst estimate if available, else historical CAGR
-            if market_data.forward_revenue_growth is not None:
-                growth = max(-0.10, min(market_data.forward_revenue_growth, 0.40))
-                notes.append(f"Revenue at {growth:.1%} p.a. (analyst forward estimate).")
-            else:
-                growth = self._historical_cagr(hist)
-                notes.append(f"Revenue at {growth:.1%} p.a. (historical CAGR).")
-            series = list(hist)
-            while len(series) < self.PROJECTION_YEARS:
-                series.append(series[-1] * (1 + growth))
-            return series[-self.PROJECTION_YEARS:], "verified"
+            base = hist[-1]  # most recent annual revenue (never use hist as forward projections)
 
-        # Priority 2: LLM revenue_series
+            if market_data.forward_revenue_growth is not None:
+                fwd = market_data.forward_revenue_growth
+                # Fade curve: analyst year-1 estimate → converge to sustainable rate by year 5
+                # Avoids extrapolating hyper-growth (e.g. 95%) for 5 full years
+                long_run = min(max(fwd * 0.15, 0.04), 0.15)  # clamp long-run to 4–15%
+                growth_rates = [
+                    fwd,
+                    fwd * 0.60,
+                    fwd * 0.35,
+                    long_run * 1.30,
+                    long_run,
+                ]
+                series = []
+                rev = base
+                for g in growth_rates:
+                    rev = rev * (1 + g)
+                    series.append(rev)
+                y1, y5 = growth_rates[0], growth_rates[-1]
+                notes.append(f"Revenue fade: {y1:.1%}→{y5:.1%} (analyst estimate + normalisation).")
+            else:
+                growth = min(self._historical_cagr(hist), 0.35)
+                series = [base * (1 + growth) ** i for i in range(1, self.PROJECTION_YEARS + 1)]
+                notes.append(f"Revenue at {growth:.1%} p.a. (historical CAGR).")
+            return series, "verified"
+
+        # Priority 2: LLM revenue_series — project FORWARD from most recent value
         rs = financials.get("revenue_series")
         if isinstance(rs, list) and len(rs) >= 2:
             parsed = [self._f(x) for x in rs if self._f(x) > 0]
             if len(parsed) >= 2:
-                growth = self._historical_cagr(parsed)
-                while len(parsed) < self.PROJECTION_YEARS:
-                    parsed.append(parsed[-1] * (1 + growth))
-                return parsed[-self.PROJECTION_YEARS:], "estimated"
+                base = parsed[-1]
+                growth = min(self._historical_cagr(parsed), 0.35)
+                series = [base * (1 + growth) ** i for i in range(1, self.PROJECTION_YEARS + 1)]
+                notes.append(f"Revenue at {growth:.1%} p.a. (LLM series CAGR).")
+                return series, "estimated"
 
-        # Priority 3: single base + growth rate
+        # Priority 3: single base + growth rate — project FORWARD
         base = None
         if market_data and market_data.revenue_ttm:
             base = market_data.revenue_ttm
@@ -297,8 +319,8 @@ class ValuationService:
             raw_growth = (
                 market_data.forward_revenue_growth if market_data else None
             ) or self._f(financials.get("revenue_growth"), 0.08)
-            growth = max(-0.10, min(float(raw_growth), 0.40))
-            series = [base * (1 + growth) ** i for i in range(self.PROJECTION_YEARS)]
+            growth = max(-0.10, min(float(raw_growth), 0.35))
+            series = [base * (1 + growth) ** i for i in range(1, self.PROJECTION_YEARS + 1)]
             notes.append(f"Revenue at {growth:.1%} p.a. (single-point base).")
             return series, "inferred"
 
@@ -392,8 +414,11 @@ class ValuationService:
             notes.append("Terminal growth clamped below WACC.")
         return tg
 
-    def _run_lbo(self, blended_ev, ebitda, revenue_series, ebitda_margin, capex_pct, tax_rate):
+    def _run_lbo(self, blended_ev, ebitda, revenue_series, ebitda_margin, capex_pct, tax_rate, market_data=None):
         if ebitda <= 0 or blended_ev <= 0:
+            return None
+        # LBO is not applicable to mega-caps (no PE firm can acquire >$500B companies)
+        if market_data and market_data.market_cap and market_data.market_cap > 500_000:
             return None
         try:
             growth = self._historical_cagr(revenue_series)

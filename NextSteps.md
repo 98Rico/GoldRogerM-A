@@ -2,9 +2,7 @@
 
 ---
 
-## ✅ PHASES 1–4 COMPLÉTÉES (Avril 2025)
-
-### Récap de ce qui a été livré
+## ✅ PHASES 1–5 COMPLÉTÉES
 
 | Phase | Item | Fichier(s) | Statut |
 |-------|------|-----------|--------|
@@ -12,115 +10,105 @@
 | 1 | Tables multiples sectorielles (20+ secteurs) | `data/sector_multiples.py` | ✅ |
 | 1 | WACC CAPM (β réel, Rf=4.5%, ERP=5.5%) | `finance/core/wacc.py` | ✅ |
 | 1 | DCF corrigé (NWC incrémental + D&A tax shield) | `finance/valuation/dcf.py` | ✅ |
-| 1 | ValuationService orchestrateur (BUY/HOLD/SELL, sensibilité) | `finance/core/valuation_service.py` | ✅ |
-| 1 | Orchestrateur equity avec fetch real data step 0 | `orchestrator.py` | ✅ |
-| 2 | Estimations forward analystes (consensus 1 an) | `data/fetcher.py` | ✅ |
-| 2 | Path P/E + P/B pour secteur financier (détection auto) | `sector_multiples.py` + `valuation_service.py` | ✅ |
-| 2 | LBO engine déterministe (leverage, FCF sweep, IRR, MOIC) | `finance/valuation/lbo.py` | ✅ |
-| 2 | SOTP framework (valorisation multi-segments) | `finance/valuation/sotp.py` | ✅ |
+| 1 | ValuationService orchestrateur | `finance/core/valuation_service.py` | ✅ |
+| 2 | Estimations forward analystes | `data/fetcher.py` | ✅ |
+| 2 | Path P/E + P/B secteur financier | `valuation_service.py` | ✅ |
+| 2 | LBO engine déterministe (IRR, MOIC) | `finance/valuation/lbo.py` | ✅ |
+| 2 | SOTP framework | `finance/valuation/sotp.py` | ✅ |
 | 3 | `run_ma_analysis()` — pipeline M&A complet | `orchestrator.py` | ✅ |
-| 3 | `run_pipeline()` — pipeline acquisitions automatique | `orchestrator.py` | ✅ |
-| 3 | IC Scoring institutionnel (6 dimensions, gates durs) | `ma/scoring.py` | ✅ |
+| 3 | `run_pipeline()` — pipeline acquisitions | `orchestrator.py` | ✅ |
+| 3 | IC Scoring institutionnel (6 dimensions) | `ma/scoring.py` | ✅ |
 | 4 | Cache TTL (1h yfinance, 24h ticker) | `utils/cache.py` | ✅ |
 | 4 | Logging structuré JSON-lines | `utils/logger.py` | ✅ |
-
-### Smoke test résultats (Avril 2025)
-
-| Test | Résultat | Attendu |
-|------|----------|---------|
-| AAPL CAPM WACC | 10.6% (β=1.11) | ✓ |
-| AAPL LBO | IRR 10.4% → INFEASIBLE | ✓ (trop cher pour LBO standard) |
-| AAPL SOTP (3 segments) | Equity $3.27T vs MCap $3.9T | ✓ (−15% holdco discount) |
-| JPM path | pe_pb (détection auto) | ✓ |
-| JPM EV blended | $318B vs $66B avant | ✓ (amélioration majeure) |
-| JPM recommandation | HOLD +4.6% | ✓ (raisonnable) |
-| Cache | hit au 2ème appel | ✓ |
-| Logger | JSON-lines flushé | ✓ |
+| 5 | **Data provider layer pluggable** | `data/providers/` + `data/registry.py` | ✅ |
+| 5 | **Peer comparables réels** (PeerFinderAgent + yfinance) | `data/comparables.py` | ✅ |
+| 5 | **Bear/Base/Bull scenarios** (football field) | `finance/core/scenarios.py` | ✅ |
+| 5 | **IC scoring enrichi** depuis outputs agents | `ma/scoring.py` | ✅ |
+| 5 | **Revenue series: projections forward** (bug fix) | `valuation_service.py` | ✅ |
+| 5 | **PPT 10 slides** (football field + peer comps + IC) | `exporters/pptx.py` | ✅ |
+| 5 | **DCF poids 0% banques** (path pe_pb) | `valuation_service.py` | ✅ |
+| 5 | **LBO skippé mega-caps** (MCap > $500B) | `valuation_service.py` | ✅ |
+| 5 | **Rate limit Mistral** (backoff 60s + global 3s) | `agents/base.py` | ✅ |
 
 ---
 
-## 🔴 PRIORITÉ IMMÉDIATE — Fix banques/financières
+## 🔴 PRIORITÉ 1 — Sources de données premium
 
-**Problème** : Pour les banques (JPM, GS, BNP...), le DCF calcule une EV très basse car l'EBITDA margin yfinance renvoie ~0% (les banques n'ont pas d'EBITDA au sens traditionnel). Avec la pondération actuelle 50% DCF, ce zéro tire fortement le blended vers le bas.
+### 1.1 Bloomberg BLP Integration
 
-**Fix à faire** :
-```python
-# Dans valuation_service.py, _run_full_valuation()
-if use_financial_path:
-    weights = {"dcf": 0.0, "comps": 0.60, "transactions": 0.40}
-else:
-    weights = assumptions.get("weights") or {"dcf": 0.5, "comps": 0.3, "transactions": 0.2}
-```
+**Fichier** : `data/providers/bloomberg.py` — stub prêt, `is_available()` gate sur `BLOOMBERG_API_KEY`
 
-**Fichier** : [finance/core/valuation_service.py](goldroger/finance/core/valuation_service.py) — ligne ~148
+Pour activer :
+1. Installer `blpapi` Python SDK (fourni avec licence Bloomberg Terminal)
+2. Implémenter `fetch()` avec BDP/BDH calls
+3. Set `BLOOMBERG_API_KEY=any_value` dans `.env`
+
+Bloomberg apporte : données intraday, private company estimates, M&A transaction comps, credit ratings, consensus estimates complets.
+
+### 1.2 Capital IQ Integration
+
+**Fichier** : `data/providers/capitaliq.py` — stub prêt
+
+Pour activer : `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD` dans `.env`.
+
+Valeur ajoutée M&A : précédent transactions database, private company financials, covenants, credit.
+
+### 1.3 Crunchbase API (privées, freemium)
+
+**À créer** : `data/providers/crunchbase.py`
+
+Crunchbase a des données de revenus estimés pour les startups/scale-ups privées. API gratuite jusqu'à 200 req/jour.
 
 ---
 
-## 🟡 PRIORITÉ 2 — Robustesse engine
+## 🟡 PRIORITÉ 2 — Qualité Engine
 
 ### 2.1 Tests unitaires valuation engine
 
-**Aucun test actuellement.** Un changement de formule peut casser silencieusement.
+**Aucun test.** Un changement de formule peut casser silencieusement.
 
-À créer : `tests/test_dcf.py`, `tests/test_lbo.py`, `tests/test_wacc.py`
+À créer : `tests/test_dcf.py`, `tests/test_lbo.py`, `tests/test_wacc.py`, `tests/test_scenarios.py`
 
 Tests minimum :
-- DCF : Apple-like input → EV dans range attendu
-- WACC : beta 1.0 → 10% WACC (Rf=4.5%, ERP=5.5%, 50/50 equity/debt)
-- LBO : 4.5x leverage, 15% rev growth → IRR > 20%
-- SOTP : 2 segments → gross_ev = sum des EVs individuels
-- Financials path : JPM-like → path = "pe_pb"
+- DCF : revenue serie forward → EV dans range attendu
+- WACC : β=1.0 → ~10% WACC (Rf=4.5%, ERP=5.5%)
+- Scenarios : bull.blended_ev > base.blended_ev > bear.blended_ev
+- Peers : 3 tickers → PeerMultiples.n_peers == 3, médiane calculée
 
-### 2.2 Timeout agents LLM
+### 2.2 SEC EDGAR — revenus historiques
 
-**Problème** : Si Mistral timeout ou est lent, le CLI bloque sans feedback.
+**Fichier** : `data/providers/sec_edgar.py` — fetch revenue implémenté
 
-**Fix** :
-```python
-# Dans base.py
-response = self.client.chat.complete(
-    model=self.model,
-    max_tokens=self.max_tokens,
-    messages=messages,
-    tools=[WEB_SEARCH_TOOL],
-    tool_choice="auto",
-    timeout=30,  # 30s max
-)
-```
+À améliorer : ajouter EBITDA, net income, capex depuis les filings 10-K.
+Permet de croiser les données yfinance avec les chiffres SEC officiels.
 
-### 2.3 Retry JSON invalide
+### 2.3 Retry JSON invalide LLM
 
-**Problème** : Si l'agent retourne un JSON malformé, le parse_model fallback déclenche silencieusement.
+Si l'agent retourne un JSON malformé, `parse_model` déclenche silencieusement le fallback.
 
-**Fix** : Ajouter un retry avec prompt "STRICT JSON ONLY" si parse_model retourne le fallback.
+**Fix** : ajouter retry avec prompt "STRICT JSON ONLY, no markdown" si fallback déclenché.
 
 ---
 
-## 🟡 PRIORITÉ 3 — Précision DCF (scénarios)
+## 🟡 PRIORITÉ 3 — Précision & Robustesse
 
-### 3.1 Bear/Base/Bull cases
+### 3.1 Normalisation devises privées
 
-**Actuellement** : un seul run DCF (base case).
+Pour Longchamp (€), le LLM peut retourner des montants en EUR.
+Le `_f()` helper parse le nombre mais ne convertit pas.
 
-**À faire** :
-- Bear : revenue_growth − 3%, ebitda_margin − 2%, WACC + 1%
-- Base : inputs as-is
-- Bull : revenue_growth + 3%, ebitda_margin + 1%, WACC − 0.5%
+**Fix** : détecter la devise dans la réponse LLM, appliquer FX rate EUR→USD via yfinance (`EURUSD=X`).
 
-Résultat : football field visuel (Low EV / Base EV / High EV par méthode).
+### 3.2 Scenarios — narrative enrichie
 
-**Fichier** : `finance/core/scenarios.py` — stub existant
+Aujourd'hui les scénarios sont purement numériques.
+À ajouter : 1–2 phrases narratives par scénario dérivées du thesis agent.
+Ex : "Bear : ralentissement IA en 2026, compression des multiples" pour NVIDIA.
 
-### 3.2 IC Scoring — enrichissement scores LLM
+### 3.3 SOTP pour conglomérats
 
-**Actuellement** : auto_score_from_valuation() initialise strategy/synergies/integration/risk à 5.0/10 (neutre).
-
-**À faire** : lire les outputs des agents (StrategicFit, DueDiligence) pour dériver des scores plus précis :
-- `fit_score = "High"` → strategy = 8-9
-- `red_flags: [{"severity": "high"}]` → risk = 2-3
-- `integration_complexity = "High"` → integration = 3-4
-
-**Fichier** : `ma/scoring.py` + `orchestrator.py` dans `run_ma_analysis()`
+SOTP implémenté mais pas câblé dans `run_analysis`.
+Pour LVMH, Berkshire, Alphabet — détecter multi-segment et proposer SOTP automatiquement.
 
 ---
 
@@ -133,33 +121,15 @@ Périmètre minimal :
 - Export PPT / Excel one-click
 - Pipeline M&A view
 
-### 4.2 Multi-user / API keys
-
-- FastAPI avec auth Bearer
-- Rate limiting par user
-
-### 4.3 Caching persistent (Redis ou fichier)
+### 4.2 Cache persistent (Redis ou fichier)
 
 Actuellement le cache est in-process (reset à chaque restart).
-- Passer à Redis ou fichier JSON avec TTL pour persistance entre runs.
+Passer à fichier JSON avec TTL pour persistance entre runs.
 
----
+### 4.3 Multi-user / API keys
 
-## 📋 BACKLOG COMPLET
-
-| Item | Priorité | Notes |
-|------|----------|-------|
-| Fix DCF weight=0 pour financières | CRITICAL | Quick fix 1 ligne |
-| Tests unitaires engine | HIGH | Fiabilité production |
-| Timeout agents LLM (30s) | HIGH | Éviter CLI freeze |
-| Retry JSON invalide | HIGH | Stabilité |
-| Bear/Base/Bull scenarios | MED | `scenarios.py` stub existant |
-| IC scores LLM-enrichis | MED | Lire fit_score, red_flags |
-| Cache persistent (Redis/fichier) | MED | Inter-session |
-| Graphique football field | MED | Pour export Excel |
-| Bloomberg / Capital IQ | FUTURE | Tier 1 si credentials |
-| SEC / EDGAR filings | FUTURE | 10-K/10-Q parsing |
-| Frontend Next.js | FUTURE | SaaS UI |
+- FastAPI avec auth Bearer (déjà en place, à sécuriser)
+- Rate limiting par user
 
 ---
 
@@ -168,9 +138,12 @@ Actuellement le cache est in-process (reset à chaque restart).
 **LLM = analyse qualitative uniquement.**
 
 Le LLM ne produit jamais :
-- chiffres de revenus, marges, WACC, EV
+- chiffres de revenus, marges, WACC, EV dans les calculs finaux
 
 Ces chiffres viennent exclusivement de :
-1. `yfinance` (verified) — toujours prioritaire
-2. Assumptions LLM (estimated) — fallback sociétés privées
-3. Defaults sectoriels (inferred) — dernier recours
+1. **Bloomberg / CapIQ** (premium, si credentials) — priorité maximale
+2. **yfinance / SEC EDGAR** (free, verified) — défaut publiques
+3. **Estimations LLM** (estimated) — fallback privées uniquement
+4. **Defaults sectoriels** (inferred) — dernier recours
+
+Dans cet ordre. Toujours.

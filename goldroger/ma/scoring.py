@@ -109,6 +109,109 @@ def compute_ic_score(inp: ICScoreInput) -> ICScoreOutput:
     )
 
 
+def score_from_ma_agents(
+    strategic_fit,       # StrategicFit pydantic model
+    due_diligence,       # DueDiligence pydantic model
+    lbo_output=None,     # LBOOutput | None
+    upside_pct: Optional[float] = None,
+    company: str = "",
+    acquirer: str = "",
+    sector: str = "",
+) -> ICScoreOutput:
+    """
+    Derive IC scores directly from M&A agent outputs.
+    Eliminates the 5.0/10 neutral defaults — every dimension gets a real signal.
+    """
+    # ── Strategy: from strategic_fit.fit_score ────────────────────────────
+    fit = getattr(strategic_fit, "fit_score", None) or ""
+    fit_str = str(fit).lower()
+    if "high" in fit_str or "strong" in fit_str or "excellent" in fit_str:
+        strategy = 8.5
+    elif "medium" in fit_str or "moderate" in fit_str or "good" in fit_str:
+        strategy = 6.5
+    elif "low" in fit_str or "weak" in fit_str or "poor" in fit_str:
+        strategy = 3.0
+    else:
+        strategy = 5.5
+
+    # ── Synergies: from strategic_fit.key_synergies count + quality ───────
+    synergies_list = getattr(strategic_fit, "key_synergies", []) or []
+    n_syn = len(synergies_list)
+    high_impact = sum(
+        1 for s in synergies_list
+        if "high" in str(getattr(s, "est_impact", "")).lower()
+        or "significant" in str(getattr(s, "description", "")).lower()
+    )
+    synergies = min(3.0 + n_syn * 0.8 + high_impact * 0.6, 10.0)
+
+    # ── Integration: from integration_complexity (inverse — easy = 10) ────
+    complexity = str(getattr(strategic_fit, "integration_complexity", "")).lower()
+    if "high" in complexity or "complex" in complexity or "difficult" in complexity:
+        integration = 3.0
+    elif "medium" in complexity or "moderate" in complexity:
+        integration = 5.5
+    elif "low" in complexity or "simple" in complexity or "easy" in complexity:
+        integration = 8.0
+    else:
+        integration = 5.0
+
+    # ── Risk: from due_diligence.red_flags severity (inverse — low risk = 10)
+    red_flags = getattr(due_diligence, "red_flags", []) or []
+    high_rf = sum(1 for rf in red_flags if str(getattr(rf, "severity", "")).lower() == "high")
+    med_rf = sum(1 for rf in red_flags if str(getattr(rf, "severity", "")).lower() in ("medium", "med"))
+    risk = max(1.0, 10.0 - high_rf * 2.5 - med_rf * 0.8)
+
+    # ── Financial: from upside_pct (unchanged) ────────────────────────────
+    if upside_pct is not None:
+        if upside_pct > 0.30:
+            financial = 9.0
+        elif upside_pct > 0.15:
+            financial = 7.5
+        elif upside_pct > 0.0:
+            financial = 6.0
+        elif upside_pct > -0.15:
+            financial = 4.5
+        else:
+            financial = 2.5
+    else:
+        financial = 5.0
+
+    # ── LBO: from lbo_output.irr ──────────────────────────────────────────
+    lbo_score = 5.0
+    irr = None
+    feasible = None
+    if lbo_output is not None:
+        irr = lbo_output.irr
+        feasible = lbo_output.is_feasible
+        if not feasible:
+            lbo_score = 1.0
+        elif irr >= 0.25:
+            lbo_score = 10.0
+        elif irr >= 0.20:
+            lbo_score = 8.0
+        elif irr >= 0.15:
+            lbo_score = 6.0
+        elif irr >= 0.10:
+            lbo_score = 4.0
+        else:
+            lbo_score = 2.0
+
+    return compute_ic_score(ICScoreInput(
+        strategy=strategy,
+        synergies=synergies,
+        financial=financial,
+        lbo=lbo_score,
+        integration=integration,
+        risk=risk,
+        company=company,
+        acquirer=acquirer,
+        sector=sector,
+        irr=irr,
+        upside_pct=upside_pct,
+        lbo_feasible=feasible,
+    ))
+
+
 def score_from_analysis(
     strategy: float = 5.0,
     synergies: float = 5.0,
