@@ -18,6 +18,7 @@ from goldroger.data.fetcher import MarketData
 from .providers.base import DataProvider
 from .providers.bloomberg import BloombergProvider
 from .providers.capitaliq import CapitalIQProvider, RefinitivProvider
+from .providers.crunchbase import CrunchbaseProvider
 from .providers.yfinance import YFinanceProvider
 from .providers.sec_edgar import SECEdgarProvider
 
@@ -66,6 +67,7 @@ def build_default_registry() -> DataRegistry:
     registry.register(CapitalIQProvider())
     registry.register(RefinitivProvider())
     registry.register(YFinanceProvider())
+    registry.register(CrunchbaseProvider())
     registry.register(SECEdgarProvider())
     return registry
 

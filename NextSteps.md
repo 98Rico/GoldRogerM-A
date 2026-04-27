@@ -21,6 +21,7 @@
 | 4 | Cache TTL (1h yfinance, 24h ticker) | `utils/cache.py` | ✅ |
 | 4 | Logging structuré JSON-lines | `utils/logger.py` | ✅ |
 | 5 | **Data provider layer pluggable** | `data/providers/` + `data/registry.py` | ✅ |
+| 5 | **Crunchbase API** (freemium, privées) | `data/providers/crunchbase.py` | ✅ |
 | 5 | **Peer comparables réels** (PeerFinderAgent + yfinance) | `data/comparables.py` | ✅ |
 | 5 | **Bear/Base/Bull scenarios** (football field) | `finance/core/scenarios.py` | ✅ |
 | 5 | **IC scoring enrichi** depuis outputs agents | `ma/scoring.py` | ✅ |
@@ -29,6 +30,7 @@
 | 5 | **DCF poids 0% banques** (path pe_pb) | `valuation_service.py` | ✅ |
 | 5 | **LBO skippé mega-caps** (MCap > $500B) | `valuation_service.py` | ✅ |
 | 5 | **Rate limit Mistral** (backoff 60s + global 3s) | `agents/base.py` | ✅ |
+| 5 | **20 tests unitaires** (WACC, DCF, LBO, scenarios) | `tests/` | ✅ |
 
 ---
 
@@ -53,59 +55,76 @@ Pour activer : `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD` dans `.env`.
 
 Valeur ajoutée M&A : précédent transactions database, private company financials, covenants, credit.
 
-### 1.3 Crunchbase API (privées, freemium)
+---
 
-**À créer** : `data/providers/crunchbase.py`
+## 🔴 PRIORITÉ 2 — Opportunity Screening (sourcing actif)
 
-Crunchbase a des données de revenus estimés pour les startups/scale-ups privées. API gratuite jusqu'à 200 req/jour.
+### 2.1 Enrichissement sourcing par secteur / société de référence
+
+**Contexte** : quand un client dit "je cherche des opportunités dans le SaaS B2B européen" ou "trouve-moi des cibles similaires à Figma", le `SourcingAgent` actuel retourne une liste de noms mais l'analyse se limite à ce qui est demandé explicitement.
+
+**À améliorer** :
+
+**2.1a — Scoring de pertinence des cibles**
+Pour chaque cible identifiée par le `SourcingAgent`, calculer un score de pertinence vis-à-vis du brief client (taille, géographie, secteur, stade de maturité). Aujourd'hui toutes les cibles ont le même poids.
+
+**2.1b — Enrichissement due diligence automatique**
+Pour un secteur donné, le système devrait automatiquement :
+- Identifier les 10–15 acteurs clés (cotés + privés) via web search
+- Récupérer les multiples sectoriels live pour calibrer les attentes de valorisation
+- Trier par fit stratégique avant de soumettre au pipeline complet
+
+**2.1c — Comparaison à une société de référence**
+Si le client donne une société de référence ("trouve-moi des cibles comme Veeva"), extraire son profil (secteur, taille, marges, multiple) et utiliser ces paramètres comme filtre de screening. Aujourd'hui le pipeline ignore la société de référence pour calibrer les cibles.
+
+**2.1d — Output : shortlist scorecard**
+Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de pertinence, EV estimée, IC score, statut (publique/privée), next step recommandé.
+
+**Fichiers concernés** : `agents/specialists.py` (SourcingAgent), `orchestrator.py` (run_pipeline), `exporters/pptx.py` (nouveau slide pipeline)
 
 ---
 
-## 🟡 PRIORITÉ 2 — Qualité Engine
+## 🟡 PRIORITÉ 3 — Qualité Engine
 
-### 2.1 Tests unitaires valuation engine
+### 3.1 Taux de change live (BUG CONNU ⚠️)
 
-**Aucun test.** Un changement de formule peut casser silencieusement.
+**Problème** : les taux EUR/GBP/CHF/CAD sont **hardcodés** dans `valuation_service.py` (`_FX` dict) :
+```python
+_FX = {"€": 1.08, "eur": 1.08, "gbp": 1.26, "£": 1.26, "chf": 1.11, "cad": 0.74}
+```
 
-À créer : `tests/test_dcf.py`, `tests/test_lbo.py`, `tests/test_wacc.py`, `tests/test_scenarios.py`
+Ces taux changent et peuvent être significativement faux (ex : CHF/USD a bougé de 10%+ en 2024). Pour une analyse institutionnelle, utiliser des taux hardcodés est inacceptable.
 
-Tests minimum :
-- DCF : revenue serie forward → EV dans range attendu
-- WACC : β=1.0 → ~10% WACC (Rf=4.5%, ERP=5.5%)
-- Scenarios : bull.blended_ev > base.blended_ev > bear.blended_ev
-- Peers : 3 tickers → PeerMultiples.n_peers == 3, médiane calculée
+**Fix** : fetcher les taux live via yfinance au moment de l'analyse :
+```python
+# yfinance tickers: "EURUSD=X", "GBPUSD=X", "CHFUSD=X", "CADUSD=X"
+import yfinance as yf
+rate = yf.Ticker("EURUSD=X").fast_info["last_price"]
+```
+Avec fallback sur les taux hardcodés si yfinance échoue. Tagguer `fx_source: "live"` vs `"fallback_hardcoded"` dans le MarketData.
 
-### 2.2 SEC EDGAR — revenus historiques
+**Fichier** : `finance/core/valuation_service.py` → `_FX` dict → fonction `_get_fx_rates()`
+
+### 3.2 SEC EDGAR — données enrichies
 
 **Fichier** : `data/providers/sec_edgar.py` — fetch revenue implémenté
 
 À améliorer : ajouter EBITDA, net income, capex depuis les filings 10-K.
 Permet de croiser les données yfinance avec les chiffres SEC officiels.
 
-### 2.3 Retry JSON invalide LLM
+### 3.3 Retry JSON invalide LLM
 
-Si l'agent retourne un JSON malformé, `parse_model` déclenche silencieusement le fallback.
+Si l'agent retourne un JSON malformé, `parse_model` déclenche silencieusement le fallback. Un helper `_parse_with_retry()` existe dans l'orchestrateur pour les agents financiers/assumptions, mais pas encore câblé pour tous les agents (market, fundamentals, thesis, M&A agents).
 
-**Fix** : ajouter retry avec prompt "STRICT JSON ONLY, no markdown" si fallback déclenché.
+**Fix** : étendre `_parse_with_retry()` à tous les agents dans `orchestrator.py`.
 
----
-
-## 🟡 PRIORITÉ 3 — Précision & Robustesse
-
-### 3.1 Normalisation devises privées
-
-Pour Longchamp (€), le LLM peut retourner des montants en EUR.
-Le `_f()` helper parse le nombre mais ne convertit pas.
-
-**Fix** : détecter la devise dans la réponse LLM, appliquer FX rate EUR→USD via yfinance (`EURUSD=X`).
-
-### 3.2 Scenarios — narrative enrichie
+### 3.4 Scenarios — narrative enrichie
 
 Aujourd'hui les scénarios sont purement numériques.
 À ajouter : 1–2 phrases narratives par scénario dérivées du thesis agent.
 Ex : "Bear : ralentissement IA en 2026, compression des multiples" pour NVIDIA.
 
-### 3.3 SOTP pour conglomérats
+### 3.5 SOTP pour conglomérats
 
 SOTP implémenté mais pas câblé dans `run_analysis`.
 Pour LVMH, Berkshire, Alphabet — détecter multi-segment et proposer SOTP automatiquement.
@@ -119,7 +138,7 @@ Pour LVMH, Berkshire, Alphabet — détecter multi-segment et proposer SOTP auto
 Périmètre minimal :
 - Search bar → `run_analysis()` → affichage memo + football field
 - Export PPT / Excel one-click
-- Pipeline M&A view
+- Pipeline M&A view avec shortlist scorecard
 
 ### 4.2 Cache persistent (Redis ou fichier)
 
@@ -143,7 +162,8 @@ Le LLM ne produit jamais :
 Ces chiffres viennent exclusivement de :
 1. **Bloomberg / CapIQ** (premium, si credentials) — priorité maximale
 2. **yfinance / SEC EDGAR** (free, verified) — défaut publiques
-3. **Estimations LLM** (estimated) — fallback privées uniquement
-4. **Defaults sectoriels** (inferred) — dernier recours
+3. **Crunchbase** (freemium) — revenus estimés startups/privées
+4. **Estimations LLM** (estimated) — fallback privées uniquement
+5. **Defaults sectoriels** (inferred) — dernier recours
 
 Dans cet ordre. Toujours.

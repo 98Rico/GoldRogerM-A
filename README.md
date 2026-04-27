@@ -5,7 +5,8 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                    DATA LAYER (pluggable)                         │
-│  Bloomberg → Capital IQ → Refinitiv → yfinance → SEC EDGAR       │
+│  Bloomberg → Capital IQ → Refinitiv → yfinance → Crunchbase      │
+│                          → SEC EDGAR                              │
 │  DataRegistry: priority chain, auto-fallback, credential-gated   │
 │  PeerFinder: 4-6 listed peers fetched live via yfinance           │
 └────────────────────────┬─────────────────────────────────────────┘
@@ -53,12 +54,15 @@
 |--------|--------------|---------|
 | **yfinance** | Toujours (gratuit) | Prix, beta, marges, EV, forward estimates |
 | **SEC EDGAR** | Toujours (gratuit) | Revenus annuels US (10-K) |
+| **Crunchbase** | Si `CRUNCHBASE_API_KEY` (freemium) | Revenus estimés, funding, headcount (startups/privées) |
 | **Web Search** | Toujours (DuckDuckGo) | Données privées, presse, rapports |
 | **Bloomberg BLP** | Si `BLOOMBERG_API_KEY` | Tout (temps réel, privé, M&A comps) |
 | **Capital IQ** | Si `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD` | M&A comps, transactions, private |
 | **Refinitiv** | Si `REFINITIV_APP_KEY` | Équivalent Capital IQ |
 
-Pour activer Bloomberg/CapIQ : ajouter les variables dans `.env`.
+Pour activer Bloomberg/CapIQ/Crunchbase : ajouter les variables dans `.env`.
+
+> ⚠️ **Note** : Les taux de change EUR/GBP/CHF/CAD sont actuellement **codés en dur** dans `valuation_service.py` (`_FX` dict). Ils doivent être remplacés par des taux live via yfinance (`EURUSD=X`, `GBPUSD=X`, etc.) pour des analyses précises — voir NextSteps 3.1.
 
 ### Data Provider Registry
 
@@ -66,13 +70,13 @@ Pour activer Bloomberg/CapIQ : ajouter les variables dans `.env`.
 from goldroger.data.registry import DEFAULT_REGISTRY
 
 # Voir quelles sources sont actives
-print(DEFAULT_REGISTRY.available_providers())  # ['yfinance', 'sec_edgar']
+print(DEFAULT_REGISTRY.available_providers())  # ['yfinance', 'crunchbase', 'sec_edgar']
 
 # Fetch avec fallback automatique
-data = DEFAULT_REGISTRY.fetch("AAPL")  # essaie Bloomberg → CapIQ → yfinance → EDGAR
+data = DEFAULT_REGISTRY.fetch("AAPL")  # essaie Bloomberg → CapIQ → yfinance → Crunchbase → EDGAR
 ```
 
-### Peer Comparables (nouveau — Phase 5)
+### Peer Comparables (Phase 5)
 
 Pour toute société (publique ou privée), le système identifie automatiquement 4–6 sociétés cotées comparables via LLM, puis récupère leurs vrais multiples de marché via yfinance.
 
@@ -80,7 +84,7 @@ Pour toute société (publique ou privée), le système identifie automatiquemen
 - **Publiques** : les comps sont ancrées aux multiples réels du secteur live
 - Les multiples peers (médiane P25/P75) alimentent directement le DCF et le football field
 
-### Scénarios Bear / Base / Bull (nouveau — Phase 5)
+### Scénarios Bear / Base / Bull (Phase 5)
 
 Chaque analyse produit 3 DCF complets avec des hypothèses indépendantes :
 
@@ -94,7 +98,7 @@ Chaque analyse produit 3 DCF complets avec des hypothèses indépendantes :
 
 Output : football field EV par méthode (DCF / Comps / Blended) × scénario.
 
-### IC Scoring enrichi (nouveau — Phase 5)
+### IC Scoring enrichi (Phase 5)
 
 Les 6 dimensions sont maintenant dérivées des outputs agents, pas neutres à 5.0/10 :
 
@@ -111,12 +115,26 @@ Les 6 dimensions sont maintenant dérivées des outputs agents, pas neutres à 5
 
 Pour une société privée :
 1. **yfinance** → None (pas de ticker)
-2. **FinancialModelerAgent** → web search pour revenus/marges (presse, Crunchbase, etc.)
-   - Autorisé à estimer si pas de données vérifiées
-   - Retourne les bons champs (`revenue_current`, `revenue_series`)
-3. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
-4. **Valuation** : DCF avec WACC sectoriel + comps peers réels + bear/base/bull
-5. **Pas de BUY/HOLD/SELL** (pas de prix coté) → IC scoring M&A uniquement
+2. **Crunchbase** → revenue range estimé si `CRUNCHBASE_API_KEY` set
+3. **FinancialModelerAgent** → web search pour revenus/marges (presse, rapports, etc.)
+   - Autorisé à estimer si pas de données vérifiées, taggé `estimated`
+4. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
+5. **Valuation** : DCF avec WACC sectoriel + comps peers réels + bear/base/bull
+6. **Pas de BUY/HOLD/SELL** (pas de prix coté) → IC scoring M&A uniquement
+
+### Opportunity Screening (M&A Pipeline)
+
+Quand un client cherche des opportunités dans un secteur ou veut trouver des cibles comparables à une société de référence :
+
+```bash
+# Pipeline par secteur
+uv run python -m goldroger.cli --mode pipeline --buyer "LVMH" --focus "Premium beauty brands Europe"
+
+# Cibles comparables à une société de référence
+uv run python -m goldroger.cli --mode pipeline --buyer "Salesforce" --focus "CRM middleware SaaS Series B Europe"
+```
+
+Le `SourcingAgent` identifie des cibles, puis `run_pipeline()` fait tourner une analyse M&A complète sur chaque cible avec IC scoring et football field.
 
 ### PowerPoint Output (10 slides)
 
@@ -125,9 +143,9 @@ Pour une société privée :
 3. **Market & Competition** — TAM, CAGR, concurrents, trends
 4. **Financial Snapshot** — KPIs + projections
 5. **Valuation Summary** — DCF / Comps / Transactions (table + conclusion)
-6. **Football Field** *(nouveau)* — Bear/Base/Bull × méthode, ranges
-7. **Peer Comparables** *(nouveau)* — Table des comparables réels avec médiane
-8. **IC Score Breakdown** *(nouveau)* — 6 dimensions + rationale + next steps
+6. **Football Field** — Bear/Base/Bull × méthode, ranges
+7. **Peer Comparables** — Table des comparables réels avec médiane
+8. **IC Score Breakdown** — 6 dimensions + rationale + next steps
 9. **Investment Thesis** — Thesis + Bull/Base/Bear narrative
 10. **Catalysts & Risks** — Catalysts + risques clés
 
@@ -151,7 +169,7 @@ uv run python -m goldroger.cli --company "LVMH" --pptx --outdir outputs/
 # M&A (acquéreur → cible)
 uv run python -m goldroger.cli --company "Figma" --mode ma --acquirer "Adobe"
 
-# Pipeline d'acquisitions
+# Pipeline d'acquisitions (secteur)
 uv run python -m goldroger.cli --mode pipeline --buyer "LVMH" --focus "Premium beauty brands Europe"
 ```
 
@@ -164,8 +182,9 @@ uv run python -m goldroger.cli --mode pipeline --buyer "LVMH" --focus "Premium b
 Hiérarchie des sources (dans l'ordre, toujours) :
 1. **Providers premium** (Bloomberg, CapIQ) — si credentials
 2. **yfinance / SEC EDGAR** — gratuit, sociétés cotées
-3. **Estimations LLM** (web search) — fallback sociétés privées, taggé `estimated`
-4. **Defaults sectoriels** — dernier recours, taggé `inferred`
+3. **Crunchbase** — revenus estimés, startups/privées (freemium)
+4. **Estimations LLM** (web search) — fallback sociétés privées, taggé `estimated`
+5. **Defaults sectoriels** — dernier recours, taggé `inferred`
 
 ---
 
@@ -195,6 +214,16 @@ DEFAULT_REGISTRY.register(MyProvider())
 
 ---
 
+## Tests
+
+```bash
+uv run python -m pytest tests/ -v
+```
+
+20 tests couvrant : WACC CAPM, DCF projections forward, LBO IRR/MOIC/feasibility, scénarios Bear/Base/Bull.
+
+---
+
 ## Definition of Done — V1.0
 
 ✔ 0 crash CLI  
@@ -210,3 +239,5 @@ DEFAULT_REGISTRY.register(MyProvider())
 ✔ Exports fiables Excel + PPT  
 ✔ Cache + logging en production  
 ✔ Architecture data pluggable (Bloomberg/CapIQ prêts à brancher)  
+✔ Crunchbase intégré (freemium, privées)  
+✔ 20 tests unitaires valuation engine  

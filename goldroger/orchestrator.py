@@ -85,7 +85,18 @@ from .models import (
     ValuationMethod,
 )
 
-from .utils.json_parser import parse_model
+from .utils.json_parser import parse_model, did_fallback
+
+
+def _parse_with_retry(agent, company, company_type, context, model_class, fallback):
+    """Parse LLM output; retry once with strict JSON hint if parse fails."""
+    raw = agent.run(company, company_type, context)
+    result = parse_model(raw, model_class, fallback)
+    if did_fallback(result):
+        console.print(f"  [yellow]JSON parse failed — retrying with strict prompt[/yellow]")
+        raw2 = agent.run(company, company_type, context, _strict_json=True)
+        result = parse_model(raw2, model_class, fallback, _retry=True)
+    return result
 
 load_dotenv()
 console = Console()
@@ -268,27 +279,20 @@ def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
         fin = _fin_from_market(market_data)
         console.print("  [green]Using verified yfinance financials[/green]")
     else:
-        fin = parse_model(
-            fin_agent.run(company, company_type, {
-                "sector": fund.sector or "",
-                "description": fund.description,
-            }),
-            Financials,
-            _fin_fallback(),
+        fin = _parse_with_retry(
+            fin_agent, company, company_type,
+            {"sector": fund.sector or "", "description": fund.description},
+            Financials, _fin_fallback(),
         )
     log.end_step("financials", t0)
     _done("Financials", t0)
 
     # ── 4. ASSUMPTIONS ────────────────────────────────────────────────────
     t0 = _step("Assumptions")
-    assumptions = parse_model(
-        val_agent.run(company, company_type, {
-            "sector": fund.sector or "",
-            "revenue_current": fin.revenue_current,
-            "ebitda_margin": fin.ebitda_margin,
-        }),
-        ValuationAssumptions,
-        ValuationAssumptions(),
+    assumptions = _parse_with_retry(
+        val_agent, company, company_type,
+        {"sector": fund.sector or "", "revenue_current": fin.revenue_current, "ebitda_margin": fin.ebitda_margin},
+        ValuationAssumptions, ValuationAssumptions(),
     )
     log.end_step("assumptions", t0)
     _done("Assumptions", t0)

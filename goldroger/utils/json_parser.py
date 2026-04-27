@@ -51,18 +51,26 @@ def extract_json(raw: str):
     return None
 
 
-def parse_model(raw: str, model_class: Type[T], fallback: T) -> T:
+def parse_model(raw: str, model_class: Type[T], fallback: T, *, _retry: bool = False) -> T:
     data = extract_json(raw)
 
     if data is None:
+        if not _retry:
+            # Signal to caller that JSON was unparseable so it can retry with stricter prompt
+            fallback.__dict__.setdefault("_json_parse_failed", True)
         return fallback
 
     try:
         return model_class.model_validate(data)
-    except:
+    except Exception:
         try:
             allowed = set(model_class.model_fields.keys())
             filtered = {k: v for k, v in data.items() if k in allowed}
             return model_class.model_validate(filtered)
-        except:
+        except Exception:
             return fallback
+
+
+def did_fallback(obj) -> bool:
+    """Returns True if parse_model fell back to the default (JSON was invalid)."""
+    return bool(getattr(obj, "_json_parse_failed", False))

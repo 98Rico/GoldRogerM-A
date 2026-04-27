@@ -509,11 +509,26 @@ class ValuationService:
 
     @staticmethod
     def _f(v, default=0.0):
+        # Approximate FX rates (updated periodically — good enough for order-of-magnitude)
+        _FX = {"€": 1.08, "eur": 1.08, "gbp": 1.26, "£": 1.26, "chf": 1.11, "cad": 0.74}
         try:
             if v is None:
                 return default
             if isinstance(v, (int, float)):
                 return float(v)
-            return float(str(v).replace("%", "").replace(",", "").strip())
+            s = str(v).strip()
+            fx = 1.0
+            s_lower = s.lower()
+            for sym, rate in _FX.items():
+                if sym in s_lower:
+                    fx = rate
+                    s = s_lower.replace(sym, "").strip()
+                    break
+            # Strip suffix multipliers like "650m" or "1.2b"
+            if s.lower().endswith("b"):
+                return float(s[:-1].replace(",", "")) * 1000.0 * fx
+            if s.lower().endswith("m"):
+                return float(s[:-1].replace(",", "")) * fx
+            return float(s.replace("%", "").replace(",", "").strip()) * fx
         except Exception:
             return default

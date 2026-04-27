@@ -232,10 +232,14 @@ class BaseAgent:
         company: str,
         company_type: str = "public",
         context: dict | None = None,
+        _strict_json: bool = False,
     ) -> str:
         """Call the API, handle web_search tool calls, return final text."""
         if context is None:
             context = {}
+        if _strict_json:
+            # Injected when previous attempt returned invalid JSON
+            context = {**context, "__strict_json_hint": True}
 
         messages: list[dict] = [
             {"role": "system", "content": self._system_prompt()},
