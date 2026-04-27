@@ -1,130 +1,127 @@
 # Gold Roger — Roadmap Produit
 
-## ✅ ÉTAT ACTUEL (Phase 1 COMPLÉTÉE — Avril 2025)
+## ✅ ÉTAT ACTUEL (Phases 1–4 complétées — Avril 2025)
 
-Gold Roger est un moteur de valorisation institutionnel équipé d'une couche LLM pour l'analyse qualitative.
+Gold Roger est un moteur de valorisation institutionnel avec pipeline M&A complet, LBO engine, et couche data vérifiée.
 
 ### Ce qui fonctionne aujourd'hui :
 
+**Valorisation (Phase 1 + 2)**
 ✔ Données financières vérifiées via **yfinance** (revenus, marges, beta, market cap, net debt)  
-✔ WACC dérivé par **CAPM** (β réel, Rf=4.5%, ERP=5.5%) — plus de défaut hardcodé  
-✔ DCF institutionnel : FCFF = EBITDA(1-T) + D&A×T - CapEx - ΔNWC (NWC incrémental)  
-✔ **Trading comps** ancrées au EV/EBITDA de marché en temps réel  
-✔ **Multiples sectoriels** calibrés (20+ secteurs, EV/EBITDA + EV/Revenue + terminal growth)  
-✔ Recommandation **BUY / HOLD / SELL** déterministe vs market cap actuel  
-✔ Analyse de sensibilité WACC × terminal growth (matrice 5×5)  
-✔ Confiance des données taguée : `verified` / `estimated` / `inferred`  
+✔ **Estimations forward analystes** (consensus 1 an) utilisées en priorité sur le CAGR historique  
+✔ WACC dérivé par **CAPM** — β réel, Rf=4.5%, ERP=5.5%, coût de la dette = intérêts / dette  
+✔ **DCF institutionnel** : FCFF = EBITDA(1-T) + D&A×T - CapEx - ΔNWC (NWC incrémental)  
+✔ **Path financier P/E + P/B** pour banques, assureurs, asset managers (détection automatique)  
+✔ **Trading comps** ancrées au EV/EBITDA de marché live ; 20+ tables sectorielles de fallback  
+✔ **BUY / HOLD / SELL** déterministe : EV blended − Net Debt / Shares vs prix actuel (±15%)  
+✔ **Matrice de sensibilité** WACC × terminal growth (5×5)  
+✔ **Confidence tagging** : `verified` / `estimated` / `inferred`  
+
+**LBO Engine (Phase 2)**  
+✔ Modèle LBO déterministe : entry EV → leverage → FCF sweep → exit → **IRR / MOIC**  
+✔ Gates de faisabilité : leverage < 6.5x, IRR > 15% hurdle  
+✔ Attaché automatiquement à chaque valorisation equity  
+
+**SOTP (Phase 2)**  
+✔ Sum-of-the-Parts : valorisation segment par segment avec holdco discount  
+✔ Multiples sectoriels par segment  
+
+**Deal Sourcing & M&A (Phase 3)**  
+✔ `run_ma_analysis()` : pipeline M&A complet (sourcing → fit → DD → execution → LBO → IC scoring)  
+✔ `run_pipeline()` : génération automatique d'un pipeline d'acquisitions avec IC scoring par cible  
+✔ **IC Scoring institutionnel** (0–100) : 6 dimensions (stratégie, synergies, financial, LBO, intégration, risque)  
+✔ Gates durs : si LBO / risk / financial < seuil minimum → NO GO automatique  
+✔ Next steps générés automatiquement par niveau de recommandation  
+
+**Infrastructure (Phase 4)**  
+✔ **Cache TTL** (1h yfinance, 24h ticker) — plus de requêtes redondantes  
+✔ **Logging structuré JSON-lines** : run_id, timings par step, WACC method, audit trail  
 ✔ Exports Excel (5 feuilles) + PowerPoint institutionnel  
-✔ API FastAPI + CLI + orchestration multi-agents  
+✔ API FastAPI + CLI  
 
-### Architecture des données (pipeline actuel) :
+---
+
+## Architecture des données (pipeline actuel)
 
 ```
-1. resolve_ticker()         → Yahoo Finance search → ticker
-2. fetch_market_data()      → yfinance → MarketData (verified)
-3. LLM agents               → analyse qualitative uniquement
-4. ValuationService         → moteur déterministe pur Python
-5. BUY/HOLD/SELL            → EV blended − Net Debt / Shares vs prix actuel
-6. Thesis agent             → synthèse LLM sur chiffres vérifiés
+┌─────────────────────────────────────────────────────────────┐
+│              REAL DATA LAYER (Phase 0)                      │
+│  resolve_ticker() → fetch_market_data() → MarketData        │
+│  [verified: price, beta, margins, forward estimates, P/B]   │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│              LLM LAYER (qualitative only)                   │
+│  Fundamentals · Market · Assumptions · Thesis               │
+│  M&A: Sourcing · Strategic Fit · DD · Execution             │
+│  [NO financial numbers from LLM]                            │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│         VALUATION ENGINE (pure Python, deterministic)       │
+│                                                             │
+│  Path A: Standard  → DCF + EV/EBITDA + EV/Revenue          │
+│  Path B: Financial → DCF + P/E + P/B  (banks/insurers)     │
+│  Path C: SOTP      → Segment × sector multiple             │
+│                                                             │
+│  WACC: CAPM (β réel) → LLM assumption → sector default     │
+│  Growth: forward analyst → CAGR historique → sector default │
+│  Blended EV (50/30/20) → BUY/HOLD/SELL                     │
+│  LBO engine (toujours calculé, peut être INFEASIBLE)        │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│              M&A SCORING (IC layer)                         │
+│  6 dimensions · gates durs · STRONG BUY / BUY / WATCH / NO GO │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│              EXPORT LAYER                                   │
+│  Excel (DCF workbook + sensitivity) · PowerPoint · API      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🎯 OBJECTIF FINAL
+## 🎯 PROCHAINES PRIORITÉS
 
-Gold Roger = **AI Investment Banking Analyst OS**
+### À faire (court terme)
 
-Capable de :
-- Valoriser une société en < 30 secondes avec une qualité PE/IB
-- Produire un memo d'investissement type McKinsey
-- Générer un deck automatiquement (Excel + PPT)
-- Sourcer des deals comme un fonds VC/PE
-- Fonctionner en production sans crash
+| # | Priorité | Item | Impact |
+|---|----------|------|--------|
+| 1 | HIGH | Pondération DCF=0% pour les financières (DCF tire le blended vers le bas pour les banques) | Précision JPM/GS |
+| 2 | HIGH | Tests unitaires sur le valuation engine | Fiabilité prod |
+| 3 | MED | Timeout par agent LLM (20-40s max) | Robustesse CLI |
+| 4 | MED | Retry LLM si JSON invalide (max 2x) | Stabilité |
+| 5 | MED | Scénarios DCF : bear/base/bull | Qualité output |
+| 6 | LOW | SaaS UI Next.js | Produit |
 
----
-
-## 🔜 PHASE 2 — PRÉCISION DE VALORISATION (PRIORITÉ ACTUELLE)
-
-### 2.1 Estimations forward (analystes) pour remplacer le CAGR historique
-**Problème** : Le DCF utilise le CAGR historique des revenus. Pour des sociétés premium (AAPL, MSFT), cela sous-estime la valeur car le marché price in des estimations forward.  
-**Solution** : Intégrer les consensus d'analystes (yfinance `earningsEstimate`, `revenueEstimate`)
-
-### 2.2 Valorisation P/E et P/B pour les financières
-**Problème** : Le framework EV/EBITDA ne fonctionne pas pour les banques et assureurs.  
-**Solution** : Détecter le secteur `Financials/Banking` → switcher vers multiples P/E et P/B
-
-### 2.3 Revenus projetés par segment (pour conglomérats)
-**Solution** : SOTP (Sum-of-the-Parts) — stub `valuation/sotp.py` existe, à implémenter
-
-### 2.4 LBO model déterministe
-**Problème** : `valuation/lbo.py` est un stub vide.  
-**Solution** : Modèle LBO avec leverage schedule, debt paydown, IRR computation
-
----
-
-## 🔜 PHASE 3 — DEAL SOURCING INSTITUTIONNEL
-
-Une fois la valorisation parfaitement fiable :
-
-- Critères acquéreur → screening automatique de cibles
-- Scoring IC déterministe (stratégie / synergies / risque / LBO / valorisation)
-- Ranking pipeline targets
-- Feasibility LBO automatique
-- Qualité PitchBook — génération pipeline deal
-
----
-
-## 🔜 PHASE 4 — PRODUIT SAAS
-
-- Interface Next.js (company search → instant memo)
-- Caching Mistral + yfinance
-- Multi-user / API keys
-- Export automatique (Excel, PPT)
-- Logging structuré (request_id, agent, raw/parsed output)
-
----
-
-## 🏗 ARCHITECTURE CIBLE
-
-```
-Real Data Layer (yfinance / Bloomberg / SEC)
-         ↓
- MarketData (verified, tagged)
-         ↓
- LLM Layer (qualitative only — NO financial numbers)
-         ↓
- Pydantic Validation (strict)
-         ↓
- ValuationService (pure Python, deterministic)
-   ├── DCF (CAPM WACC, real beta, real margins)
-   ├── Trading Comps (market-implied + sector tables)
-   ├── Transaction Comps (sector EV/Revenue)
-   └── Blended EV → BUY/HOLD/SELL
-         ↓
- M&A Scoring Engine (IC logic, LBO feasibility)
-         ↓
- Export Layer (Excel / PPT / API)
-```
+### Banques / financières — fix précision
+Le DCF donne une EV très basse pour les banques (EBITDA margin ≈ 0%) ce qui tire le blended vers le bas.  
+Fix : détecter le secteur financier → mettre le poids DCF à 0%, redistribuer sur P/E (60%) + P/B (40%).
 
 ---
 
 ## ⚠️ RÈGLE ABSOLUE
 
-**Le LLM ne produit JAMAIS de chiffres financiers finaux.**  
-Il est utilisé uniquement pour :
-- Identifier le ticker d'une société
-- Analyser le positionnement qualitatif
-- Synthétiser la thèse d'investissement sur des chiffres vérifiés
+**Le LLM ne produit JAMAIS de chiffres financiers finaux.**
+
+Hiérarchie des sources :
+1. `yfinance` (verified) — toujours prioritaire
+2. Estimations LLM (estimated) — fallback pour sociétés privées
+3. Defaults sectoriels (inferred) — dernier recours
+
+Dans cet ordre. Toujours.
 
 ---
 
 ## 🏁 DEFINITION OF DONE — V1.0
 
 ✔ 0 crash CLI  
-✔ 0 fallback silencieux sur données financières clés  
-✔ WACC dérivé par CAPM sur données réelles  
-✔ DCF stable et défendable (PE associate level)  
+✔ Données financières vérifiées (yfinance) pour toute société publique  
+✔ WACC CAPM sur données réelles  
+✔ DCF + LBO stables et défendables  
 ✔ BUY/HOLD/SELL fiable vs market cap  
-✔ M&A scoring cohérent et IC-grade  
-✔ Exports fiables (Excel + PPT)  
-✔ Forward estimates intégrés  
+✔ M&A pipeline complet (sourcing → IC scoring)  
+✔ Exports fiables Excel + PPT  
+✔ Cache + logging en production  

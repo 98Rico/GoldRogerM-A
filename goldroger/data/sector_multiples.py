@@ -4,29 +4,36 @@ Sector-calibrated valuation multiple tables.
 Ranges reflect approximate market consensus as of 2024-2025 based on
 Damodaran sector data, FactSet, and Bloomberg aggregates.
 
-All multiples are EV-based:
+EV-based multiples (default path):
   - ev_ebitda: (low, mid, high)
   - ev_revenue: (low, mid, high)
-  - terminal_growth: long-run FCF growth rate for DCF
-  - sector_beta: unleveraged sector beta (re-lever per company capital structure)
-  - sector_wacc: typical WACC range midpoint when CAPM not computable
+
+Equity-based multiples (financial companies — banks, insurers, asset managers):
+  - pe_range: (low, mid, high) — Price/Earnings
+  - pb_range: (low, mid, high) — Price/Book
+
+valuation_method:
+  - "ev_ebitda" → standard DCF + EV/EBITDA comps path
+  - "pe_pb"     → P/E and P/B path (financial companies)
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
 class SectorMultiples:
-    ev_ebitda: tuple[float, float, float]   # low, mid, high
-    ev_revenue: tuple[float, float, float]  # low, mid, high
-    terminal_growth: float                  # decimal, e.g. 0.025
-    sector_beta: float                      # reference beta
-    sector_wacc: float                      # fallback WACC (decimal)
+    ev_ebitda: tuple[float, float, float]    # low, mid, high
+    ev_revenue: tuple[float, float, float]   # low, mid, high
+    terminal_growth: float                   # decimal, e.g. 0.025
+    sector_beta: float                       # reference beta
+    sector_wacc: float                       # fallback WACC (decimal)
+    valuation_method: str = "ev_ebitda"      # "ev_ebitda" or "pe_pb"
+    pe_range: Optional[tuple[float, float, float]] = None   # P/E low/mid/high
+    pb_range: Optional[tuple[float, float, float]] = None   # P/B low/mid/high
 
 
-# Keyed by canonical sector name (lowercase).
-# Lookup via get_sector_multiples() handles fuzzy matching.
 _MULTIPLES: dict[str, SectorMultiples] = {
     "technology": SectorMultiples(
         ev_ebitda=(15.0, 22.0, 35.0),
@@ -119,12 +126,16 @@ _MULTIPLES: dict[str, SectorMultiples] = {
         sector_beta=0.40,
         sector_wacc=0.070,
     ),
+    # ── Financial companies — P/E + P/B path ──────────────────────────────
     "financials": SectorMultiples(
         ev_ebitda=(8.0, 11.0, 15.0),
         ev_revenue=(2.0, 3.0, 5.0),
         terminal_growth=0.020,
         sector_beta=1.00,
         sector_wacc=0.095,
+        valuation_method="pe_pb",
+        pe_range=(10.0, 13.0, 17.0),
+        pb_range=(1.0, 1.4, 2.0),
     ),
     "banking": SectorMultiples(
         ev_ebitda=(7.0, 10.0, 14.0),
@@ -132,7 +143,31 @@ _MULTIPLES: dict[str, SectorMultiples] = {
         terminal_growth=0.020,
         sector_beta=0.95,
         sector_wacc=0.093,
+        valuation_method="pe_pb",
+        pe_range=(9.0, 12.0, 16.0),
+        pb_range=(0.8, 1.2, 1.8),
     ),
+    "insurance": SectorMultiples(
+        ev_ebitda=(8.0, 11.0, 15.0),
+        ev_revenue=(1.5, 2.5, 4.0),
+        terminal_growth=0.020,
+        sector_beta=0.85,
+        sector_wacc=0.088,
+        valuation_method="pe_pb",
+        pe_range=(10.0, 13.0, 18.0),
+        pb_range=(1.0, 1.5, 2.2),
+    ),
+    "asset management": SectorMultiples(
+        ev_ebitda=(10.0, 14.0, 20.0),
+        ev_revenue=(3.0, 5.0, 8.0),
+        terminal_growth=0.020,
+        sector_beta=1.10,
+        sector_wacc=0.100,
+        valuation_method="pe_pb",
+        pe_range=(12.0, 16.0, 22.0),
+        pb_range=(2.0, 3.0, 5.0),
+    ),
+    # ─────────────────────────────────────────────────────────────────────
     "real estate": SectorMultiples(
         ev_ebitda=(15.0, 20.0, 25.0),
         ev_revenue=(5.0, 8.0, 12.0),
@@ -184,7 +219,6 @@ _MULTIPLES: dict[str, SectorMultiples] = {
     ),
 }
 
-# Keyword → canonical key mapping for fuzzy sector resolution
 _ALIASES: dict[str, str] = {
     "tech": "technology",
     "information technology": "technology",
@@ -223,8 +257,11 @@ _ALIASES: dict[str, str] = {
     "electric": "utilities",
     "water": "utilities",
     "bank": "banking",
-    "insurance": "financials",
-    "asset management": "financials",
+    "banks": "banking",
+    "financial services": "financials",
+    "insurance": "insurance",
+    "asset manager": "asset management",
+    "investment management": "asset management",
     "reit": "real estate",
     "property": "real estate",
     "wireless": "telecom",
@@ -242,18 +279,15 @@ _ALIASES: dict[str, str] = {
 def get_sector_multiples(sector: str) -> SectorMultiples:
     """
     Return the SectorMultiples for a given sector string.
-    Performs case-insensitive lookup with alias resolution.
-    Falls back to 'default' if no match found.
+    Case-insensitive with alias resolution. Falls back to 'default'.
     """
     key = sector.strip().lower()
 
     if key in _MULTIPLES:
         return _MULTIPLES[key]
-
     if key in _ALIASES:
         return _MULTIPLES[_ALIASES[key]]
 
-    # Partial-match scan
     for alias, canonical in _ALIASES.items():
         if alias in key or key in alias:
             return _MULTIPLES[canonical]
@@ -263,3 +297,8 @@ def get_sector_multiples(sector: str) -> SectorMultiples:
             return _MULTIPLES[canonical]
 
     return _MULTIPLES["default"]
+
+
+def is_financial_sector(sector: str) -> bool:
+    """Return True if this sector uses P/E / P/B valuation (not EV/EBITDA)."""
+    return get_sector_multiples(sector).valuation_method == "pe_pb"

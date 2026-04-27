@@ -5,16 +5,19 @@ For public companies: pulls verified, structured data directly from Yahoo Financ
 For private companies: returns None — caller falls back to LLM estimation.
 
 All monetary values are stored in USD millions for consistency.
-Confidence levels: "verified" (yfinance), "estimated" (LLM), "inferred" (computed).
+Confidence levels: "verified" (yfinance), "estimated" (LLM), "inferred" (defaults).
+
+Results are cached in-process for 1 hour to avoid redundant network calls.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
 import yfinance as yf
+
+from goldroger.utils.cache import market_data_cache, ticker_cache
 
 _HTTP = httpx.Client(
     timeout=15,
@@ -37,7 +40,7 @@ class MarketData:
     # Capital structure (USD millions)
     total_debt: Optional[float] = None
     cash_and_equivalents: Optional[float] = None
-    net_debt: Optional[float] = None            # total_debt - cash
+    net_debt: Optional[float] = None
     enterprise_value: Optional[float] = None    # market-implied EV
 
     # Income statement TTM (USD millions)
@@ -46,37 +49,48 @@ class MarketData:
     ebit_ttm: Optional[float] = None
     net_income_ttm: Optional[float] = None
 
-    # Margins (0–1 decimal, e.g. 0.25 = 25%)
+    # Margins (0–1 decimal)
     gross_margin: Optional[float] = None
     ebitda_margin: Optional[float] = None
     net_margin: Optional[float] = None
 
     # Cash flow TTM (USD millions)
     fcf_ttm: Optional[float] = None
-    capex_ttm: Optional[float] = None           # absolute, positive
-    da_ttm: Optional[float] = None              # D&A for tax shield
+    capex_ttm: Optional[float] = None
+    da_ttm: Optional[float] = None
 
-    # Historical annual revenue, oldest-first (USD millions, up to 5 years)
+    # Historical annual revenue oldest-first (USD millions, up to 5 years)
     revenue_history: list[float] = field(default_factory=list)
-    revenue_growth_yoy: Optional[float] = None  # most recent YoY (decimal)
+    revenue_growth_yoy: Optional[float] = None  # most recent TTM YoY (decimal)
+
+    # Forward / consensus estimates
+    forward_revenue_growth: Optional[float] = None  # analyst forward 1Y growth
+    forward_revenue_1y: Optional[float] = None      # USD millions
+    earnings_growth: Optional[float] = None          # fwd EPS growth (decimal)
+    forward_eps: Optional[float] = None
+
+    # Balance sheet (for P/B valuation)
+    book_value_per_share: Optional[float] = None    # total equity / shares
+    total_equity: Optional[float] = None            # USD millions
 
     # Tax
-    effective_tax_rate: Optional[float] = None  # decimal
+    effective_tax_rate: Optional[float] = None
 
     # CAPM inputs
     beta: Optional[float] = None
 
-    # Market-implied multiples (from yfinance, reflect current pricing)
+    # Market-implied multiples
     ev_ebitda_market: Optional[float] = None
     ev_revenue_market: Optional[float] = None
-    pe_ratio: Optional[float] = None
+    pe_ratio: Optional[float] = None               # trailing P/E
+    forward_pe: Optional[float] = None             # forward P/E
 
     # Analyst consensus
     analyst_target_price: Optional[float] = None
     analyst_recommendation: Optional[str] = None
 
     # Cost of debt proxy
-    interest_expense: Optional[float] = None    # USD millions TTM
+    interest_expense: Optional[float] = None        # USD millions TTM
 
     confidence: str = "verified"
     data_source: str = "yfinance"
@@ -86,7 +100,38 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
     """
     Pull real structured financial data for a public company via yfinance.
     Returns None if the ticker is invalid or critical data is missing.
+    Results cached for 1 hour.
     """
+    key = f"md:{ticker.upper()}"
+    cached = market_data_cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _fetch_raw(ticker)
+    if result is not None:
+        market_data_cache.set(key, result)
+    return result
+
+
+def resolve_ticker(company_name: str) -> Optional[str]:
+    """
+    Resolve a company name to its primary exchange ticker via Yahoo Finance search.
+    Returns the best EQUITY match or None. Cached for 24 hours.
+    """
+    key = f"ticker:{company_name.lower()}"
+    cached = ticker_cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _resolve_raw(company_name)
+    if result:
+        ticker_cache.set(key, result)
+    return result
+
+
+# ── Private implementation ────────────────────────────────────────────────────
+
+def _fetch_raw(ticker: str) -> Optional[MarketData]:
     try:
         stock = yf.Ticker(ticker)
         info = stock.info or {}
@@ -95,7 +140,7 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
         if not price:
             return None
 
-        # ── Revenue history (annual, oldest-first) ────────────────────────
+        # ── Annual income statement ───────────────────────────────────────
         revenue_history: list[float] = []
         da_ttm: Optional[float] = None
         capex_ttm: Optional[float] = None
@@ -103,13 +148,11 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
         effective_tax_rate: Optional[float] = None
 
         try:
-            fin = stock.financials  # columns = most-recent → oldest
+            fin = stock.financials
             if fin is not None and not fin.empty:
                 if "Total Revenue" in fin.index:
-                    rev_vals = fin.loc["Total Revenue"].dropna().tolist()
-                    revenue_history = [v / 1e6 for v in reversed(rev_vals[:5])]
-                if "EBIT" in fin.index:
-                    pass  # captured below via info
+                    vals = fin.loc["Total Revenue"].dropna().tolist()
+                    revenue_history = [v / 1e6 for v in reversed(vals[:5])]
                 if "Tax Provision" in fin.index and "Pretax Income" in fin.index:
                     tax = fin.loc["Tax Provision"].iloc[0]
                     pretax = fin.loc["Pretax Income"].iloc[0]
@@ -122,6 +165,7 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
         except Exception:
             pass
 
+        # ── Cash flow statement ───────────────────────────────────────────
         try:
             cf = stock.cashflow
             if cf is not None and not cf.empty:
@@ -134,7 +178,52 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
         except Exception:
             pass
 
-        # ── Core financials from info ──────────────────────────────────────
+        # ── Balance sheet ─────────────────────────────────────────────────
+        total_equity: Optional[float] = None
+        book_value_per_share: Optional[float] = None
+        try:
+            bs = stock.balance_sheet
+            if bs is not None and not bs.empty:
+                for eq_key in ("Stockholders Equity", "Total Equity Gross Minority Interest", "Common Stock Equity"):
+                    if eq_key in bs.index:
+                        total_equity = abs(bs.loc[eq_key].iloc[0]) / 1e6
+                        break
+        except Exception:
+            pass
+
+        bv = info.get("bookValue")
+        if bv:
+            book_value_per_share = float(bv)
+
+        # ── Forward / consensus estimates ─────────────────────────────────
+        forward_revenue_growth: Optional[float] = None
+        forward_revenue_1y: Optional[float] = None
+        try:
+            rev_est = stock.revenue_estimate
+            if rev_est is not None and not rev_est.empty:
+                cols = rev_est.columns.tolist()
+                fwd_col = None
+                for candidate in ("+1y", "0y"):
+                    if candidate in cols:
+                        fwd_col = candidate
+                        break
+                if fwd_col:
+                    avg = rev_est.loc["avg", fwd_col] if "avg" in rev_est.index else None
+                    if avg and not _is_nan(avg):
+                        forward_revenue_1y = float(avg) / 1e6
+                        revenue_ttm_raw = info.get("totalRevenue")
+                        if revenue_ttm_raw and revenue_ttm_raw > 0:
+                            forward_revenue_growth = (forward_revenue_1y / (revenue_ttm_raw / 1e6)) - 1
+        except Exception:
+            pass
+
+        # Fallback: use earningsGrowth as a proxy
+        if forward_revenue_growth is None:
+            eg = info.get("earningsGrowth") or info.get("revenueGrowth")
+            if eg:
+                forward_revenue_growth = float(eg)
+
+        # ── Core info fields ──────────────────────────────────────────────
         revenue_ttm = _millions(info.get("totalRevenue"))
         ebitda_ttm = _millions(info.get("ebitda"))
         market_cap = _millions(info.get("marketCap"))
@@ -148,27 +237,24 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
         if total_debt is not None and cash is not None:
             net_debt = total_debt - cash
 
-        # ── Margins (ensure 0-1 range) ─────────────────────────────────────
         ebitda_margin = _safe_pct(info.get("ebitdaMargins"))
         gross_margin = _safe_pct(info.get("grossMargins"))
         net_margin = _safe_pct(info.get("profitMargins"))
 
-        # Derive EBITDA margin from TTM figures when info field is missing
         if ebitda_margin is None and ebitda_ttm and revenue_ttm and revenue_ttm > 0:
             ebitda_margin = ebitda_ttm / revenue_ttm
 
-        # ── Growth ────────────────────────────────────────────────────────
-        revenue_growth = info.get("revenueGrowth")  # already a decimal
-
-        # ── CAPM & multiples ──────────────────────────────────────────────
+        revenue_growth = info.get("revenueGrowth")
         beta = info.get("beta")
         ev_ebitda = info.get("enterpriseToEbitda")
         ev_revenue = info.get("enterpriseToRevenue")
-        pe = info.get("forwardPE") or info.get("trailingPE")
+        trailing_pe = info.get("trailingPE")
+        fwd_pe = info.get("forwardPE")
+        fwd_eps = info.get("forwardEps")
         target = info.get("targetMeanPrice")
         rec = info.get("recommendationKey")
+        earnings_growth = info.get("earningsGrowth")
 
-        # ── Sanity: reject if no revenue ──────────────────────────────────
         if not revenue_ttm and not revenue_history:
             return None
 
@@ -193,11 +279,18 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
             da_ttm=da_ttm,
             revenue_history=revenue_history,
             revenue_growth_yoy=float(revenue_growth) if revenue_growth else None,
+            forward_revenue_growth=forward_revenue_growth,
+            forward_revenue_1y=forward_revenue_1y,
+            earnings_growth=float(earnings_growth) if earnings_growth else None,
+            forward_eps=float(fwd_eps) if fwd_eps else None,
+            book_value_per_share=book_value_per_share,
+            total_equity=total_equity,
             effective_tax_rate=effective_tax_rate,
             beta=float(beta) if beta else None,
             ev_ebitda_market=float(ev_ebitda) if ev_ebitda and ev_ebitda > 0 else None,
             ev_revenue_market=float(ev_revenue) if ev_revenue and ev_revenue > 0 else None,
-            pe_ratio=float(pe) if pe and pe > 0 else None,
+            pe_ratio=float(trailing_pe) if trailing_pe and trailing_pe > 0 else None,
+            forward_pe=float(fwd_pe) if fwd_pe and fwd_pe > 0 else None,
             analyst_target_price=float(target) if target else None,
             analyst_recommendation=rec,
             interest_expense=interest_expense,
@@ -207,11 +300,7 @@ def fetch_market_data(ticker: str) -> Optional[MarketData]:
         return None
 
 
-def resolve_ticker(company_name: str) -> Optional[str]:
-    """
-    Resolve a company name to its primary exchange ticker via Yahoo Finance search.
-    Returns the best EQUITY match or None.
-    """
+def _resolve_raw(company_name: str) -> Optional[str]:
     try:
         resp = _HTTP.get(
             "https://query1.finance.yahoo.com/v1/finance/search",
@@ -221,10 +310,8 @@ def resolve_ticker(company_name: str) -> Optional[str]:
         for q in quotes:
             if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
                 sym = q["symbol"]
-                # Prefer US listings — skip ADRs / foreign-listed tickers (contain dots)
                 if "." not in sym:
                     return sym
-        # Fallback: return first result even if foreign
         for q in quotes:
             if q.get("symbol"):
                 return q["symbol"]
@@ -233,27 +320,31 @@ def resolve_ticker(company_name: str) -> Optional[str]:
         return None
 
 
-# ── Internal helpers ───────────────────────────────────────────────────────────
-
 def _millions(value) -> Optional[float]:
-    """Convert raw Yahoo Finance value (in base units) to USD millions."""
     if value is None:
         return None
     try:
         f = float(value)
-        return f / 1e6 if abs(f) > 1000 else f  # already in millions if small
+        return f / 1e6 if abs(f) > 1000 else f
     except Exception:
         return None
 
 
 def _safe_pct(value) -> Optional[float]:
-    """Ensure a margin/ratio is in 0-1 decimal form."""
     if value is None:
         return None
     try:
         f = float(value)
         if f > 1.0:
-            f = f / 100.0
+            f /= 100.0
         return max(-1.0, min(f, 1.0))
     except Exception:
         return None
+
+
+def _is_nan(value) -> bool:
+    try:
+        import math
+        return math.isnan(float(value))
+    except Exception:
+        return True
