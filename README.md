@@ -46,7 +46,7 @@
 
 ---
 
-## Ce qui fonctionne (Phases 1–9)
+## Ce qui fonctionne (Phases 1–10)
 
 ### Données & Sources
 
@@ -351,3 +351,7 @@ uv run python -m pytest tests/ -v
 ✔ SOTP auto-detect pour conglomérats (segments → compute_sotp)  
 ✔ Scenario narratives Bear/Base/Bull  
 ✔ Live FX rates via yfinance  
+✔ Target price (per-share) séparé de l'Implied EV — zéro ambiguïté unités  
+✔ Mega-cap : tx comps exclus (poids 0) pour MCap >$500B  
+✔ Private companies : recommandation ATTRACTIVE / NEUTRAL / EXPENSIVE  
+✔ Revenue lock dans thesis agent — zéro contradiction inter-sections  

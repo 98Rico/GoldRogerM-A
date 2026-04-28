@@ -203,8 +203,10 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
     tf2.clear()
     p2 = tf2.paragraphs[0]
     r2 = p2.add_run()
+    _target = _safe_str(getattr(v, "target_price", None) or v.implied_value)
+    _ev_label = f" | Implied EV: {_safe_str(v.implied_value)}" if getattr(v, "target_price", None) else ""
     r2.text = (
-        f"Recommendation: {rec} | Target: {_safe_str(v.implied_value)} | "
+        f"Recommendation: {rec} | Target: {_target}{_ev_label} | "
         f"Upside/Downside: {_safe_str(v.upside_downside)} | Current: {_safe_str(v.current_price)}"
     )
     _set_run(r2, bold=True, size=14, color=NAVY)
@@ -295,6 +297,18 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
         for meth in (v.methods or [])
     ] or [["—", "—", "—", "—", "—"]]
     dcf = v.dcf_assumptions
+    _tp = getattr(v, "target_price", None)
+    _conclusion_bullets = [
+        f"Implied EV: {_safe_str(v.implied_value)}",
+    ]
+    if _tp:
+        _conclusion_bullets.append(f"Target price (per share): {_safe_str(_tp)}")
+    _conclusion_bullets += [
+        f"Upside/Downside: {_safe_str(v.upside_downside)}",
+        f"Recommendation: {rec}",
+        f"Current price: {_safe_str(v.current_price)}",
+        f"DCF: WACC {_safe_str(getattr(dcf, 'wacc', None))}, TGR {_safe_str(getattr(dcf, 'terminal_growth', None))}",
+    ]
     _add_bullets(
         slide,
         Inches(0.75),
@@ -302,13 +316,7 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
         Inches(5.9),
         Inches(5.7),
         "Conclusion",
-        [
-            f"Implied value: {_safe_str(v.implied_value)}",
-            f"Upside/Downside: {_safe_str(v.upside_downside)}",
-            f"Recommendation: {rec}",
-            f"Currency: {_safe_str(v.currency)}",
-            f"DCF: WACC {_safe_str(getattr(dcf, 'wacc', None))}, TGR {_safe_str(getattr(dcf, 'terminal_growth', None))}",
-        ],
+        _conclusion_bullets,
     )
     _add_table(
         slide,

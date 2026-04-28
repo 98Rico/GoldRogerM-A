@@ -34,10 +34,14 @@ def print_result(result):
     # Header
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(v.recommendation or "", "white")
     console.print()
+    _target_display = v.target_price or v.implied_value  # per-share if public, EV if private
+    _ev_display = f" | Implied EV: {v.implied_value}" if v.target_price else ""
     console.print(Panel(
         f"[bold]{f.company_name}[/] | {f.sector} | {f.headquarters}\n"
         f"{f.description}\n\n"
-        f"Recommendation: [{rec_color}]{v.recommendation}[/] | Target: {v.implied_value} | Upside: {v.upside_downside}",
+        f"Recommendation: [{rec_color}]{v.recommendation}[/] | "
+        f"Target: {_target_display}{_ev_display} | "
+        f"Upside: {v.upside_downside}",
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
     ))

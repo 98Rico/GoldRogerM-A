@@ -171,7 +171,6 @@ class ValuationService:
 
         # ── 5. Blended EV ─────────────────────────────────────────────────
         if use_financial_path:
-            # DCF inapplicable for banks/insurers (EBITDA ≈ 0) — exclude it
             weights = assumptions.get("weights") or {
                 "dcf": 0.0, "comps": 0.6, "transactions": 0.4
             }
@@ -179,6 +178,13 @@ class ValuationService:
             weights = assumptions.get("weights") or {
                 "dcf": 0.5, "comps": 0.3, "transactions": 0.2
             }
+        # Mega-caps (>$500B): precedent transactions are not applicable —
+        # no acquirer can buy Apple or Microsoft. Reweight to DCF 60% / Comps 40%.
+        if market_data and market_data.market_cap and market_data.market_cap > 500_000:
+            weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
+            notes.append(
+                "Mega-cap (>$500B MCap): tx comps excluded — weights DCF 60% / Comps 40%."
+            )
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)
 
         # ── 6. LBO (always run, may be infeasible; skipped for mega-caps) ──

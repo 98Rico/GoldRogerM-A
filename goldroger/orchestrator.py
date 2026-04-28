@@ -160,6 +160,15 @@ def _client(llm_override: str | None = None) -> LLMProvider:
     return build_llm_provider(llm_override)
 
 
+def _fmt_ev_human(v_m: float) -> str:
+    """Format enterprise value in USD millions to human-readable string."""
+    if v_m >= 1_000_000:
+        return f"${v_m / 1_000_000:.2f}T"
+    if v_m >= 1_000:
+        return f"${v_m / 1_000:.1f}B"
+    return f"${v_m:.0f}M"
+
+
 # ─────────────────────────────────────────────
 # EQUITY PIPELINE
 # ─────────────────────────────────────────────
@@ -438,11 +447,23 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
         except Exception as _sotp_err:
             console.print(f"  [dim]SOTP skipped: {_sotp_err}[/dim]")
 
+    # Build clean, unambiguous valuation fields
+    _ev_str = _fmt_ev_human(blended_ev) if blended_ev else "N/A"
+    _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
+
+    # Private companies use a different recommendation vocabulary
+    _raw_rec = rec.recommendation if result.has_revenue else "N/A"
+    if company_type == "private" and result.has_revenue:
+        _rec = {"BUY": "ATTRACTIVE", "HOLD": "NEUTRAL", "SELL": "EXPENSIVE"}.get(_raw_rec, "NEUTRAL")
+    else:
+        _rec = _raw_rec
+
     val = Valuation(
-        current_price=str(rec.current_price) if rec.current_price else None,
-        implied_value=str(round(blended_ev, 1)) if blended_ev else "N/A",
+        current_price=f"${rec.current_price:.2f}" if rec.current_price else None,
+        implied_value=_ev_str,        # enterprise value (human-readable, e.g. "$4.97T")
+        target_price=_target_price,   # per-share intrinsic price (public only)
         upside_downside=(f"{rec.upside_pct:+.1%}" if rec.upside_pct is not None else "N/A"),
-        recommendation=rec.recommendation if result.has_revenue else "N/A",
+        recommendation=_rec,
         dcf_assumptions=DCFAssumptions(
             wacc=f"{result.wacc_used:.2%}",
             terminal_growth=f"{result.terminal_growth_used:.2%}",
@@ -578,15 +599,18 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
 
     # ── 6. THESIS ─────────────────────────────────────────────────────────
     t0 = _step("Investment Thesis")
-    thesis = parse_model(
-        thesis_agent.run(company, company_type, {
+    thesis = _parse_with_retry(
+        thesis_agent, company, company_type,
+        {
             "sector": fund.sector or "",
             "valuation": val.implied_value,
             "recommendation": val.recommendation,
             "upside": val.upside_downside,
             "wacc": result.wacc_used,
             "market": mkt.market_size,
-        }),
+            # Hard-lock verified revenue so thesis cannot hallucinate a different number
+            "verified_revenue": fin.revenue_current or "unknown",
+        },
         InvestmentThesis,
         InvestmentThesis(thesis="N/A"),
     )

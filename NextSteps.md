@@ -2,7 +2,7 @@
 
 ---
 
-## ✅ PHASES COMPLÉTÉES (1–8)
+## ✅ PHASES COMPLÉTÉES (1–10)
 
 | Phase | Item | Fichier(s) | Statut |
 |-------|------|-----------|--------|
@@ -46,6 +46,11 @@
 | 8 | Name Resolver — LLM one-shot → identifiants légaux par source + normalisation | `data/name_resolver.py` | ✅ |
 | 8 | Revenue fallback — si null après 2 LLM attempts → appel ciblé → football field débloqué | `orchestrator.py` | ✅ |
 | 8 | FinancialModelerAgent prompt renforcé — revenue_current NEVER null si données trouvées | `agents/specialists.py` | ✅ |
+| 10 | Target price bug — `implied_value` now human-readable EV ("$4.97T"); `target_price` = per-share intrinsic; unambiguous labels in CLI + PPT | `models/__init__.py`, `orchestrator.py`, `cli.py`, `exporters/pptx.py` | ✅ |
+| 10 | Mega-cap tx comps exclusion — weight=0 for MCap >$500B; reweight DCF 60% / Comps 40% | `finance/core/valuation_service.py` | ✅ |
+| 10 | Private company recommendation — "HOLD" translated to ATTRACTIVE / NEUTRAL / EXPENSIVE | `orchestrator.py` | ✅ |
+| 10 | Revenue reconciliation — thesis agent receives `verified_revenue` lock; cannot contradict data layer | `agents/specialists.py`, `orchestrator.py` | ✅ |
+| 10 | Thesis agent retry — now uses `_parse_with_retry` like other agents | `orchestrator.py` | ✅ |
 | 9 | KVK 🇳🇱 provider (free, `api.kvk.nl`) — sector from SBI code | `data/providers/kvk.py` | ✅ |
 | 9 | Registro Mercantil 🇪🇸 provider (BORME + cif.es fallback) | `data/providers/registro_mercantil.py` | ✅ |
 | 9 | Fuzzy name matching (difflib) — `fuzzy_best_match()` in name_resolver, used by Infogreffe + Companies House | `data/name_resolver.py`, providers | ✅ |

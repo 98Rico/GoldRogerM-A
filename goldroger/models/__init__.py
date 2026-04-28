@@ -100,9 +100,10 @@ class Valuation(Model):
     current_price: Optional[str] = None
     currency: Optional[str] = "USD"
     methods: list[ValuationMethod] = []
-    implied_value: Optional[str] = None
+    implied_value: Optional[str] = None       # human-readable EV, e.g. "$4.97T" or "$1.2B"
+    target_price: Optional[str] = None        # per-share intrinsic price (public only)
     upside_downside: Optional[str] = None
-    recommendation: Optional[str] = "HOLD"
+    recommendation: Optional[str] = "HOLD"   # BUY/HOLD/SELL (public) or ATTRACTIVE/NEUTRAL/EXPENSIVE (private)
     dcf_assumptions: Optional[DCFAssumptions] = None
     comparable_multiples: Optional[dict] = None
     sources: list[str] = []

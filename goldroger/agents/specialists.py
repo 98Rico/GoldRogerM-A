@@ -228,9 +228,17 @@ class ReportWriterAgent(BaseAgent):
 
     def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
         rec = context.get("recommendation", "HOLD")
-        upside = context.get("upside_downside", "")
-        return f"""Write a complete investment thesis for "{company}". 
-Recommendation context: {rec} with {upside} upside/downside.
+        upside = context.get("upside_downside", context.get("upside", ""))
+        verified_revenue = context.get("verified_revenue", "")
+        revenue_lock = (
+            f"\n⚠ VERIFIED FACTS — do NOT contradict these in your output:\n"
+            f"  Revenue: ${verified_revenue}M (USD)\n"
+            f"  Implied EV: {context.get('valuation', 'N/A')}\n"
+            f"  Recommendation: {rec}\n"
+            "Use ONLY these numbers in your thesis. Never invent a different revenue figure."
+        ) if verified_revenue and verified_revenue not in ("unknown", "0", "0.0", "null") else ""
+        return f"""Write a complete investment thesis for "{company}".
+Recommendation context: {rec} with {upside} upside/downside.{revenue_lock}
 
 Return ONLY this JSON:
 {{
