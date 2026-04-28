@@ -126,25 +126,28 @@ Description: {description or "N/A"}
 
 Use web_search to retrieve the most recent available financials.
 
-RULES:
-- All monetary values in USD millions (convert EUR/GBP at current rates if needed)
-- revenue_series = list of annual revenues as plain numbers (most recent last), e.g. [450.0, 520.0, 610.0]
-- revenue_current = most recent annual revenue as a plain number string, e.g. "610"
-- Margins as decimals, e.g. "0.18" for 18%
-- For private companies: use best available estimate; tag with "(est)" in sources
+CRITICAL RULES:
+- revenue_current MUST be a plain number (USD millions). NEVER null if any revenue figure was found.
+  If you found "€350M revenue" → convert to USD → set revenue_current to "378" (350 × 1.08)
+  If you found "revenue between €200M and €400M" → use midpoint → set to "324"
+  If you found any mention of revenue in any source → YOU MUST populate revenue_current
+- revenue_series: list oldest→newest, e.g. [280.0, 340.0, 378.0]
+- All monetary values in USD millions (EUR×1.08, GBP×1.26, CHF×1.11)
+- Margins as decimals: 18% → 0.18
+- Only set null if absolutely no information exists anywhere
 
-OUTPUT — return EXACTLY this JSON structure, no other keys:
+OUTPUT — return EXACTLY this JSON, no markdown, no extra keys:
 
 {{
-  "revenue_current": "<number in USD millions, or null>",
-  "revenue_series": [<year-1 revenue>, <year-2 revenue>, <year-3 revenue>],
-  "revenue_growth": "<decimal growth rate, e.g. 0.08, or null>",
-  "ebitda_margin": "<decimal, e.g. 0.18, or null>",
+  "revenue_current": "<USD millions as plain number, e.g. 378 — NOT null if any revenue was found>",
+  "revenue_series": [<oldest>, <middle>, <most recent>],
+  "revenue_growth": "<decimal or null>",
+  "ebitda_margin": "<decimal or null>",
   "net_margin": "<decimal or null>",
   "gross_margin": "<decimal or null>",
   "free_cash_flow": "<USD millions or null>",
   "debt_to_equity": "<decimal or null>",
-  "sources": ["<source description>"]
+  "sources": ["<source>"]
 }}
 """
 

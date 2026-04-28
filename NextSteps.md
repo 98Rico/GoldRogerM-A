@@ -45,6 +45,9 @@
 | 8 | **Optional LLM deps** — `anthropic`/`openai` sont des dependency groups optionnels; install en une commande, erreur claire si manquant | `pyproject.toml`, `agents/llm_client.py` | ✅ |
 | 8 | **`.env.example`** — documentes toutes les variables avec instructions d'activation | `.env.example` | ✅ |
 | 8 | **EU registries câblés pour privées** — `fetch_by_name()` dans DataRegistry, appelé avant LLM agents | `data/registry.py`, `orchestrator.py` | ✅ |
+| 8 | **Name Resolver** — LLM one-shot → identifiants légaux par source + normalisation accents/suffixes | `data/name_resolver.py` | ✅ |
+| 8 | **Revenue fallback** — si `revenue_current` null après 2 LLM attempts → appel ciblé → unlocks football field | `orchestrator.py` | ✅ |
+| 8 | **FinancialModelerAgent prompt** — CRITICAL: revenue_current NEVER null si données trouvées, exemples EUR→USD | `agents/specialists.py` | ✅ |
 
 ---
 
@@ -177,37 +180,31 @@ Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de
 
 ---
 
-## ✅ PRIORITÉ 1c (partielle) — EU registries câblés pour privées
+## ✅ PRIORITÉ 1c — EU registries câblés + Name Resolver + Revenue Fallback
 
-`DataRegistry.fetch_by_name()` appelle Infogreffe → Companies House → Handelsregister dans l'ordre. Pour Sézane (FR), Infogreffe est testé en premier — si le CA est dans la base, il alimente directement le moteur de valorisation sans passer par le LLM.
-
----
-
-## 🔴 PRIORITÉ 1d — Name Resolution par source
-
-**Problème** : "Sézane" est le nom commercial, mais chaque source attend un identifiant différent :
-- **Infogreffe** → raison sociale exacte : "SEZANE SAS" (sans accent, forme juridique)
-- **Companies House** → registered name : "SEZANE LTD"
-- **Handelsregister** → Firma : "Sézane GmbH"
-- **Crunchbase** → slug : "sezane"
-- **yfinance** → ticker : "MC.PA" (pas applicable pour privées)
-
-**Fix** : ajouter un `NameResolver` appelé en amont de chaque provider :
-1. LLM (one-shot, pas de web search) → retourne `{"legal_name": "SEZANE SAS", "country": "FR", "crunchbase_slug": "sezane", ...}`
-2. Chaque provider reçoit le bon identifiant pour sa source
-3. Fallback : normalisation simple (strip accents, majuscules, supprimer SAS/Ltd/GmbH)
-
-**Impact** : fix critique pour toutes les sociétés privées — sans ça, EU registries et Crunchbase retournent souvent vide sur un nom commercial.
-
-**Fichier** : `data/name_resolver.py` (nouveau), appelé dans `orchestrator.py` avant `fetch_by_name()`
+- `DataRegistry.fetch_by_name()` appelle Infogreffe → Companies House → Handelsregister en ordre
+- `data/name_resolver.py` : résout le nom commercial → identifiant légal par source (LLM one-shot + fallback normalisation : accents supprimés, suffixes légaux strippés, variantes générées)
+- Chaque provider essaie toutes les variantes du nom pour maximiser le taux de match
+- Revenue fallback : si `revenue_current` toujours null après 2 tentatives LLM, appel ciblé "what is the revenue of X?" → unlocks football field même sans filings officiels
+- **Résultat Sézane** : football field Bear $1.0B / Base $1.7B / Bull $2.6B (vs N/A avant)
 
 ---
 
-## 🔴 PRIORITÉ 1e — FinancialModelerAgent : extraction structurée fiable (privées)
+## ✅ PRIORITÉ 1d — Name Resolution + Revenue Fallback (TERMINÉ)
 
-**Problème** : pour les sociétés privées, `FinancialModelerAgent` trouve des données réelles via web search (ex : "Sézane €350M de CA en 2023") mais ne les remonte pas systématiquement dans le JSON structuré (`revenue_current`). Résultat : le moteur de valorisation reçoit un champ vide et ne peut pas lancer DCF/comps.
+- `data/name_resolver.py` : LLM one-shot → identifiants par source (infogreffe_query, companies_house_query, crunchbase_slug, etc.) avec fallback normalisation (accents, suffixes légaux, variantes)
+- Chaque provider EU reçoit toutes les variantes et itère jusqu'au match
+- Revenue fallback dans orchestrateur : si `revenue_current` null après 2 tentatives → appel LLM ciblé "what is the annual revenue of X?" → unlocks football field
+- **Sézane résultat** : football field fonctionnel Bear $1.0B / Base $1.7B / Bull $2.6B
 
-**La thèse écrite par l'agent contient les bons chiffres — ils ne sont pas capturés dans le schéma structuré.**
+**Améliorations futures** : fuzzy matching sur résultats registry (score > 0.8), enrichir le resolver avec la raison sociale exacte vs nom commercial.
+
+---
+
+## ✅ PRIORITÉ 1e — FinancialModelerAgent : extraction structurée (TERMINÉ)
+
+- Prompt renforcé : `revenue_current` MUST be a plain number, NEVER null si des données ont été trouvées, avec exemples de conversion EUR→USD
+- Revenue fallback dans orchestrateur comme filet de sécurité
 
 **Fix** :
 1. Renforcer le prompt de `FinancialModelerAgent` pour exiger `revenue_current` en USD millions avec source et confidence

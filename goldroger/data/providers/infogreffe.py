@@ -48,25 +48,40 @@ class InfogreffeProvider(DataProvider):
         return None  # Infogreffe uses company names, not tickers
 
     def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
-        try:
-            resp = httpx.get(
-                f"{_BASE}/{_DATASET}/records",
-                params={
-                    "where": f'denominationsociale like "%{company_name}%"',
-                    "order_by": "millesime desc",
-                    "limit": 5,
-                    "select": (
-                        "denominationsociale,millesime,netsales,netincome,"
-                        "codeconventionnaf,trancheeffectif,departement"
-                    ),
-                },
-                timeout=15,
-                headers={"Accept": "application/json"},
-            )
-            if resp.status_code != 200:
-                return None
+        from goldroger.data.name_resolver import resolve
+        ids = resolve(company_name)
+        # Try each variant — Infogreffe needs normalized uppercase, no accents
+        queries_to_try = list(dict.fromkeys(
+            [ids.infogreffe_query] + ids.variants
+        ))
 
-            results = resp.json().get("results", [])
+        results = []
+        for query in queries_to_try:
+            if not query:
+                continue
+            try:
+                resp = httpx.get(
+                    f"{_BASE}/{_DATASET}/records",
+                    params={
+                        "where": f'denominationsociale like "%{query}%"',
+                        "order_by": "millesime desc",
+                        "limit": 5,
+                        "select": (
+                            "denominationsociale,millesime,netsales,netincome,"
+                            "codeconventionnaf,trancheeffectif,departement"
+                        ),
+                    },
+                    timeout=15,
+                    headers={"Accept": "application/json"},
+                )
+                if resp.status_code == 200:
+                    results = resp.json().get("results", [])
+                    if results:
+                        break
+            except Exception:
+                continue
+
+        try:
             if not results:
                 return None
 
@@ -74,7 +89,7 @@ class InfogreffeProvider(DataProvider):
             best = None
             for r in results:
                 name = r.get("denominationsociale", "")
-                if company_name.lower() in name.lower():
+                if any(v.lower() in name.lower() for v in queries_to_try if v):
                     best = r
                     break
             if not best:

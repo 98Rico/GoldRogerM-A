@@ -78,7 +78,15 @@ class CompaniesHouseProvider(DataProvider):
         return None  # Companies House uses company names, not tickers
 
     def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
-        company_number = self._search(company_name)
+        from goldroger.data.name_resolver import resolve
+        ids = resolve(company_name)
+        # Try each variant to maximise match rate
+        company_number = None
+        for variant in ([ids.companies_house_query] + ids.variants):
+            if variant:
+                company_number = self._search(variant)
+                if company_number:
+                    break
         if not company_number:
             return None
 

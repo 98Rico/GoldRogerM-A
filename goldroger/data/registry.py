@@ -59,7 +59,7 @@ class DataRegistry:
             if not fn:
                 continue
             try:
-                data = fn(company_name)
+                data = fn(company_name)  # each provider resolves variants internally
                 if data is not None:
                     data.data_source = provider.name
                     return data

@@ -181,6 +181,9 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
     market_data: MarketData | None = None
     if company_type == "private":
         t0 = _step("Registry (EU filings)")
+        from goldroger.data.name_resolver import resolve as resolve_company_name
+        _ids = resolve_company_name(company, llm_provider=client)
+        console.print(f"  [dim]Querying as: {_ids.infogreffe_query or _ids.variants[0] if _ids.variants else company}[/dim]")
         market_data = DEFAULT_REGISTRY.fetch_by_name(company)
         if market_data and market_data.revenue_ttm:
             console.print(f"  [green]Registry[/green] ({market_data.data_source}) Rev=${market_data.revenue_ttm:.0f}M")
@@ -290,6 +293,29 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
             {"sector": fund.sector or "", "description": fund.description},
             Financials, _fin_fallback(),
         )
+        # Revenue fallback: if still null after retry, ask LLM directly (no tools)
+        if not fin.revenue_current or fin.revenue_current in ("0", "0.0", "null", "None"):
+            try:
+                rev_prompt = (
+                    f'What is the most recent annual revenue of "{company}"? '
+                    "Return ONLY a JSON object: "
+                    '{"revenue_usd_m": <number>, "source": "<brief source>"}. '
+                    "Convert to USD millions. No markdown."
+                )
+                rev_resp = client.complete(
+                    messages=[{"role": "user", "content": rev_prompt}],
+                    model=client.resolve_model("large"),
+                    max_tokens=100,
+                )
+                import re as _re, json as _json
+                raw = _re.sub(r"```[a-z]*\n?|\n?```", "", rev_resp.content.strip())
+                rev_data = _json.loads(raw)
+                rev_val = rev_data.get("revenue_usd_m")
+                if rev_val and float(rev_val) > 0:
+                    fin.revenue_current = str(float(rev_val))
+                    console.print(f"  [cyan]Revenue fallback: ${float(rev_val):.0f}M (estimated)[/cyan]")
+            except Exception:
+                pass
     log.end_step("financials", t0)
     _done("Financials", t0)
 
