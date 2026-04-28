@@ -65,18 +65,19 @@ class SensitivityMatrix:
 
 @dataclass
 class FullValuationOutput:
-    dcf: DCFOutput
-    comps: CompsOutput
-    transactions: TransactionOutput
-    blended: ValuationResult
+    dcf: Optional[DCFOutput]
+    comps: Optional[CompsOutput]
+    transactions: Optional[TransactionOutput]
+    blended: Optional[ValuationResult]
     lbo: Optional[LBOOutput]
     recommendation: RecommendationOutput
-    sensitivity: SensitivityMatrix
+    sensitivity: Optional[SensitivityMatrix]
     wacc_used: float
     terminal_growth_used: float
-    data_confidence: str           # "verified" / "estimated" / "inferred"
+    data_confidence: str           # "verified" / "estimated" / "inferred" / "missing"
     sector: str
     valuation_path: str            # "ev_ebitda" or "pe_pb"
+    has_revenue: bool = True       # False → all quantitative methods skipped
     notes: list[str] = field(default_factory=list)
 
 
@@ -101,6 +102,26 @@ class ValuationService:
         revenue_series, _ = self._build_revenue_series(
             financials, market_data, notes
         )
+
+        if revenue_series is None:
+            wacc, _ = self._resolve_wacc(assumptions, market_data, sector_m, notes)
+            tg = self._resolve_terminal_growth(assumptions, sector_m, wacc, notes)
+            rec = self._compute_recommendation(
+                ValuationResult(low=0, mid=0, high=0, blended=0), market_data, notes
+            )
+            return FullValuationOutput(
+                dcf=None, comps=None, transactions=None,
+                blended=None, lbo=None,
+                recommendation=rec,
+                sensitivity=None,
+                wacc_used=wacc, terminal_growth_used=tg,
+                data_confidence="missing",
+                sector=sector or "Unknown",
+                valuation_path="ev_ebitda",
+                has_revenue=False,
+                notes=notes,
+            )
+
         revenue_current = revenue_series[-1]
 
         ebitda_margin, _ = self._resolve_ebitda_margin(financials, market_data, notes)
@@ -324,8 +345,8 @@ class ValuationService:
             notes.append(f"Revenue at {growth:.1%} p.a. (single-point base).")
             return series, "inferred"
 
-        notes.append("WARNING: No revenue data — using placeholder $1,000M.")
-        return [1000.0 * (1.08 ** i) for i in range(self.PROJECTION_YEARS)], "inferred"
+        notes.append("REVENUE_MISSING: No revenue data — DCF and comps omitted.")
+        return None, "missing"
 
     def _resolve_ebitda_margin(self, financials, market_data, notes):
         if market_data and market_data.ebitda_margin is not None:

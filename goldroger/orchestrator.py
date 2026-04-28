@@ -315,34 +315,44 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
         sector=fund.sector or "",
     )
 
-    blended_ev = result.blended.blended
+    blended_ev = result.blended.blended if result.blended else None
     rec = result.recommendation
+
+    if not result.has_revenue:
+        console.print(
+            "  [yellow]⚠ No revenue data — quantitative valuation skipped. "
+            "Peer multiples shown for reference only.[/yellow]"
+        )
+
+    _methods: list = []
+    if result.has_revenue and result.dcf:
+        _methods.append(ValuationMethod(name="DCF", mid=str(round(result.dcf.enterprise_value, 1)), weight=50))
+    if result.has_revenue and result.comps:
+        _methods.append(ValuationMethod(
+            name=f"Trading Comps ({result.valuation_path.upper()})",
+            low=str(round(result.comps.low, 1)),
+            mid=str(round(result.comps.mid, 1)),
+            high=str(round(result.comps.high, 1)),
+            weight=30,
+        ))
+    if result.has_revenue and result.transactions:
+        _methods.append(ValuationMethod(
+            name="Transaction Comps",
+            mid=str(round(result.transactions.implied_value, 1)),
+            weight=20,
+        ))
 
     val = Valuation(
         current_price=str(rec.current_price) if rec.current_price else None,
-        implied_value=str(round(blended_ev, 1)),
+        implied_value=str(round(blended_ev, 1)) if blended_ev else "N/A",
         upside_downside=(f"{rec.upside_pct:+.1%}" if rec.upside_pct is not None else "N/A"),
-        recommendation=rec.recommendation,
+        recommendation=rec.recommendation if result.has_revenue else "N/A",
         dcf_assumptions=DCFAssumptions(
             wacc=f"{result.wacc_used:.2%}",
             terminal_growth=f"{result.terminal_growth_used:.2%}",
             projection_years="5",
         ),
-        methods=[
-            ValuationMethod(name="DCF", mid=str(round(result.dcf.enterprise_value, 1)), weight=50),
-            ValuationMethod(
-                name=f"Trading Comps ({result.valuation_path.upper()})",
-                low=str(round(result.comps.low, 1)),
-                mid=str(round(result.comps.mid, 1)),
-                high=str(round(result.comps.high, 1)),
-                weight=30,
-            ),
-            ValuationMethod(
-                name="Transaction Comps",
-                mid=str(round(result.transactions.implied_value, 1)),
-                weight=20,
-            ),
-        ],
+        methods=_methods,
         sources=[result.data_confidence],
     )
 
@@ -362,13 +372,15 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
     ic_summary: ICScoreSummary | None = None
     try:
         revenue_series, _ = svc._build_revenue_series(fin.model_dump(), market_data, [])
+        if not revenue_series or not result.has_revenue:
+            raise ValueError("No revenue — skipping football field")
         _ebitda_margin = svc._resolve_ebitda_margin(fin.model_dump(), market_data, [])[0]
         # back-calculate EV/EBITDA multiples from EV outputs — comps.low/high are EVs not multiples
         _last_ebitda = (revenue_series[-1] * _ebitda_margin) if revenue_series else 1.0
         if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
             _comps_low = peer_multiples.ev_ebitda_low
             _comps_high = peer_multiples.ev_ebitda_high
-        elif _last_ebitda > 0:
+        elif _last_ebitda > 0 and result.comps:
             _comps_low = result.comps.low / _last_ebitda
             _comps_high = result.comps.high / _last_ebitda
         else:
@@ -380,8 +392,11 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
             base_terminal_growth=result.terminal_growth_used,
             base_comps_low=_comps_low,
             base_comps_high=_comps_high,
-            base_tx_multiple=result.transactions.implied_value / revenue_series[-1]
-                if revenue_series and revenue_series[-1] > 0 else 2.0,
+            base_tx_multiple=(
+                result.transactions.implied_value / revenue_series[-1]
+                if result.transactions and revenue_series and revenue_series[-1] > 0
+                else 2.0
+            ),
             tax_rate=svc._resolve_tax_rate(fin.model_dump(), market_data),
             capex_pct=svc._resolve_capex_pct(fin.model_dump(), market_data, revenue_series[-1] if revenue_series else 1000),
             nwc_pct=float(fin.model_dump().get("nwc_pct") or 0.02),

@@ -8,14 +8,13 @@ from .base import BaseAgent
 CURRENT_YEAR = datetime.now().year
 
 
-class DataCollectorAgent:
-    def __init__(self, client):
-        self.client = client
+class DataCollectorAgent(BaseAgent):
+    model_tier = "large"
+    use_tools = False
 
     def run(self, company: str, company_type: str, context: dict = None):
 
-        prompt = f"""
-You are a financial data extraction system.
+        prompt = f"""You are a financial data extraction system.
 
 Return ONLY valid JSON.
 
@@ -35,25 +34,16 @@ Rules:
 - NO markdown
 - NO text before or after
 - if unknown, guess conservatively
-- max 150 tokens
-"""
+- max 150 tokens"""
 
         try:
-            response = self.client.chat.complete(
-                model="mistral-large-latest",
+            response = self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
+                model=self._llm.resolve_model(self.model_tier),
+                max_tokens=200,
             )
-
-            if not response or not response.choices:
-                return "{}"
-
-            content = response.choices[0].message.content
-
-            if not content:
-                return "{}"
-
-            return content
-
+            content = response.content.strip() if response.content else "{}"
+            return content or "{}"
         except Exception as e:
             print("[ERROR DataCollectorAgent]", e)
             return "{}"

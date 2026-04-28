@@ -40,6 +40,10 @@
 | 7 | **LLM-agnostic architecture** — Mistral/Anthropic/OpenAI via `--llm` flag | `agents/llm_client.py`, `agents/providers/` | ✅ |
 | 7 | **EU registries** — Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪 | `data/providers/` | ✅ |
 | 7 | **Private triangulation engine** — 5-signal weighted median estimate | `data/private_triangulation.py` | ✅ |
+| 8 | **DataCollectorAgent fix** — inherits BaseAgent, uses LLMProvider (était `self.client.chat.complete`) | `agents/specialists.py` | ✅ |
+| 8 | **No placeholder values** — DCF/comps/football field skipped when revenue unavailable; `N/A` displayed honestly | `finance/core/valuation_service.py`, `orchestrator.py` | ✅ |
+| 8 | **Optional LLM deps** — `anthropic`/`openai` sont des dependency groups optionnels; install en une commande, erreur claire si manquant | `pyproject.toml`, `agents/llm_client.py` | ✅ |
+| 8 | **`.env.example`** — documentes toutes les variables avec instructions d'activation | `.env.example` | ✅ |
 
 ---
 
@@ -172,6 +176,24 @@ Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de
 
 ---
 
+## 🔴 PRIORITÉ 1c — FinancialModelerAgent : extraction structurée fiable (privées)
+
+**Problème** : pour les sociétés privées, `FinancialModelerAgent` trouve des données réelles via web search (ex : "Sézane €350M de CA en 2023") mais ne les remonte pas systématiquement dans le JSON structuré (`revenue_current`). Résultat : le moteur de valorisation reçoit un champ vide et ne peut pas lancer DCF/comps.
+
+**La thèse écrite par l'agent contient les bons chiffres — ils ne sont pas capturés dans le schéma structuré.**
+
+**Fix** :
+1. Renforcer le prompt de `FinancialModelerAgent` pour exiger `revenue_current` en USD millions avec source et confidence
+2. Ajouter un step de post-processing : si `revenue_current` est vide, extraire via regex depuis le texte free-form retourné
+3. Marquer comme `estimated` avec source tag (ex: `"source": "web_search"`)
+4. Intégrer le moteur `private_triangulation.py` (déjà construit) dans le flow orchestrateur pour les sociétés privées
+
+**Impact** : une fois ce fix appliqué, Sézane et toute société privée avec des données web disponibles produira un football field complet plutôt qu'un `N/A`.
+
+**Fichiers** : `agents/specialists.py` (FinancialModelerAgent prompt), `orchestrator.py` (appel triangulation), `data/private_triangulation.py` (déjà existant, pas encore câblé)
+
+---
+
 ## 🔴 PRIORITÉ 2b — Triangulation privée systématique
 
 Pour que l'outil batte un analyste sur les sociétés privées, le `FinancialModelerAgent` doit systématiquement croiser plusieurs signaux indépendants — pas juste une recherche web générique.
@@ -257,26 +279,18 @@ Pour LVMH, Berkshire, Alphabet — détecter multi-segment et proposer SOTP auto
 - Base locale JSON mise à jour à chaque run
 - Alimente directement la méthode "Transactions" du DCF avec de vraies données récentes
 
-## 🟡 PRIORITÉ 3c — Architecture LLM-agnostique
+## ✅ PRIORITÉ 3c — Architecture LLM-agnostique (TERMINÉE)
 
-**Contexte** : l'outil tourne sur Mistral (gratuit). Pour la qualité d'analyse (thesis, jugement, DD), Claude Opus ou GPT-4o sont significativement meilleurs. Le switch doit se faire via une variable d'environnement ou un bouton UI — sans toucher au code agent.
+`agents/llm_client.py` + `agents/providers/` (Mistral, Anthropic, OpenAI). `BaseAgent` provider-agnostique. Mistral reste le défaut gratuit.
 
-**Pattern** : même architecture que `DataRegistry` — un `LLMRegistry` avec providers prioritaires.
-
-```python
-# .env
-LLM_PROVIDER=mistral        # gratuit, défaut
-LLM_PROVIDER=anthropic      # Claude Sonnet/Opus — meilleure qualité thesis
-LLM_PROVIDER=openai         # GPT-4o
-LLM_PROVIDER=ollama         # local, offline
-
-# CLI
-uv run python -m goldroger.cli --company "NVIDIA" --llm claude
+```bash
+LLM_PROVIDER=anthropic    # .env — persistant
+uv run python -m goldroger.cli --company "NVIDIA" --llm claude   # CLI — one-shot
 ```
 
-**✅ Implémenté** : `agents/llm_client.py` + `agents/providers/` (Mistral, Anthropic, OpenAI). `BaseAgent` est maintenant provider-agnostique.
+Switcher de provider = une ligne. Package installé à la demande (`uv add --group anthropic anthropic`).
 
-À ajouter : `OllamaProvider` (local/offline), per-agent provider override (ex: ReportWriter → Claude systématiquement).
+À ajouter si besoin : `OllamaProvider` (local/offline), per-agent provider override.
 
 ## 🟢 PRIORITÉ 4 — Productisation SaaS
 

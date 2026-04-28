@@ -119,11 +119,14 @@ Les 6 dimensions sont maintenant dérivées des outputs agents, pas neutres à 5
 Pour une société privée :
 1. **yfinance** → None (pas de ticker)
 2. **Crunchbase** → revenue range estimé si `CRUNCHBASE_API_KEY` set
-3. **FinancialModelerAgent** → web search pour revenus/marges (presse, rapports, etc.)
-   - Autorisé à estimer si pas de données vérifiées, taggé `estimated`
-4. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
-5. **Valuation** : DCF avec WACC sectoriel + comps peers réels + bear/base/bull
-6. **Pas de BUY/HOLD/SELL** (pas de prix coté) → IC scoring M&A uniquement
+3. **EU Registries** → Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪 — revenus officiels si disponibles
+4. **FinancialModelerAgent** → web search pour revenus/marges (presse, rapports, etc.), taggé `estimated`
+5. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
+6. **Valuation** :
+   - Si revenus trouvés → DCF + comps peers réels + bear/base/bull
+   - Si aucune donnée revenue → DCF/comps **omis** (affiché `N/A`), peer multiples de référence uniquement
+   - **Jamais de valeurs placeholder** — `N/A` honnête plutôt que chiffres fabriqués
+7. **Pas de BUY/HOLD/SELL** (pas de prix coté) → IC scoring M&A uniquement
 
 ### Opportunity Screening (M&A Pipeline)
 
@@ -231,17 +234,26 @@ Sources premium (stubs prêts) : PitchBook, Mergermarket, Dealogic, Preqin.
 
 ## LLM-Agnostique
 
-L'outil tourne sur Mistral (gratuit) par défaut. Changer de modèle via env var ou flag CLI — sans modifier le code :
+L'outil tourne sur **Mistral (gratuit)** par défaut — aucune carte bancaire requise. Changer de modèle en une commande, sans toucher au code :
+
+| Provider | Coût | Modèles utilisés | Commande d'install |
+|----------|------|------------------|--------------------|
+| **Mistral** (défaut) | Gratuit | mistral-small / mistral-large | _(déjà installé)_ |
+| **Anthropic** | Payant | claude-haiku / claude-sonnet | `uv add --group anthropic anthropic` |
+| **OpenAI** | Payant | gpt-4o-mini / gpt-4o | `uv add --group openai openai` |
 
 ```bash
-# Via .env
-LLM_PROVIDER=anthropic   # Claude Opus — meilleure qualité thesis/DD
+# Via .env (persistant)
+LLM_PROVIDER=mistral      # gratuit, défaut
+LLM_PROVIDER=anthropic    # Claude — meilleure qualité thesis/DD
+LLM_PROVIDER=openai       # GPT-4o
 
-# Via CLI (override pour un run)
+# Via CLI (override pour un run uniquement)
 uv run python -m goldroger.cli --company "NVIDIA" --llm claude
+uv run python -m goldroger.cli --company "NVIDIA" --llm mistral
 ```
 
-Providers supportés (à venir) : Mistral (défaut), Anthropic (Claude), OpenAI (GPT-4o), Ollama (local/offline). Chaque agent peut avoir son provider préféré — ex. `ReportWriterAgent` préfère Claude pour la qualité rédactionnelle.
+Si un provider n'est pas installé, le message d'erreur indique la commande exacte à lancer. Chaque provider utilise un modèle "small" pour les agents rapides et "large" pour les analyses longues (thesis, DD) — sans configuration supplémentaire.
 
 ## Règle Absolue
 
@@ -284,12 +296,12 @@ DEFAULT_REGISTRY.register(MyProvider())
 
 ## Performance
 
-Temps typiques par run (après optimisations v6) :
+Temps typiques par run (après optimisations v8) :
 
 | Scénario | Durée estimée |
 |----------|--------------|
 | Equity publique (NVIDIA) | ~5–10 min |
-| Société privée (Longchamp) | ~8–12 min |
+| Société privée (Sézane) | ~1–2 min |
 | Pipeline sourcing `--quick` | ~1–2 min |
 | Pipeline sourcing standard | ~4–6 min |
 

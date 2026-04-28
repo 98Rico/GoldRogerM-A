@@ -83,12 +83,27 @@ def build_llm_provider(override: Optional[str] = None) -> LLMProvider:
     name = (override or os.getenv("LLM_PROVIDER", "mistral")).lower()
 
     if name == "mistral":
-        return MistralProvider(os.getenv("MISTRAL_API_KEY", ""))
+        try:
+            return MistralProvider(os.getenv("MISTRAL_API_KEY", ""))
+        except ImportError:
+            raise ImportError("mistralai not installed. Run: uv add mistralai") from None
+
     if name in ("anthropic", "claude"):
-        return AnthropicProvider(os.getenv("ANTHROPIC_API_KEY", ""))
+        try:
+            return AnthropicProvider(os.getenv("ANTHROPIC_API_KEY", ""))
+        except ImportError:
+            raise ImportError(
+                "anthropic not installed. Run: uv add --group anthropic anthropic"
+            ) from None
+
     if name in ("openai", "gpt"):
-        return OpenAIProvider(os.getenv("OPENAI_API_KEY", ""))
+        try:
+            return OpenAIProvider(os.getenv("OPENAI_API_KEY", ""))
+        except ImportError:
+            raise ImportError(
+                "openai not installed. Run: uv add --group openai openai"
+            ) from None
 
     raise ValueError(
-        f"Unknown LLM_PROVIDER '{name}'. Choose: mistral, anthropic, openai"
+        f"Unknown LLM_PROVIDER '{name}'. Choose: mistral (free), anthropic (Claude), openai (GPT)"
     )
