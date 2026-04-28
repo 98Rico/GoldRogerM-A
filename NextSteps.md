@@ -66,7 +66,12 @@
 | 11 | Sector multiples word-boundary fix — `_word_in()` regex prevents "fintech" → "financials" misfires | `data/sector_multiples.py` | ✅ |
 | 11 | WACC net-cash note — logs "unlevered WACC (D=0)" when net_debt < 0 | `finance/core/valuation_service.py` | ✅ |
 | 11 | LBO test updated — `_standard_lbo()` inputs internally consistent with corrected formula (entry 5x, no expansion, 5% growth) | `tests/test_lbo.py` | ✅ |
-| 12 | Infogreffe provider rewritten — `opendata.infogreffe.fr` dead (domain + dataset removed in 2025); replaced with `recherche-entreprises.api.gouv.fr` (official FR govt, free, no auth) | `data/providers/infogreffe.py` | ✅ |
+| 12 | EU registry audit — dead APIs removed, `is_available()` corrected, silent 401s eliminated across all 5 providers | see below | ✅ |
+| 12 | 🇫🇷 Infogreffe rewritten — `opendata.infogreffe.fr` dead; replaced with `recherche-entreprises.api.gouv.fr` (official FR govt, no auth). Sector only — no revenue. | `data/providers/infogreffe.py` | ✅ |
+| 12 | 🇬🇧 Companies House — anonymous access removed (401). `is_available()` now gates on `COMPANIES_HOUSE_API_KEY`. Free key at developer.company-information.service.gov.uk | `data/providers/companies_house.py` | ✅ |
+| 12 | 🇩🇪 Handelsregister — `api.offeneregister.de` DNS dead; removed. Provider now uses Bundesanzeiger directly as primary (best-effort revenue via HTML regex). | `data/providers/handelsregister.py` | ✅ |
+| 12 | 🇪🇸 Registro Mercantil — `api.cif.es` DNS dead; removed. BORME full-text search (`boe.es`) used as sole source (company existence only, no revenue). | `data/providers/registro_mercantil.py` | ✅ |
+| 12 | 🇳🇱 KVK — API requires key despite "no key required" docstring (401). `is_available()` now gates on `KVK_API_KEY`. Free key at developers.kvk.nl | `data/providers/kvk.py` | ✅ |
 
 ---
 
@@ -126,18 +131,39 @@ Architecture `DataProvider` / `DataRegistry` en place — chaque source = 1 fich
 
 | Source | Pays | Données | Statut |
 |--------|------|---------|--------|
-| Companies House 🇬🇧 | UK | Comptes annuels, SIC | ✅ intégré |
-| recherche-entreprises.api.gouv.fr 🇫🇷 | FR | SIREN, NAF/secteur (pas de revenus — dataset Infogreffe supprimé 2025) | ✅ intégré |
-| Handelsregister 🇩🇪 | DE | Comptes GmbH/AG | ✅ intégré |
+| Companies House 🇬🇧 | UK | SIC/secteur + revenue XBRL best-effort | ⚠️ `COMPANIES_HOUSE_API_KEY` requis (gratuit) |
+| recherche-entreprises.api.gouv.fr 🇫🇷 | FR | SIREN, NAF/secteur — pas de revenue | ✅ intégré (gratuit, no auth) |
+| Bundesanzeiger 🇩🇪 | DE | Revenue best-effort HTML | ✅ intégré (gratuit, no auth) |
 | SEC EDGAR 🇺🇸 | US | 10-K revenues | ✅ intégré |
 | Crunchbase | Global | Funding, revenus estimés | ✅ intégré |
-| KVK 🇳🇱 | NL | Comptes, directeurs | ✅ intégré |
-| Registro Mercantil 🇪🇸 | ES | Comptes annuels | ✅ intégré |
+| KVK 🇳🇱 | NL | SBI/secteur — pas de revenue | ⚠️ `KVK_API_KEY` requis (gratuit) |
+| Registro Mercantil 🇪🇸 | ES | Existence société via BORME — pas de revenue | ✅ intégré (gratuit, no auth) |
+| PAPPERS 🇫🇷 | FR | CA, résultat, bilans complets | ⬜ `PAPPERS_API_KEY` (100 calls/mois gratuit) |
 | Dealroom | EU | Startups, funding | ⬜ freemium |
 | SimilarWeb | Global | Trafic web | ⬜ freemium |
 | OpenCorporates | 140+ pays | Données légales | ⬜ freemium |
 
 **Sources premium (stubs à compléter)** : PitchBook, Mergermarket, Dealogic, Preqin.
+
+---
+
+## ⚠️ EU REGISTRY STATUS — Sociétés Privées
+
+Audit complet (2026-04) — état réel de chaque provider :
+
+| Pays | Provider | Statut | Revenue | Condition |
+|------|----------|--------|---------|-----------|
+| 🇫🇷 FR | recherche-entreprises.api.gouv.fr | ✅ Actif | ❌ Non dispo | Gratuit, aucune clé |
+| 🇬🇧 UK | Companies House API | ⚠️ Clé requise | ⚠️ Best-effort (XBRL) | `COMPANIES_HOUSE_API_KEY` — gratuit (developer.company-information.service.gov.uk) |
+| 🇩🇪 DE | Bundesanzeiger | ✅ Actif | ⚠️ Best-effort (HTML) | Gratuit, aucune clé |
+| 🇪🇸 ES | BORME (boe.es) | ✅ Actif | ❌ Non dispo | Gratuit — confirmation existence seulement |
+| 🇳🇱 NL | KVK | ⚠️ Clé requise | ❌ Non dispo | `KVK_API_KEY` — gratuit (developers.kvk.nl) |
+
+**Conséquence** : pour toutes les sociétés privées européennes, le revenue passe par le fallback web search + LLM. Les registres confirment l'existence et donnent le secteur (FR/DE) mais pas les comptes.
+
+**Pour débloquer UK + NL** : ajouter `COMPANIES_HOUSE_API_KEY` et `KVK_API_KEY` dans `.env` (inscription gratuite).
+
+**Prochaine étape données privées recommandée** : intégrer PAPPERS (🇫🇷) avec `PAPPERS_API_KEY` — 100 calls/mois gratuits, retourne CA, résultat net, bilans. Remplace définitivement le gap revenue France.
 
 ---
 

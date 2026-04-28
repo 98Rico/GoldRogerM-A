@@ -24,10 +24,13 @@ _SBI_SECTOR = {
 
 class KVKProvider(DataProvider):
     name = "kvk"
-    requires_credentials = False
+    requires_credentials = True
 
     def is_available(self) -> bool:
-        return True
+        # KVK API requires an API key (api.kvk.nl returns 401 without one).
+        # Apply for a free key at developers.kvk.nl
+        import os
+        return bool(os.getenv("KVK_API_KEY", ""))
 
     def fetch(self, ticker: str) -> Optional[MarketData]:
         return None

@@ -54,11 +54,11 @@
 |--------|--------------|---------|
 | **yfinance** | Toujours (gratuit) | Prix, beta, marges, EV, forward estimates |
 | **SEC EDGAR** | Toujours (gratuit) | Revenus annuels US (10-K) |
-| **Companies House** | Toujours (gratuit, 🇬🇧) | Comptes annuels, SIC, statut |
-| **recherche-entreprises.api.gouv.fr** | Toujours (gratuit, 🇫🇷) | SIREN, NAF/secteur — revenus non dispo (dataset Infogreffe supprimé 2025) |
-| **Handelsregister** | Toujours (gratuit, 🇩🇪) | Profil société, Bundesanzeiger best-effort |
-| **KVK** | Toujours (gratuit, 🇳🇱) | Comptes, secteur SBI |
-| **Registro Mercantil** | Toujours (gratuit, 🇪🇸) | Comptes annuels BORME |
+| **recherche-entreprises.api.gouv.fr** | Toujours (gratuit, 🇫🇷) | SIREN, NAF/secteur — pas de revenus (Infogreffe supprimé 2025) |
+| **Bundesanzeiger** | Toujours (gratuit, 🇩🇪) | Revenue best-effort HTML |
+| **Registro Mercantil / BORME** | Toujours (gratuit, 🇪🇸) | Existence société — pas de revenus |
+| **Companies House** | Si `COMPANIES_HOUSE_API_KEY` (🇬🇧, gratuit) | SIC/secteur + revenue XBRL best-effort |
+| **KVK** | Si `KVK_API_KEY` (🇳🇱, gratuit) | SBI/secteur — pas de revenus |
 | **Crunchbase** | Si `CRUNCHBASE_API_KEY` (freemium) | Revenus estimés, funding, headcount |
 | **Web Search** | Toujours (DuckDuckGo) | Données privées, presse, rapports |
 | **Bloomberg BLP** | Si `BLOOMBERG_API_KEY` | Tout (temps réel, privé, M&A comps) |

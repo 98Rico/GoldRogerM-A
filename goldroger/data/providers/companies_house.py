@@ -42,7 +42,9 @@ class CompaniesHouseProvider(DataProvider):
     requires_credentials = False
 
     def is_available(self) -> bool:
-        return True  # free, always available
+        # Anonymous access was removed — API key required as of 2024.
+        # Register free at developer.company-information.service.gov.uk
+        return bool(os.getenv("COMPANIES_HOUSE_API_KEY", ""))
 
     def _auth(self):
         api_key = os.getenv("COMPANIES_HOUSE_API_KEY", "")
