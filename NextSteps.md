@@ -2,7 +2,7 @@
 
 ---
 
-## ✅ PHASES COMPLÉTÉES (1–11)
+## ✅ PHASES COMPLÉTÉES (1–12)
 
 | Phase | Item | Fichier(s) | Statut |
 |-------|------|-----------|--------|
@@ -66,6 +66,7 @@
 | 11 | Sector multiples word-boundary fix — `_word_in()` regex prevents "fintech" → "financials" misfires | `data/sector_multiples.py` | ✅ |
 | 11 | WACC net-cash note — logs "unlevered WACC (D=0)" when net_debt < 0 | `finance/core/valuation_service.py` | ✅ |
 | 11 | LBO test updated — `_standard_lbo()` inputs internally consistent with corrected formula (entry 5x, no expansion, 5% growth) | `tests/test_lbo.py` | ✅ |
+| 12 | Infogreffe provider rewritten — `opendata.infogreffe.fr` dead (domain + dataset removed in 2025); replaced with `recherche-entreprises.api.gouv.fr` (official FR govt, free, no auth) | `data/providers/infogreffe.py` | ✅ |
 
 ---
 
@@ -126,7 +127,7 @@ Architecture `DataProvider` / `DataRegistry` en place — chaque source = 1 fich
 | Source | Pays | Données | Statut |
 |--------|------|---------|--------|
 | Companies House 🇬🇧 | UK | Comptes annuels, SIC | ✅ intégré |
-| Infogreffe 🇫🇷 | FR | CA déclaré, bilans | ✅ intégré |
+| recherche-entreprises.api.gouv.fr 🇫🇷 | FR | SIREN, NAF/secteur (pas de revenus — dataset Infogreffe supprimé 2025) | ✅ intégré |
 | Handelsregister 🇩🇪 | DE | Comptes GmbH/AG | ✅ intégré |
 | SEC EDGAR 🇺🇸 | US | 10-K revenues | ✅ intégré |
 | Crunchbase | Global | Funding, revenus estimés | ✅ intégré |

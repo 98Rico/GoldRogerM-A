@@ -46,7 +46,7 @@
 
 ---
 
-## Ce qui fonctionne (Phases 1–11)
+## Ce qui fonctionne (Phases 1–12)
 
 ### Données & Sources
 
@@ -55,7 +55,7 @@
 | **yfinance** | Toujours (gratuit) | Prix, beta, marges, EV, forward estimates |
 | **SEC EDGAR** | Toujours (gratuit) | Revenus annuels US (10-K) |
 | **Companies House** | Toujours (gratuit, 🇬🇧) | Comptes annuels, SIC, statut |
-| **Infogreffe** | Toujours (gratuit, 🇫🇷) | CA déclaré, résultat, code NAF |
+| **recherche-entreprises.api.gouv.fr** | Toujours (gratuit, 🇫🇷) | SIREN, NAF/secteur — revenus non dispo (dataset Infogreffe supprimé 2025) |
 | **Handelsregister** | Toujours (gratuit, 🇩🇪) | Profil société, Bundesanzeiger best-effort |
 | **KVK** | Toujours (gratuit, 🇳🇱) | Comptes, secteur SBI |
 | **Registro Mercantil** | Toujours (gratuit, 🇪🇸) | Comptes annuels BORME |
@@ -122,7 +122,7 @@ Pour une société privée :
 1. **yfinance** → None (pas de ticker)
 2. **Crunchbase** → revenue range estimé si `CRUNCHBASE_API_KEY` set
 3. **Name Resolver** → `data/name_resolver.py` — résout le nom commercial vers l'identifiant correct par source (LLM one-shot + normalisation accents/suffixes légaux)
-4. **EU Registries** → Infogreffe 🇫🇷, Companies House 🇬🇧, Handelsregister 🇩🇪 — chaque provider teste toutes les variantes du nom
+4. **EU Registries** → recherche-entreprises.api.gouv.fr 🇫🇷, Companies House 🇬🇧, Handelsregister 🇩🇪 — chaque provider teste toutes les variantes du nom
 5. **FinancialModelerAgent** → web search pour revenus/marges, taggé `estimated`
    - Si `revenue_current` toujours null après 2 tentatives → **revenue fallback** : appel LLM ciblé pour débloquer le football field
 5. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
@@ -361,3 +361,4 @@ uv run python -m pytest tests/ -v
 ✔ Aggregator robuste — poids auto-normalisés à 1.0, `blended = mid` (estimateur central sans biais)  
 ✔ Sector multiples word-boundary regex — fintech → technology (plus de mismatch "financials")  
 ✔ 20 tests unitaires passent — LBO test avec inputs cohérents avec la formule corrigée  
+✔ Infogreffe migré — `opendata.infogreffe.fr` mort (2025) → `recherche-entreprises.api.gouv.fr` (govt FR officiel, gratuit, toujours up)  
