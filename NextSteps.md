@@ -40,6 +40,51 @@
 
 ---
 
+## 🎯 VISION — REMPLACER L'ANALYSTE M&A
+
+**Objectif** : produire une analyse meilleure qu'un analyste M&A humain sur toutes les tâches qu'on lui confie.
+
+Ce que l'outil bat déjà un analyste sur :
+- Vitesse (minutes vs jours)
+- Cohérence (même structure, zéro biais d'ancrage)
+- Couverture (10 dimensions systématiquement)
+- Disponibilité (pas de fatigue, pas de vacances)
+
+Les trois vrais gaps à combler :
+
+### GAP 1 — Private company data depth (le plus critique)
+
+Un analyste triangule depuis 6–8 signaux indépendants. L'outil n'en utilise qu'un (web search LLM).
+Signaux à intégrer :
+- **LinkedIn employee count × revenue/employee benchmark** par secteur → revenue estimate
+- **Job postings** (volume, séniorité, fonctions) → stage de croissance, burn rate, orientation produit
+- **Crunchbase funding history** → stage, total raised, lead investors, implied valuation
+- **SimilarWeb / web traffic** → pour DTC/consumer, trafic = proxy revenue
+- **Press/media NLP** → extraire mentions de revenus, parts de marché, clients clés depuis articles
+- **Office footprint** → taille des locaux × coût marché → proxy base de coûts
+- **Social media signals** → Meta Ad Library (spend estimé), followers → notoriété marque
+- **Comparable recent M&A transactions** → closing prices from press releases (sans CapIQ)
+
+### GAP 2 — Transaction comps (sans CapIQ)
+
+Un analyste ancre les valorisations sur des *transactions fermées* similaires, pas juste des peers cotés.
+"3 acquisitions comparables en B2B SaaS européen à 5–7x ARR en 2023–2024" = anchor solide.
+Sans Mergermarket/CapIQ, partiellement reconstituable via :
+- Scraping de press releases de M&A (PR Newswire, BusinessWire, Cision)
+- NLP sur news financières (Reuters, Bloomberg articles publics)
+- Base de données open source (OpenSanctions, Companies House filings)
+- Dealroom API (freemium, spécialisé Europe)
+
+### GAP 3 — Output polish
+
+Le PPT est fonctionnel mais pas Goldman-quality. Combler le gap :
+- Vrais graphiques (bar chart football field, waterfall synergies, courbe DCF)
+- Template institutionnel avec charte graphique configurable
+- Excel 3-statement complet (P&L, BS, CF liés) vs. DCF standalone actuel
+- Executive summary page (1-pager pour IC)
+
+---
+
 ## 🔴 PRIORITÉ 1 — Sources de données premium
 
 ### 1.1 Bloomberg BLP Integration
@@ -62,6 +107,33 @@ Pour activer : `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD` dans `.env`.
 Valeur ajoutée M&A : précédent transactions database, private company financials, covenants, credit.
 
 ---
+
+## 🔴 PRIORITÉ 1b — Connectivité data dynamique
+
+**Principe** : n'importe quelle source de données doit être connectable en 30 minutes, sans toucher au moteur de valorisation.
+
+L'architecture `DataProvider` / `DataRegistry` est en place. Ce qui manque :
+
+### Sources gratuites / freemium à connecter en priorité
+| Source | Données | API |
+|--------|---------|-----|
+| **Companies House (UK)** | Comptes annuels, directeurs, capital | Gratuit REST |
+| **INSEE / Infogreffe (FR)** | CA déclaré, effectifs, bilans | Gratuit |
+| **Handelsregister (DE)** | Comptes annuels GmbH/AG | Gratuit |
+| **Dealroom** | Startups EU, funding, revenus estimés | Freemium |
+| **SimilarWeb** | Trafic web, canaux, géos | Freemium |
+| **LinkedIn (via proxy)** | Headcount, croissance, offres d'emploi | Scraping indirect |
+| **OpenCorporates** | Données légales 140+ pays | Freemium |
+
+### Sources premium (stubs à implémenter)
+| Source | Valeur M&A |
+|--------|-----------|
+| **PitchBook** | Deals, valorisations, fonds |
+| **Mergermarket** | Transaction comps, deal flow |
+| **Dealogic** | Bookrunner, fees, process |
+| **Preqin** | PE/VC fund data |
+
+Chaque source = un fichier dans `data/providers/`, `is_available()` gate sur env var, zéro modification au reste du code.
 
 ## 🔴 PRIORITÉ 2 — Opportunity Screening (sourcing actif)
 
@@ -89,6 +161,26 @@ Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de
 **Fichiers concernés** : `agents/specialists.py` (SourcingAgent), `orchestrator.py` (run_pipeline), `exporters/pptx.py` (nouveau slide pipeline)
 
 ---
+
+## 🔴 PRIORITÉ 2b — Triangulation privée systématique
+
+Pour que l'outil batte un analyste sur les sociétés privées, le `FinancialModelerAgent` doit systématiquement croiser plusieurs signaux indépendants — pas juste une recherche web générique.
+
+### Moteur de triangulation à construire (`data/private_triangulation.py`)
+
+```
+1. Headcount signal    → LinkedIn scrape ou Crunchbase → × revenue/employee benchmark sectoriel
+2. Funding signal      → Crunchbase total_raised → implied ARR (SaaS: ~3–5x ARR/capital raised)
+3. Web traffic signal  → SimilarWeb → pour DTC/consumer: traffic × conversion × AOV
+4. Press signal        → NLP sur articles → extraire chiffres revenus mentionnés explicitement
+5. Comparable M&A      → scrape press releases → trouver 3 transactions similaires → appliquer multiples
+6. Regulatory filings  → Companies House / Infogreffe → CA et résultat déclaré si disponible
+```
+
+Chaque signal produit un `(estimate, confidence, source)`. L'agrégateur prend la médiane pondérée par confidence.
+Si ≥3 signaux concordent à ±30% → `confidence: "estimated"`. Sinon → `confidence: "inferred"`.
+
+**Fichiers** : `data/private_triangulation.py` (nouveau), intégration dans `agents/specialists.py` (FinancialModelerAgent)
 
 ## 🟡 PRIORITÉ 3 — Qualité Engine
 
@@ -136,6 +228,24 @@ SOTP implémenté mais pas câblé dans `run_analysis`.
 Pour LVMH, Berkshire, Alphabet — détecter multi-segment et proposer SOTP automatiquement.
 
 ---
+
+## 🟡 PRIORITÉ 3b — Output quality (PPT + Excel)
+
+### PPT Goldman-quality
+- Remplacer les tables ASCII par de vrais graphiques python-pptx : bar chart football field, courbe DCF, waterfall synergies
+- Template configurable (couleurs, logo) par client
+- Executive summary 1-pager (slide 0) : société, recommandation, EV implied, upside, IC score, 3 bullet points
+
+### Excel 3-statement
+- Lier P&L → Bilan → Cash Flow (modèle intégré)
+- Onglets séparés : Assumptions / P&L / BS / CF / DCF / LBO / Scenarios / Sensitivities
+- Actuellement : DCF standalone uniquement
+
+### Transaction comps sans CapIQ
+- Agent `TransactionCompsAgent` : scrape PR Newswire / BusinessWire pour transactions M&A annoncées
+- NLP pour extraire : acquéreur, cible, secteur, EV, multiple (EV/EBITDA ou EV/Revenue), date
+- Base locale JSON mise à jour à chaque run
+- Alimente directement la méthode "Transactions" du DCF avec de vraies données récentes
 
 ## 🟢 PRIORITÉ 4 — Productisation SaaS
 

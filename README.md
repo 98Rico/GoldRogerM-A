@@ -207,6 +207,25 @@ uv run python -m goldroger.cli --company "Figma" --mode ma --acquirer "Adobe" --
 
 ---
 
+## Vision — Remplacer l'analyste M&A
+
+L'objectif est de produire une analyse meilleure qu'un analyste M&A humain sur toutes les tâches courantes : sourcing, valorisation, due diligence, memo IC, PPT, Excel.
+
+**Ce que l'outil bat déjà un analyste sur** : vitesse, cohérence, couverture systématique, zéro biais d'ancrage, disponibilité 24/7.
+
+**Les trois gaps à combler** (voir NextSteps) :
+1. **Private company data depth** — triangulation systématique depuis 6–8 signaux (headcount, funding, web traffic, press, filings, transaction comps) plutôt qu'une seule recherche web
+2. **Transaction comps sans CapIQ** — scraping de press releases M&A pour reconstruire une base de transactions comparables
+3. **Output polish** — vrais graphiques PPT, Excel 3-statement complet, executive summary 1-pager
+
+## Connectivité Data Dynamique
+
+Le registre `DataRegistry` est conçu pour que n'importe quelle source soit connectable en 30 minutes sans toucher au moteur de valorisation. Priorité d'exécution : Bloomberg → CapIQ → Refinitiv → yfinance → Crunchbase → EDGAR.
+
+Sources gratuites/freemium à connecter prochainement : Companies House (UK), Infogreffe (FR), Dealroom (EU startups), SimilarWeb (web traffic), OpenCorporates (140+ pays).
+
+Sources premium (stubs prêts) : PitchBook, Mergermarket, Dealogic, Preqin.
+
 ## Règle Absolue
 
 **Le LLM ne produit JAMAIS de chiffres financiers finaux.**
