@@ -183,7 +183,27 @@ Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de
 
 ---
 
-## 🔴 PRIORITÉ 1d — FinancialModelerAgent : extraction structurée fiable (privées)
+## 🔴 PRIORITÉ 1d — Name Resolution par source
+
+**Problème** : "Sézane" est le nom commercial, mais chaque source attend un identifiant différent :
+- **Infogreffe** → raison sociale exacte : "SEZANE SAS" (sans accent, forme juridique)
+- **Companies House** → registered name : "SEZANE LTD"
+- **Handelsregister** → Firma : "Sézane GmbH"
+- **Crunchbase** → slug : "sezane"
+- **yfinance** → ticker : "MC.PA" (pas applicable pour privées)
+
+**Fix** : ajouter un `NameResolver` appelé en amont de chaque provider :
+1. LLM (one-shot, pas de web search) → retourne `{"legal_name": "SEZANE SAS", "country": "FR", "crunchbase_slug": "sezane", ...}`
+2. Chaque provider reçoit le bon identifiant pour sa source
+3. Fallback : normalisation simple (strip accents, majuscules, supprimer SAS/Ltd/GmbH)
+
+**Impact** : fix critique pour toutes les sociétés privées — sans ça, EU registries et Crunchbase retournent souvent vide sur un nom commercial.
+
+**Fichier** : `data/name_resolver.py` (nouveau), appelé dans `orchestrator.py` avant `fetch_by_name()`
+
+---
+
+## 🔴 PRIORITÉ 1e — FinancialModelerAgent : extraction structurée fiable (privées)
 
 **Problème** : pour les sociétés privées, `FinancialModelerAgent` trouve des données réelles via web search (ex : "Sézane €350M de CA en 2023") mais ne les remonte pas systématiquement dans le JSON structuré (`revenue_current`). Résultat : le moteur de valorisation reçoit un champ vide et ne peut pas lancer DCF/comps.
 
@@ -199,7 +219,7 @@ Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de
 
 **Fichiers** : `agents/specialists.py` (FinancialModelerAgent prompt), `orchestrator.py` (appel triangulation), `data/private_triangulation.py` (déjà existant, pas encore câblé)
 
-**Note** : l'EU registry fix (1c) couvre les sociétés avec filings officiels. Ce fix couvre le reste (sociétés sans filings publics, ou hors Europe).
+**Note** : l'EU registry fix (1c) couvre les sociétés avec filings officiels. Ce fix couvre le reste (sociétés sans filings publics, ou hors Europe). Le Name Resolver (1d) est un prérequis pour que 1c fonctionne de manière fiable.
 
 ---
 
