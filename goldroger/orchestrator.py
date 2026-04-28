@@ -502,6 +502,18 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
             _comps_high = result.comps.high / _last_ebitda
         else:
             _comps_low, _comps_high = 8.0, 14.0
+        # Derive year-0 actual revenue for correct scenario anchoring
+        _y0_rev = None
+        if market_data and market_data.revenue_history:
+            _y0_rev = market_data.revenue_history[-1]
+        elif market_data and market_data.revenue_ttm:
+            _y0_rev = market_data.revenue_ttm
+        elif fin.revenue_current:
+            try:
+                _y0_rev = float(fin.revenue_current)
+            except (ValueError, TypeError):
+                pass
+
         scenarios_out = run_scenarios(
             base_revenue=revenue_series,
             base_ebitda_margin=_ebitda_margin,
@@ -518,6 +530,7 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
             capex_pct=svc._resolve_capex_pct(fin.model_dump(), market_data, revenue_series[-1] if revenue_series else 1000),
             nwc_pct=float(fin.model_dump().get("nwc_pct") or 0.02),
             da_pct=svc._resolve_da_pct(market_data, revenue_series[-1] if revenue_series else None),
+            y0_revenue=_y0_rev,
         )
 
         def _fmt_ev(v: float) -> str:

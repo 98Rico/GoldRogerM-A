@@ -276,10 +276,25 @@ _ALIASES: dict[str, str] = {
 }
 
 
+def _word_in(phrase: str, text: str) -> bool:
+    """Return True if all words of `phrase` appear as whole words in `text`."""
+    import re
+    for word in phrase.split():
+        if not re.search(r'\b' + re.escape(word) + r'\b', text):
+            return False
+    return True
+
+
 def get_sector_multiples(sector: str) -> SectorMultiples:
     """
     Return the SectorMultiples for a given sector string.
     Case-insensitive with alias resolution. Falls back to 'default'.
+    Matching priority:
+      1. Exact key match
+      2. Exact alias match
+      3. Alias whole-word substring match (longest alias wins to avoid "fin" → financials for "fintech")
+      4. Canonical whole-word substring match
+      5. Default
     """
     key = sector.strip().lower()
 
@@ -288,12 +303,13 @@ def get_sector_multiples(sector: str) -> SectorMultiples:
     if key in _ALIASES:
         return _MULTIPLES[_ALIASES[key]]
 
-    for alias, canonical in _ALIASES.items():
-        if alias in key or key in alias:
+    # Sort aliases by length descending so longer (more specific) aliases win
+    for alias, canonical in sorted(_ALIASES.items(), key=lambda x: -len(x[0])):
+        if _word_in(alias, key) or _word_in(key, alias):
             return _MULTIPLES[canonical]
 
-    for canonical in _MULTIPLES:
-        if canonical in key or key in canonical:
+    for canonical in sorted(_MULTIPLES.keys(), key=lambda x: -len(x)):
+        if _word_in(canonical, key) or _word_in(key, canonical):
             return _MULTIPLES[canonical]
 
     return _MULTIPLES["default"]

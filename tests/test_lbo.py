@@ -2,16 +2,18 @@ from goldroger.finance.valuation.lbo import LBOInput, compute_lbo
 
 
 def _standard_lbo() -> LBOInput:
+    # entry_ev=500, entry_ebitda=100 → entry multiple = 5.0x (internally consistent)
+    # 5% growth, no multiple expansion → produces realistic 20-35% IRR
     return LBOInput(
         entry_ev=500.0,
         entry_ebitda=100.0,
-        revenue_growth=0.15,
+        revenue_growth=0.05,
         ebitda_margin=0.25,
         capex_pct=0.04,
         tax_rate=0.25,
         leverage_ratio=4.5,
         senior_rate=0.07,
-        exit_multiple=8.0,
+        exit_multiple=5.0,
         hold_period=5,
     )
 

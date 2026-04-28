@@ -68,8 +68,12 @@ def compute_lbo(inp: LBOInput) -> LBOOutput:
 
     leverage_at_entry = entry_debt / inp.entry_ebitda if inp.entry_ebitda > 0 else 0.0
 
-    # Derive implied entry revenue from EV / exit_multiple / margin
-    revenue = (inp.entry_ev / inp.exit_multiple) / inp.ebitda_margin
+    # Derive entry revenue from known entry EBITDA and margin — correct and direct.
+    # (Previous approach used exit_multiple which is only valid when entry == exit multiple.)
+    if inp.ebitda_margin > 0:
+        revenue = inp.entry_ebitda / inp.ebitda_margin
+    else:
+        revenue = inp.entry_ev / max(inp.exit_multiple, 1.0)  # last-resort fallback
     debt = entry_debt
 
     debt_schedule: list[float] = []

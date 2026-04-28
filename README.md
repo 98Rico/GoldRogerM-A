@@ -46,7 +46,7 @@
 
 ---
 
-## Ce qui fonctionne (Phases 1–10)
+## Ce qui fonctionne (Phases 1–11)
 
 ### Données & Sources
 
@@ -355,3 +355,9 @@ uv run python -m pytest tests/ -v
 ✔ Mega-cap : tx comps exclus (poids 0) pour MCap >$500B  
 ✔ Private companies : recommandation ATTRACTIVE / NEUTRAL / EXPENSIVE  
 ✔ Revenue lock dans thesis agent — zéro contradiction inter-sections  
+✔ DCF NWC year-1 correct — `base_revenue` ancre le delta NWC au revenu réel année 0  
+✔ LBO revenue corrigé — `entry_ebitda / ebitda_margin` (plus d'erreur d'arrondi via exit multiple)  
+✔ Scenarios correctement ancrés — les 3 scénarios partagent le même y0 réel, seul le taux de croissance est affecté  
+✔ Aggregator robuste — poids auto-normalisés à 1.0, `blended = mid` (estimateur central sans biais)  
+✔ Sector multiples word-boundary regex — fintech → technology (plus de mismatch "financials")  
+✔ 20 tests unitaires passent — LBO test avec inputs cohérents avec la formule corrigée  

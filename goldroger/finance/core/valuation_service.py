@@ -124,6 +124,15 @@ class ValuationService:
 
         revenue_current = revenue_series[-1]
 
+        # Actual year-0 revenue for correct year-1 NWC delta in DCF
+        base_revenue_y0 = None
+        if market_data and market_data.revenue_history and market_data.revenue_history:
+            base_revenue_y0 = market_data.revenue_history[-1]
+        elif market_data and market_data.revenue_ttm:
+            base_revenue_y0 = market_data.revenue_ttm
+        else:
+            base_revenue_y0 = self._f(financials.get("revenue_current"), None)
+
         ebitda_margin, _ = self._resolve_ebitda_margin(financials, market_data, notes)
         tax_rate = self._resolve_tax_rate(financials, market_data)
         capex_pct = self._resolve_capex_pct(financials, market_data, revenue_current)
@@ -146,6 +155,7 @@ class ValuationService:
             wacc=wacc,
             terminal_growth=terminal_growth,
             da_pct=da_pct,
+            base_revenue=base_revenue_y0,
         )
         dcf_output = compute_dcf(dcf_input)
 
@@ -401,6 +411,13 @@ class ValuationService:
         ):
             net_debt = market_data.net_debt or 0.0
             tax = market_data.effective_tax_rate or 0.25
+            # For net-cash companies (net_debt < 0), D=0 in WACC formula
+            # (excess cash is treated as unlevered balance sheet, not negative leverage)
+            if net_debt < 0:
+                notes.append(
+                    f"Net cash position (net debt ${net_debt:.0f}M) — "
+                    "WACC computed as unlevered (D=0 in weights)."
+                )
             wacc = compute_capm_wacc(
                 beta=market_data.beta,
                 market_cap=market_data.market_cap,
@@ -521,6 +538,7 @@ class ValuationService:
                     wacc=w_c,
                     terminal_growth=g_c,
                     da_pct=base_input.da_pct,
+                    base_revenue=base_input.base_revenue,
                 )
                 row.append(round(compute_dcf(inp).enterprise_value, 1))
             matrix.append(row)

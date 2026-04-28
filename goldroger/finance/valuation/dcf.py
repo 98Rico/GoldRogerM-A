@@ -17,14 +17,15 @@ from typing import List, Optional
 
 @dataclass
 class DCFInput:
-    revenue: List[float]           # projected revenue by year (USD millions)
-    ebitda_margin: float           # decimal, e.g. 0.25
-    tax_rate: float                # decimal, e.g. 0.25
-    capex_pct: float               # CapEx as % of revenue
-    nwc_pct: float                 # NWC as % of revenue (for incremental calc)
-    wacc: float                    # decimal
-    terminal_growth: float         # decimal, long-run FCF growth
-    da_pct: Optional[float] = None # D&A as % of revenue (enables tax shield)
+    revenue: List[float]                 # projected revenue by year (USD millions)
+    ebitda_margin: float                 # decimal, e.g. 0.25
+    tax_rate: float                      # decimal, e.g. 0.25
+    capex_pct: float                     # CapEx as % of revenue
+    nwc_pct: float                       # NWC as % of revenue (for incremental calc)
+    wacc: float                          # decimal
+    terminal_growth: float               # decimal, long-run FCF growth
+    da_pct: Optional[float] = None       # D&A as % of revenue (enables tax shield)
+    base_revenue: Optional[float] = None # actual year-0 revenue for correct NWC delta in year 1
 
 
 @dataclass
@@ -54,7 +55,12 @@ def compute_dcf(inp: DCFInput) -> DCFOutput:
         da_pct = max(0.0, min(da_pct, 0.20))
 
     revenues = inp.revenue
-    prev_rev = revenues[0] / (1 + 0.001)  # approximate prior year
+    # Use actual year-0 base revenue for correct year-1 NWC delta.
+    # Falls back to a 0.1% approximation only when unavailable.
+    if inp.base_revenue and inp.base_revenue > 0:
+        prev_rev = inp.base_revenue
+    else:
+        prev_rev = revenues[0] / (1 + 0.001)
 
     fcf_list: List[float] = []
     discounted: List[float] = []

@@ -118,12 +118,28 @@ def _apply_scenario(
     da_pct: Optional[float],
     weights: dict,
     delta: ScenarioDeltas,
+    y0_revenue: Optional[float] = None,
 ) -> ScenarioResult:
-    # Apply revenue growth delta to each projected year
-    base_growth = (base_revenue[-1] / base_revenue[0]) ** (1 / max(len(base_revenue) - 1, 1)) - 1
+    n_years = len(base_revenue)
+    # Compute base-case CAGR from the projected series
+    if n_years >= 2 and base_revenue[0] > 0:
+        base_growth = (base_revenue[-1] / base_revenue[0]) ** (1 / (n_years - 1)) - 1
+    else:
+        base_growth = 0.08
+
     adj_growth = max(-0.10, base_growth + delta.revenue_growth_delta)
-    base_year = base_revenue[0]
-    adj_revenue = [base_year * (1 + adj_growth) ** i for i in range(1, len(base_revenue) + 1)]
+
+    # Anchor projections from actual year-0 revenue so all scenarios share the same
+    # starting point and the delta affects year-0→year-1 growth, not year-1→year-2.
+    # Fall back to back-calculating year-0 if not provided.
+    if y0_revenue and y0_revenue > 0:
+        anchor = y0_revenue
+    elif base_revenue[0] > 0 and base_growth > -1:
+        anchor = base_revenue[0] / (1 + base_growth)
+    else:
+        anchor = base_revenue[0]
+
+    adj_revenue = [anchor * (1 + adj_growth) ** i for i in range(1, n_years + 1)]
 
     adj_margin = max(0.01, min(base_ebitda_margin + delta.ebitda_margin_delta, 0.80))
     adj_wacc = max(0.05, min(base_wacc + delta.wacc_delta, 0.25))
@@ -138,6 +154,7 @@ def _apply_scenario(
         wacc=adj_wacc,
         terminal_growth=adj_tg,
         da_pct=da_pct,
+        base_revenue=anchor,  # correct year-0 anchor for NWC delta
     )
     dcf_out = compute_dcf(dcf_input)
 
@@ -191,6 +208,7 @@ def run_scenarios(
     da_pct: Optional[float] = None,
     weights: Optional[dict] = None,
     scenarios: Optional[list[ScenarioDeltas]] = None,
+    y0_revenue: Optional[float] = None,
 ) -> ScenariosOutput:
     if weights is None:
         weights = {"dcf": 0.5, "comps": 0.3, "transactions": 0.2}
@@ -202,6 +220,7 @@ def run_scenarios(
             base_revenue, base_ebitda_margin, base_wacc, base_terminal_growth,
             base_comps_low, base_comps_high, base_tx_multiple,
             tax_rate, capex_pct, nwc_pct, da_pct, weights, s,
+            y0_revenue=y0_revenue,
         )
         for s in scenarios
     ]

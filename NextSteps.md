@@ -2,7 +2,7 @@
 
 ---
 
-## ✅ PHASES COMPLÉTÉES (1–10)
+## ✅ PHASES COMPLÉTÉES (1–11)
 
 | Phase | Item | Fichier(s) | Statut |
 |-------|------|-----------|--------|
@@ -59,6 +59,13 @@
 | 9 | JSON retry for Fundamentals + Market agents (5.4 done) | `orchestrator.py` | ✅ |
 | 9 | Private triangulation wired (5.3 done) | `orchestrator.py`, `data/private_triangulation.py` | ✅ |
 | 9 | Live FX rates via yfinance with hardcoded fallback | `finance/core/valuation_service.py` | ✅ |
+| 11 | DCF NWC year-1 fix — `DCFInput.base_revenue` anchors NWC delta to actual year-0 revenue | `finance/valuation/dcf.py`, `finance/core/valuation_service.py`, `finance/core/scenarios.py` | ✅ |
+| 11 | LBO revenue fix — `entry_ebitda / ebitda_margin` (was `(entry_ev / exit_multiple) / ebitda_margin`) | `finance/valuation/lbo.py` | ✅ |
+| 11 | Scenarios year-0 anchor — all 3 scenarios share same y0 actual revenue; delta applies to growth rate not level | `finance/core/scenarios.py` | ✅ |
+| 11 | Aggregator normalization — weights auto-normalize to 1.0; `blended = mid` (was biased average) | `finance/valuation/aggregator.py` | ✅ |
+| 11 | Sector multiples word-boundary fix — `_word_in()` regex prevents "fintech" → "financials" misfires | `data/sector_multiples.py` | ✅ |
+| 11 | WACC net-cash note — logs "unlevered WACC (D=0)" when net_debt < 0 | `finance/core/valuation_service.py` | ✅ |
+| 11 | LBO test updated — `_standard_lbo()` inputs internally consistent with corrected formula (entry 5x, no expansion, 5% growth) | `tests/test_lbo.py` | ✅ |
 
 ---
 
