@@ -179,6 +179,16 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
 
     # ── 0. REAL DATA ──────────────────────────────────────────────────────
     market_data: MarketData | None = None
+    if company_type == "private":
+        t0 = _step("Registry (EU filings)")
+        market_data = DEFAULT_REGISTRY.fetch_by_name(company)
+        if market_data and market_data.revenue_ttm:
+            console.print(f"  [green]Registry[/green] ({market_data.data_source}) Rev=${market_data.revenue_ttm:.0f}M")
+        elif market_data:
+            console.print(f"  [green]Registry[/green] ({market_data.data_source}) partial data")
+        else:
+            console.print("  [dim]No EU registry data found[/dim]")
+        log.end_step("market_data", t0)
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
         ticker = resolve_ticker(company)

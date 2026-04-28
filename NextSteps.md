@@ -44,6 +44,7 @@
 | 8 | **No placeholder values** — DCF/comps/football field skipped when revenue unavailable; `N/A` displayed honestly | `finance/core/valuation_service.py`, `orchestrator.py` | ✅ |
 | 8 | **Optional LLM deps** — `anthropic`/`openai` sont des dependency groups optionnels; install en une commande, erreur claire si manquant | `pyproject.toml`, `agents/llm_client.py` | ✅ |
 | 8 | **`.env.example`** — documentes toutes les variables avec instructions d'activation | `.env.example` | ✅ |
+| 8 | **EU registries câblés pour privées** — `fetch_by_name()` dans DataRegistry, appelé avant LLM agents | `data/registry.py`, `orchestrator.py` | ✅ |
 
 ---
 
@@ -176,7 +177,13 @@ Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de
 
 ---
 
-## 🔴 PRIORITÉ 1c — FinancialModelerAgent : extraction structurée fiable (privées)
+## ✅ PRIORITÉ 1c (partielle) — EU registries câblés pour privées
+
+`DataRegistry.fetch_by_name()` appelle Infogreffe → Companies House → Handelsregister dans l'ordre. Pour Sézane (FR), Infogreffe est testé en premier — si le CA est dans la base, il alimente directement le moteur de valorisation sans passer par le LLM.
+
+---
+
+## 🔴 PRIORITÉ 1d — FinancialModelerAgent : extraction structurée fiable (privées)
 
 **Problème** : pour les sociétés privées, `FinancialModelerAgent` trouve des données réelles via web search (ex : "Sézane €350M de CA en 2023") mais ne les remonte pas systématiquement dans le JSON structuré (`revenue_current`). Résultat : le moteur de valorisation reçoit un champ vide et ne peut pas lancer DCF/comps.
 
@@ -191,6 +198,8 @@ Ajouter un slide de synthèse au PPT pipeline : tableau des cibles avec score de
 **Impact** : une fois ce fix appliqué, Sézane et toute société privée avec des données web disponibles produira un football field complet plutôt qu'un `N/A`.
 
 **Fichiers** : `agents/specialists.py` (FinancialModelerAgent prompt), `orchestrator.py` (appel triangulation), `data/private_triangulation.py` (déjà existant, pas encore câblé)
+
+**Note** : l'EU registry fix (1c) couvre les sociétés avec filings officiels. Ce fix couvre le reste (sociétés sans filings publics, ou hors Europe).
 
 ---
 

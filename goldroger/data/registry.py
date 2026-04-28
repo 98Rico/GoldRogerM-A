@@ -51,6 +51,22 @@ class DataRegistry:
                 continue
         return None
 
+    def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
+        for provider in self._providers:
+            if not provider.is_available():
+                continue
+            fn = getattr(provider, "fetch_by_name", None)
+            if not fn:
+                continue
+            try:
+                data = fn(company_name)
+                if data is not None:
+                    data.data_source = provider.name
+                    return data
+            except Exception:
+                continue
+        return None
+
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         for provider in self._providers:
             if not provider.is_available():

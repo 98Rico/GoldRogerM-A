@@ -119,8 +119,8 @@ Les 6 dimensions sont maintenant dérivées des outputs agents, pas neutres à 5
 Pour une société privée :
 1. **yfinance** → None (pas de ticker)
 2. **Crunchbase** → revenue range estimé si `CRUNCHBASE_API_KEY` set
-3. **EU Registries** → Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪 — revenus officiels si disponibles
-4. **FinancialModelerAgent** → web search pour revenus/marges (presse, rapports, etc.), taggé `estimated`
+3. **EU Registries** → Infogreffe 🇫🇷, Companies House 🇬🇧, Handelsregister 🇩🇪 — revenus officiels via `fetch_by_name()`, testés **avant** le LLM
+4. **FinancialModelerAgent** → web search pour revenus/marges (presse, rapports, etc.), taggé `estimated` — fallback si registre vide
 5. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
 6. **Valuation** :
    - Si revenus trouvés → DCF + comps peers réels + bear/base/bull
