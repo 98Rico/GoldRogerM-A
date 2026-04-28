@@ -44,6 +44,10 @@
 
 **Objectif** : produire une analyse meilleure qu'un analyste M&A humain sur toutes les tâches qu'on lui confie.
 
+**Scope** : M&A européen en priorité (Companies House, Infogreffe, Handelsregister = sources gratuites critiques), architecture globale dès le départ. Toutes tailles de deal.
+
+**LLM** : Mistral actuellement (gratuit). Architecture LLM-agnostique à implémenter — même pattern que `DataRegistry` — pour switcher entre Mistral, Claude, GPT-4o via env var ou bouton UI sans toucher au code agent.
+
 Ce que l'outil bat déjà un analyste sur :
 - Vitesse (minutes vs jours)
 - Cohérence (même structure, zéro biais d'ancrage)
@@ -114,16 +118,19 @@ Valeur ajoutée M&A : précédent transactions database, private company financi
 
 L'architecture `DataProvider` / `DataRegistry` est en place. Ce qui manque :
 
-### Sources gratuites / freemium à connecter en priorité
-| Source | Données | API |
-|--------|---------|-----|
-| **Companies House (UK)** | Comptes annuels, directeurs, capital | Gratuit REST |
-| **INSEE / Infogreffe (FR)** | CA déclaré, effectifs, bilans | Gratuit |
-| **Handelsregister (DE)** | Comptes annuels GmbH/AG | Gratuit |
-| **Dealroom** | Startups EU, funding, revenus estimés | Freemium |
-| **SimilarWeb** | Trafic web, canaux, géos | Freemium |
-| **LinkedIn (via proxy)** | Headcount, croissance, offres d'emploi | Scraping indirect |
-| **OpenCorporates** | Données légales 140+ pays | Freemium |
+### Sources gratuites / freemium à connecter en priorité (Europe-first, global-ready)
+| Source | Pays | Données | API |
+|--------|------|---------|-----|
+| **Companies House** | 🇬🇧 UK | Comptes annuels, directeurs, capital | Gratuit REST |
+| **Infogreffe / INSEE** | 🇫🇷 FR | CA déclaré, effectifs, bilans | Gratuit |
+| **Handelsregister** | 🇩🇪 DE | Comptes annuels GmbH/AG | Gratuit |
+| **KVK (Kamer van Koophandel)** | 🇳🇱 NL | Comptes, directeurs | Freemium |
+| **Registro Mercantil** | 🇪🇸 ES | Comptes annuels | Gratuit |
+| **Dealroom** | 🌍 EU | Startups, funding, revenus estimés | Freemium |
+| **SimilarWeb** | 🌍 Global | Trafic web, canaux, géos | Freemium |
+| **LinkedIn (via proxy)** | 🌍 Global | Headcount, croissance, offres d'emploi | Scraping indirect |
+| **OpenCorporates** | 🌍 140+ pays | Données légales, filings | Freemium |
+| **SEC EDGAR** | 🇺🇸 US | 10-K, 10-Q, revenus officiels | Gratuit (déjà intégré) |
 
 ### Sources premium (stubs à implémenter)
 | Source | Valeur M&A |
@@ -246,6 +253,32 @@ Pour LVMH, Berkshire, Alphabet — détecter multi-segment et proposer SOTP auto
 - NLP pour extraire : acquéreur, cible, secteur, EV, multiple (EV/EBITDA ou EV/Revenue), date
 - Base locale JSON mise à jour à chaque run
 - Alimente directement la méthode "Transactions" du DCF avec de vraies données récentes
+
+## 🟡 PRIORITÉ 3c — Architecture LLM-agnostique
+
+**Contexte** : l'outil tourne sur Mistral (gratuit). Pour la qualité d'analyse (thesis, jugement, DD), Claude Opus ou GPT-4o sont significativement meilleurs. Le switch doit se faire via une variable d'environnement ou un bouton UI — sans toucher au code agent.
+
+**Pattern** : même architecture que `DataRegistry` — un `LLMRegistry` avec providers prioritaires.
+
+```python
+# .env
+LLM_PROVIDER=mistral        # gratuit, défaut
+LLM_PROVIDER=anthropic      # Claude Sonnet/Opus — meilleure qualité thesis
+LLM_PROVIDER=openai         # GPT-4o
+LLM_PROVIDER=ollama         # local, offline
+
+# CLI
+uv run python -m goldroger.cli --company "NVIDIA" --llm claude
+```
+
+**À implémenter** :
+- `agents/llm_registry.py` : `LLMProvider` abstract class, `build_default_llm()` lit `LLM_PROVIDER` env var
+- Providers : `MistralProvider` (existant), `AnthropicProvider`, `OpenAIProvider`, `OllamaProvider`
+- `BaseAgent` reçoit un `LLMProvider` au lieu d'un `Mistral` client hardcodé
+- Chaque agent peut overrider son provider (ex : `ReportWriterAgent` préfère Claude pour la qualité rédactionnelle)
+- Le `--llm` flag CLI overrides `LLM_PROVIDER` pour un run spécifique
+
+**Fichiers** : `agents/llm_registry.py` (nouveau), `agents/base.py` (refactor client), `cli.py` (flag `--llm`)
 
 ## 🟢 PRIORITÉ 4 — Productisation SaaS
 

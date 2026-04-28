@@ -222,9 +222,23 @@ L'objectif est de produire une analyse meilleure qu'un analyste M&A humain sur t
 
 Le registre `DataRegistry` est conçu pour que n'importe quelle source soit connectable en 30 minutes sans toucher au moteur de valorisation. Priorité d'exécution : Bloomberg → CapIQ → Refinitiv → yfinance → Crunchbase → EDGAR.
 
-Sources gratuites/freemium à connecter prochainement : Companies House (UK), Infogreffe (FR), Dealroom (EU startups), SimilarWeb (web traffic), OpenCorporates (140+ pays).
+**Europe-first, global-ready** : Companies House (UK), Infogreffe (FR), Handelsregister (DE) sont les prochaines sources prioritaires — données officielles gratuites pour les sociétés privées européennes. Architecture identique pour ajouter KVK (NL), Registro Mercantil (ES), OpenCorporates (140+ pays).
 
 Sources premium (stubs prêts) : PitchBook, Mergermarket, Dealogic, Preqin.
+
+## LLM-Agnostique
+
+L'outil tourne sur Mistral (gratuit) par défaut. Changer de modèle via env var ou flag CLI — sans modifier le code :
+
+```bash
+# Via .env
+LLM_PROVIDER=anthropic   # Claude Opus — meilleure qualité thesis/DD
+
+# Via CLI (override pour un run)
+uv run python -m goldroger.cli --company "NVIDIA" --llm claude
+```
+
+Providers supportés (à venir) : Mistral (défaut), Anthropic (Claude), OpenAI (GPT-4o), Ollama (local/offline). Chaque agent peut avoir son provider préféré — ex. `ReportWriterAgent` préfère Claude pour la qualité rédactionnelle.
 
 ## Règle Absolue
 
