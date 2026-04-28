@@ -111,6 +111,7 @@ def main():
     parser.add_argument("--pptx", action="store_true", help="Generate PowerPoint deck")
     parser.add_argument("--outdir", default="outputs", help="Output directory for files")
     parser.add_argument("--quick", action="store_true", help="Skip web search in pipeline (faster, uses training knowledge)")
+    parser.add_argument("--llm", default=None, help="LLM provider: mistral (default), anthropic, openai")
     args = parser.parse_args()
 
     try:
@@ -120,7 +121,7 @@ def main():
                 "Premium beauty and wellness; high-growth founder-led private companies in Europe; "
                 "skincare, wellness, premium personal care; younger consumers; DTC"
             )
-            result = run_pipeline(buyer=buyer, focus=focus, quick=args.quick)
+            result = run_pipeline(buyer=buyer, focus=focus, quick=args.quick, llm=args.llm)
             console.print(Panel(
                 f"[bold]{buyer}[/]\n{focus}\n\nTargets: {len(result.targets)}",
                 title="[bold cyan]Pipeline Summary[/]",
@@ -132,6 +133,7 @@ def main():
                 args.type,
                 acquirer=args.acquirer,
                 objective=args.objective,
+                llm=args.llm,
             )
             console.print(Panel(
                 f"[bold]{result.company}[/] ({result.company_type})\n"
@@ -143,7 +145,7 @@ def main():
                 border_style="cyan",
             ))
         else:
-            result = run_analysis(args.company, args.type)
+            result = run_analysis(args.company, args.type, llm=args.llm)
             print_result(result)
 
         if args.output:

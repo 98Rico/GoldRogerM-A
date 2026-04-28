@@ -164,7 +164,7 @@ class ValuationEngineAgent(BaseAgent):
     """
 
     name = "ValuationEngine"
-    model = "mistral-large-latest"
+    model_tier = "large"
     max_tokens = 2000
     use_tools = False  # all data already in context, no web search needed
 
@@ -219,7 +219,7 @@ Return JSON:
 class ReportWriterAgent(BaseAgent):
     """Agent 5 — Investment thesis, scenarios, catalysts."""
     name = "ReportWriter"
-    model = "mistral-large-latest"
+    model_tier = "large"
     max_tokens = 2048
     use_tools = False  # synthesizes from prior agent outputs, no web search needed
 
@@ -266,7 +266,7 @@ class DealSourcingAgent(BaseAgent):
     """M&A — Identify targets, partnerships, divestitures, expansion plays."""
 
     name = "DealSourcing"
-    model = "mistral-small-latest"
+    model_tier = "small"
     max_tokens = 2200
 
     def _system_prompt(self) -> str:
@@ -305,7 +305,7 @@ class StrategicFitAgent(BaseAgent):
     """M&A — Strategic fit, synergies, integration risk, deal structure."""
 
     name = "StrategicFit"
-    model = "mistral-large-latest"
+    model_tier = "large"
     max_tokens = 2200
 
     def _system_prompt(self) -> str:
@@ -343,7 +343,7 @@ class DueDiligenceAgent(BaseAgent):
     """M&A — Diligence support: requests, red flags, value drivers."""
 
     name = "DueDiligence"
-    model = "mistral-large-latest"
+    model_tier = "large"
     max_tokens = 2200
 
     def _system_prompt(self) -> str:
@@ -381,7 +381,7 @@ class DealExecutionAgent(BaseAgent):
     """M&A — Execution support: memo, negotiation, approvals, process."""
 
     name = "DealExecution"
-    model = "mistral-small-latest"
+    model_tier = "small"
     max_tokens = 2000
     use_tools = False
 
@@ -418,7 +418,7 @@ class LBOAgent(BaseAgent):
     """M&A — High-level LBO feasibility & IRR ranges (when relevant)."""
 
     name = "LBO"
-    model = "mistral-large-latest"
+    model_tier = "large"
     max_tokens = 2000
     use_tools = False
 
@@ -449,7 +449,7 @@ class PipelineBuilderAgent(BaseAgent):
     """M&A — Build an acquisition pipeline (targets + private valuation estimates)."""
 
     name = "PipelineBuilder"
-    model = "mistral-small-latest"
+    model_tier = "small"
     max_tokens = 3000
 
     def _system_prompt(self) -> str:

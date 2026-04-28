@@ -37,6 +37,9 @@
 | 6 | **run_pipeline / run_ma_analysis imported in CLI** (NameError fix) | `cli.py` | ✅ |
 | 6 | **Football field unit bug** (EV passed as multiple → absurd values) | `orchestrator.py` | ✅ |
 | 6 | **Agent speed** — rate gap 3s→1s, tool rounds 6→3, synthesis agents no web search | `agents/base.py`, `specialists.py` | ✅ |
+| 7 | **LLM-agnostic architecture** — Mistral/Anthropic/OpenAI via `--llm` flag | `agents/llm_client.py`, `agents/providers/` | ✅ |
+| 7 | **EU registries** — Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪 | `data/providers/` | ✅ |
+| 7 | **Private triangulation engine** — 5-signal weighted median estimate | `data/private_triangulation.py` | ✅ |
 
 ---
 
@@ -118,12 +121,12 @@ Valeur ajoutée M&A : précédent transactions database, private company financi
 
 L'architecture `DataProvider` / `DataRegistry` est en place. Ce qui manque :
 
-### Sources gratuites / freemium à connecter en priorité (Europe-first, global-ready)
+### Sources gratuites / freemium intégrées ✅ ou à connecter
 | Source | Pays | Données | API |
 |--------|------|---------|-----|
-| **Companies House** | 🇬🇧 UK | Comptes annuels, directeurs, capital | Gratuit REST |
-| **Infogreffe / INSEE** | 🇫🇷 FR | CA déclaré, effectifs, bilans | Gratuit |
-| **Handelsregister** | 🇩🇪 DE | Comptes annuels GmbH/AG | Gratuit |
+| **Companies House** | 🇬🇧 UK | Comptes annuels, SIC, statut | Gratuit REST | ✅ intégré |
+| **Infogreffe / INSEE** | 🇫🇷 FR | CA déclaré, effectifs, bilans | Gratuit | ✅ intégré |
+| **Handelsregister** | 🇩🇪 DE | Comptes annuels GmbH/AG | Gratuit | ✅ intégré |
 | **KVK (Kamer van Koophandel)** | 🇳🇱 NL | Comptes, directeurs | Freemium |
 | **Registro Mercantil** | 🇪🇸 ES | Comptes annuels | Gratuit |
 | **Dealroom** | 🌍 EU | Startups, funding, revenus estimés | Freemium |
@@ -271,14 +274,9 @@ LLM_PROVIDER=ollama         # local, offline
 uv run python -m goldroger.cli --company "NVIDIA" --llm claude
 ```
 
-**À implémenter** :
-- `agents/llm_registry.py` : `LLMProvider` abstract class, `build_default_llm()` lit `LLM_PROVIDER` env var
-- Providers : `MistralProvider` (existant), `AnthropicProvider`, `OpenAIProvider`, `OllamaProvider`
-- `BaseAgent` reçoit un `LLMProvider` au lieu d'un `Mistral` client hardcodé
-- Chaque agent peut overrider son provider (ex : `ReportWriterAgent` préfère Claude pour la qualité rédactionnelle)
-- Le `--llm` flag CLI overrides `LLM_PROVIDER` pour un run spécifique
+**✅ Implémenté** : `agents/llm_client.py` + `agents/providers/` (Mistral, Anthropic, OpenAI). `BaseAgent` est maintenant provider-agnostique.
 
-**Fichiers** : `agents/llm_registry.py` (nouveau), `agents/base.py` (refactor client), `cli.py` (flag `--llm`)
+À ajouter : `OllamaProvider` (local/offline), per-agent provider override (ex: ReportWriter → Claude systématiquement).
 
 ## 🟢 PRIORITÉ 4 — Productisation SaaS
 

@@ -26,10 +26,8 @@ Pipeline flow:
 """
 from __future__ import annotations
 
-import os
 import time
 from dotenv import load_dotenv
-from mistralai.client import Mistral
 from rich.console import Console
 from pydantic import BaseModel
 
@@ -58,6 +56,7 @@ from .data.comparables import (
     resolve_peer_tickers,
     PeerMultiples,
 )
+from .agents.llm_client import LLMProvider, build_llm_provider
 from .data.registry import DEFAULT_REGISTRY
 from .finance.core.scenarios import run_scenarios, ScenariosOutput
 from .ma.scoring import score_from_ma_agents
@@ -157,19 +156,16 @@ def _done(name: str, start: float) -> float:
     return elapsed
 
 
-def _client() -> Mistral:
-    api_key = os.getenv("MISTRAL_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing MISTRAL_API_KEY")
-    return Mistral(api_key=api_key)
+def _client(llm_override: str | None = None) -> LLMProvider:
+    return build_llm_provider(llm_override)
 
 
 # ─────────────────────────────────────────────
 # EQUITY PIPELINE
 # ─────────────────────────────────────────────
-def run_analysis(company: str, company_type: str = "public") -> AnalysisResult:
+def run_analysis(company: str, company_type: str = "public", llm: str | None = None) -> AnalysisResult:
     log = new_run(company, company_type)
-    client = _client()
+    client = _client(llm)
     svc = ValuationService()
 
     data_agent = DataCollectorAgent(client)
@@ -511,9 +507,10 @@ def run_ma_analysis(
     acquirer: str = "",
     company_type: str = "public",
     objective: str = "",
+    llm: str | None = None,
 ) -> MAResult:
     log = new_run(target, company_type)
-    client = _client()
+    client = _client(llm)
     svc = ValuationService()
 
     sourcing_agent = DealSourcingAgent(client)
@@ -683,9 +680,10 @@ def run_pipeline(
     focus: str = "",
     company_type: str = "private",
     quick: bool = False,
+    llm: str | None = None,
 ) -> AcquisitionPipeline:
     log = new_run(buyer, "pipeline")
-    client = _client()
+    client = _client(llm)
 
     pipeline_agent = PipelineBuilderAgent(client)
 

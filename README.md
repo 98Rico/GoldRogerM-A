@@ -54,7 +54,10 @@
 |--------|--------------|---------|
 | **yfinance** | Toujours (gratuit) | Prix, beta, marges, EV, forward estimates |
 | **SEC EDGAR** | Toujours (gratuit) | Revenus annuels US (10-K) |
-| **Crunchbase** | Si `CRUNCHBASE_API_KEY` (freemium) | Revenus estimés, funding, headcount (startups/privées) |
+| **Companies House** | Toujours (gratuit, 🇬🇧) | Comptes annuels, SIC, statut |
+| **Infogreffe** | Toujours (gratuit, 🇫🇷) | CA déclaré, résultat, code NAF |
+| **Handelsregister** | Toujours (gratuit, 🇩🇪) | Profil société, Bundesanzeiger best-effort |
+| **Crunchbase** | Si `CRUNCHBASE_API_KEY` (freemium) | Revenus estimés, funding, headcount |
 | **Web Search** | Toujours (DuckDuckGo) | Données privées, presse, rapports |
 | **Bloomberg BLP** | Si `BLOOMBERG_API_KEY` | Tout (temps réel, privé, M&A comps) |
 | **Capital IQ** | Si `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD` | M&A comps, transactions, private |
@@ -222,7 +225,7 @@ L'objectif est de produire une analyse meilleure qu'un analyste M&A humain sur t
 
 Le registre `DataRegistry` est conçu pour que n'importe quelle source soit connectable en 30 minutes sans toucher au moteur de valorisation. Priorité d'exécution : Bloomberg → CapIQ → Refinitiv → yfinance → Crunchbase → EDGAR.
 
-**Europe-first, global-ready** : Companies House (UK), Infogreffe (FR), Handelsregister (DE) sont les prochaines sources prioritaires — données officielles gratuites pour les sociétés privées européennes. Architecture identique pour ajouter KVK (NL), Registro Mercantil (ES), OpenCorporates (140+ pays).
+**Europe-first, global-ready** : Companies House (UK), Infogreffe (FR), Handelsregister (DE) sont intégrés — données officielles gratuites pour les sociétés privées européennes. Architecture identique pour ajouter KVK (NL), Registro Mercantil (ES), OpenCorporates (140+ pays).
 
 Sources premium (stubs prêts) : PitchBook, Mergermarket, Dealogic, Preqin.
 

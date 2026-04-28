@@ -1,17 +1,21 @@
 """
-Base agent — wraps Mistral AI API with web_search tool + retry logic.
+Base agent — provider-agnostic LLM wrapper with web_search tool + retry logic.
 All specialized agents inherit from this.
+
+Switch providers via LLM_PROVIDER env var or --llm CLI flag:
+    LLM_PROVIDER=mistral    (default, free)
+    LLM_PROVIDER=anthropic  (Claude — better thesis/DD quality)
+    LLM_PROVIDER=openai     (GPT-4o)
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 import time
 
 import httpx
 from dotenv import load_dotenv
-from mistralai.client import Mistral
+
+from .llm_client import LLMProvider, build_llm_provider
 
 load_dotenv()
 
@@ -204,23 +208,17 @@ def _execute_web_search(query: str) -> str:
 
 class BaseAgent:
     name: str = "BaseAgent"
-    model: str = "mistral-small-latest"
+    model_tier: str = "small"   # "small" or "large" — resolved per provider
     max_tokens: int = 2048
     max_retries: int = 3
-    max_tool_rounds: int = 3  # max web_search iterations per call
-    use_tools: bool = True    # set False for synthesis-only agents (no web search)
+    max_tool_rounds: int = 3    # max web_search iterations per call
+    use_tools: bool = True      # False for synthesis-only agents
 
-    def __init__(self, client: Mistral | None = None):
+    def __init__(self, client: LLMProvider | None = None):
         if client is not None:
-            self.client = client
-            return
-
-        api_key = os.getenv("MISTRAL_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "Missing `MISTRAL_API_KEY`. Set it in your environment or in a local `.env` file."
-            )
-        self.client = Mistral(api_key=api_key)
+            self._llm = client
+        else:
+            self._llm = build_llm_provider()
 
     def _system_prompt(self) -> str:
         raise NotImplementedError
@@ -247,71 +245,37 @@ class BaseAgent:
             {"role": "user", "content": self._user_prompt(company, company_type, context)},
         ]
 
-        _tools_kwargs = (
-            {"tools": [WEB_SEARCH_TOOL], "tool_choice": "auto"}
-            if self.use_tools else {}
-        )
+        tools = [WEB_SEARCH_TOOL] if self.use_tools else None
+        model = self._llm.resolve_model(self.model_tier)
 
         for attempt in range(self.max_retries + 1):
             try:
                 _rate_limit_wait()
-                response = self.client.chat.complete(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
+                response = self._llm.complete(
                     messages=messages,
-                    timeout_ms=60_000,
-                    **_tools_kwargs,
+                    model=model,
+                    max_tokens=self.max_tokens,
+                    tools=tools,
                 )
 
                 tool_rounds = 0
-                while (
-                    response.choices[0].finish_reason == "tool_calls"
-                    and tool_rounds < self.max_tool_rounds
-                ):
+                while response.wants_tool and tool_rounds < self.max_tool_rounds:
                     tool_rounds += 1
-                    msg = response.choices[0].message
+                    messages.append(self._llm.format_assistant_with_tools(response))
 
-                    # Append assistant turn with its tool call requests
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": msg.content or "",
-                            "tool_calls": [
-                                {
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc.function.name,
-                                        "arguments": tc.function.arguments,
-                                    },
-                                }
-                                for tc in (msg.tool_calls or [])
-                            ],
-                        }
-                    )
-
-                    # Execute each tool call and append results
-                    for tc in msg.tool_calls or []:
-                        args = json.loads(tc.function.arguments)
-                        result = _execute_web_search(args.get("query", ""))
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tc.id,
-                                "content": result,
-                            }
-                        )
+                    for tc in response.tool_calls:
+                        result = _execute_web_search(tc.arguments.get("query", ""))
+                        messages.append(self._llm.format_tool_result(tc.id, result))
 
                     _rate_limit_wait()
-                    response = self.client.chat.complete(
-                        model=self.model,
-                        max_tokens=self.max_tokens,
+                    response = self._llm.complete(
                         messages=messages,
-                        timeout_ms=60_000,
-                        **_tools_kwargs,
+                        model=model,
+                        max_tokens=self.max_tokens,
+                        tools=tools,
                     )
 
-                return response.choices[0].message.content or ""
+                return response.content
 
             except Exception as exc:
                 exc_str = str(exc).lower()
