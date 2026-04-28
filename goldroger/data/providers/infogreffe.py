@@ -85,15 +85,14 @@ class InfogreffeProvider(DataProvider):
             if not results:
                 return None
 
-            # Pick best match by name similarity
-            best = None
-            for r in results:
-                name = r.get("denominationsociale", "")
-                if any(v.lower() in name.lower() for v in queries_to_try if v):
-                    best = r
-                    break
-            if not best:
-                best = results[0]
+            # Pick best match by fuzzy name similarity
+            from goldroger.data.name_resolver import fuzzy_best_match
+            candidate_names = [r.get("denominationsociale", "") for r in results]
+            matched_name = fuzzy_best_match(company_name, candidate_names, threshold=0.6)
+            best = next(
+                (r for r in results if r.get("denominationsociale") == matched_name),
+                results[0],
+            )
 
             # Revenue: netsales is in thousands of euros — convert to USD millions
             netsales_k_eur = best.get("netsales")

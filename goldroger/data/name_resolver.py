@@ -14,6 +14,7 @@ Resolution order:
 """
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -52,6 +53,19 @@ def _normalize(name: str) -> str:
     name = _LEGAL_SUFFIXES.sub("", name)
     name = re.sub(r"\s+", " ", name).strip()
     return name.upper()
+
+
+def fuzzy_best_match(query: str, candidates: list[str], threshold: float = 0.75) -> Optional[str]:
+    """Return the best fuzzy match from candidates if score >= threshold, else None."""
+    if not candidates:
+        return None
+    q = _normalize(query)
+    scored = [
+        (difflib.SequenceMatcher(None, q, _normalize(c)).ratio(), c)
+        for c in candidates
+    ]
+    best_score, best = max(scored, key=lambda x: x[0])
+    return best if best_score >= threshold else None
 
 
 def _crunchbase_slug(name: str) -> str:

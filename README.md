@@ -46,7 +46,7 @@
 
 ---
 
-## Ce qui fonctionne (Phases 1–8)
+## Ce qui fonctionne (Phases 1–9)
 
 ### Données & Sources
 
@@ -57,6 +57,8 @@
 | **Companies House** | Toujours (gratuit, 🇬🇧) | Comptes annuels, SIC, statut |
 | **Infogreffe** | Toujours (gratuit, 🇫🇷) | CA déclaré, résultat, code NAF |
 | **Handelsregister** | Toujours (gratuit, 🇩🇪) | Profil société, Bundesanzeiger best-effort |
+| **KVK** | Toujours (gratuit, 🇳🇱) | Comptes, secteur SBI |
+| **Registro Mercantil** | Toujours (gratuit, 🇪🇸) | Comptes annuels BORME |
 | **Crunchbase** | Si `CRUNCHBASE_API_KEY` (freemium) | Revenus estimés, funding, headcount |
 | **Web Search** | Toujours (DuckDuckGo) | Données privées, presse, rapports |
 | **Bloomberg BLP** | Si `BLOOMBERG_API_KEY` | Tout (temps réel, privé, M&A comps) |
@@ -65,7 +67,7 @@
 
 Pour activer Bloomberg/CapIQ/Crunchbase : ajouter les variables dans `.env`.
 
-> ⚠️ **Note** : Les taux de change EUR/GBP/CHF/CAD sont actuellement **codés en dur** dans `valuation_service.py` (`_FX` dict). Ils doivent être remplacés par des taux live via yfinance (`EURUSD=X`, `GBPUSD=X`, etc.) pour des analyses précises — voir NextSteps 5.1.
+> **Note** : Les taux de change EUR/GBP/CHF/CAD sont récupérés **live via yfinance** (`EURUSD=X`, etc.) avec fallback hardcoded si yfinance indisponible.
 
 ### Data Provider Registry
 
@@ -232,7 +234,7 @@ Le registre `DataRegistry` est conçu pour que n'importe quelle source soit conn
 
 **Name Resolver** : pour les sociétés privées, `data/name_resolver.py` traduit automatiquement le nom commercial vers l'identifiant correct par source (raison sociale Infogreffe, registered name Companies House, slug Crunchbase, etc.) via LLM one-shot + normalisation accents/suffixes légaux.
 
-**Europe-first, global-ready** : Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪 intégrés. Architecture identique pour KVK (NL), Registro Mercantil (ES), OpenCorporates (140+ pays).
+**Europe-first, global-ready** : Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪, KVK 🇳🇱, Registro Mercantil 🇪🇸 intégrés. Architecture identique pour OpenCorporates (140+ pays).
 
 Sources premium (stubs prêts) : PitchBook, Mergermarket, Dealogic, Preqin.
 
@@ -344,3 +346,8 @@ uv run python -m pytest tests/ -v
 ✔ Name Resolver — identifiants légaux corrects par source  
 ✔ No placeholder values — N/A honnête plutôt que données fabriquées  
 ✔ Football field fonctionnel pour sociétés privées (revenue fallback)  
+✔ KVK 🇳🇱 + Registro Mercantil 🇪🇸 intégrés  
+✔ Fuzzy name matching (difflib) dans Infogreffe + Companies House  
+✔ SOTP auto-detect pour conglomérats (segments → compute_sotp)  
+✔ Scenario narratives Bear/Base/Bull  
+✔ Live FX rates via yfinance  

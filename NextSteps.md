@@ -46,6 +46,14 @@
 | 8 | Name Resolver — LLM one-shot → identifiants légaux par source + normalisation | `data/name_resolver.py` | ✅ |
 | 8 | Revenue fallback — si null après 2 LLM attempts → appel ciblé → football field débloqué | `orchestrator.py` | ✅ |
 | 8 | FinancialModelerAgent prompt renforcé — revenue_current NEVER null si données trouvées | `agents/specialists.py` | ✅ |
+| 9 | KVK 🇳🇱 provider (free, `api.kvk.nl`) — sector from SBI code | `data/providers/kvk.py` | ✅ |
+| 9 | Registro Mercantil 🇪🇸 provider (BORME + cif.es fallback) | `data/providers/registro_mercantil.py` | ✅ |
+| 9 | Fuzzy name matching (difflib) — `fuzzy_best_match()` in name_resolver, used by Infogreffe + Companies House | `data/name_resolver.py`, providers | ✅ |
+| 9 | SOTP auto-detect — keyword detection → LLM segment split → `compute_sotp()` → ValuationMethod | `orchestrator.py`, `finance/valuation/sotp.py` | ✅ |
+| 9 | Scenario narratives wired — bear/base/bull.narrative from thesis agent | `orchestrator.py`, `models/__init__.py` | ✅ |
+| 9 | JSON retry for Fundamentals + Market agents (5.4 done) | `orchestrator.py` | ✅ |
+| 9 | Private triangulation wired (5.3 done) | `orchestrator.py`, `data/private_triangulation.py` | ✅ |
+| 9 | Live FX rates via yfinance with hardcoded fallback | `finance/core/valuation_service.py` | ✅ |
 
 ---
 
@@ -110,8 +118,8 @@ Architecture `DataProvider` / `DataRegistry` en place — chaque source = 1 fich
 | Handelsregister 🇩🇪 | DE | Comptes GmbH/AG | ✅ intégré |
 | SEC EDGAR 🇺🇸 | US | 10-K revenues | ✅ intégré |
 | Crunchbase | Global | Funding, revenus estimés | ✅ intégré |
-| KVK 🇳🇱 | NL | Comptes, directeurs | ⬜ à connecter |
-| Registro Mercantil 🇪🇸 | ES | Comptes annuels | ⬜ à connecter |
+| KVK 🇳🇱 | NL | Comptes, directeurs | ✅ intégré |
+| Registro Mercantil 🇪🇸 | ES | Comptes annuels | ✅ intégré |
 | Dealroom | EU | Startups, funding | ⬜ freemium |
 | SimilarWeb | Global | Trafic web | ⬜ freemium |
 | OpenCorporates | 140+ pays | Données légales | ⬜ freemium |
@@ -120,48 +128,40 @@ Architecture `DataProvider` / `DataRegistry` en place — chaque source = 1 fich
 
 ---
 
-## 🔴 PRIORITÉ 3 — Triangulation privée systématique
+## ✅ PRIORITÉ 3 — Triangulation privée systématique
 
-`data/private_triangulation.py` est **construit** (Phase 7) mais **pas encore câblé** dans le flow orchestrateur.
+`data/private_triangulation.py` est **câblé** dans l'orchestrateur (Phase 9). Après revenue fallback LLM → si toujours null → `triangulate_revenue()` (médiane pondérée multi-signaux).
 
 Signaux implémentés : EU registry, Crunchbase range, headcount × benchmark, funding ARR proxy, press NLP.
 Signaux manquants : SimilarWeb traffic, LinkedIn headcount live, transaction comps scraping.
 
-**À faire** : appeler `triangulate_revenue()` depuis `orchestrator.py` pour les sociétés privées, en complément du revenue fallback actuel. La triangulation donne une estimation plus robuste (médiane pondérée multi-signaux) vs un seul appel LLM.
-
-**Fichiers** : `data/private_triangulation.py` (existant), `orchestrator.py` (câblage)
-
 ---
 
-## 🔴 PRIORITÉ 4 — Name Resolution : améliorer la précision
+## ✅ PRIORITÉ 4 — Name Resolution : précision améliorée
 
-Le resolver actuel (Phase 8) normalise bien le nom commercial → identifiant par source. Améliorations :
-- Fuzzy matching sur les résultats retournés par le registry (score similarité > 0.8 au lieu de `LIKE "%name%"`)
-- Enrichir le prompt LLM pour demander la **raison sociale exacte** (ex : "SEZANE SAS" pas juste "SEZANE")
-- Ajouter SIRET/SIREN lookup pour Infogreffe (recherche plus précise que dénomination)
+- ✅ Fuzzy matching `difflib.SequenceMatcher` (score ≥ 0.6) — `fuzzy_best_match()` utilisé par Infogreffe et Companies House pour sélectionner le meilleur résultat parmi les candidats du registry
+- Prompt LLM demande déjà la raison sociale exacte par source (infogreffe_query, companies_house_query, etc.)
+- ⬜ SIRET/SIREN lookup pour Infogreffe (recherche plus précise que dénomination seule)
 
 ---
 
 ## 🟡 PRIORITÉ 5 — Qualité Engine
 
-### 5.1 Taux de change live ⚠️ BUG CONNU
-Les taux EUR/GBP/CHF/CAD sont **hardcodés** dans `finance/core/valuation_service.py` (`_FX` dict).
-Fix : `yf.Ticker("EURUSD=X").fast_info["last_price"]` avec fallback sur hardcoded. Tagguer `fx_source`.
+### ✅ 5.1 Taux de change live
+`_live_fx()` dans `ValuationService` — `yf.Ticker("EURUSD=X")` etc. avec cache en mémoire et fallback hardcoded.
 
 ### 5.2 Transaction comps sans CapIQ
 Actuellement : multiple sectoriel par défaut — non ancré sur de vraies transactions.
 Fix : `TransactionCompsAgent` — scrape press releases M&A → NLP → base JSON locale.
 
-### 5.3 SOTP pour conglomérats
-Implémenté (`finance/valuation/sotp.py`) mais pas câblé dans `run_analysis`.
-Fix : détecter multi-segment (LVMH, Berkshire, Alphabet) → proposer SOTP automatiquement.
+### ✅ 5.3 SOTP pour conglomérats
+Câblé dans `run_analysis` : détection par mots-clés ("segment", "division", "business unit", etc.) → LLM extrait les segments → `compute_sotp()` → `ValuationMethod("SOTP")` ajouté.
 
-### 5.4 Retry JSON pour tous les agents
-`_parse_with_retry()` existe mais câblé uniquement pour Financials et Assumptions.
-Fix : étendre à Market, Fundamentals, Thesis, M&A agents dans `orchestrator.py`.
+### ✅ 5.4 Retry JSON pour tous les agents
+`_parse_with_retry()` câblé pour Fundamentals, Market, Financials, Assumptions.
 
-### 5.5 Scenario narratives
-Les scénarios Bear/Base/Bull sont numériques. Ajouter 1–2 phrases narratives par scénario depuis le thesis agent.
+### ✅ 5.5 Scenario narratives
+`ScenarioSummary.narrative` wired depuis `thesis.bear_case` / `base_case` / `bull_case`.
 
 ---
 

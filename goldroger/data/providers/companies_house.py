@@ -68,11 +68,16 @@ class CompaniesHouseProvider(DataProvider):
         if not data:
             return None
         items = data.get("items", [])
-        for item in items:
-            title = item.get("title", "").lower()
-            if company_name.lower() in title:
-                return item.get("company_number")
-        return items[0].get("company_number") if items else None
+        if not items:
+            return None
+        from goldroger.data.name_resolver import fuzzy_best_match
+        candidate_names = [item.get("title", "") for item in items]
+        matched = fuzzy_best_match(company_name, candidate_names, threshold=0.6)
+        best = next(
+            (item for item in items if item.get("title") == matched),
+            items[0],
+        )
+        return best.get("company_number")
 
     def fetch(self, ticker: str) -> Optional[MarketData]:
         return None  # Companies House uses company names, not tickers

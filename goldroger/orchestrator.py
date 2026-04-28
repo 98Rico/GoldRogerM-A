@@ -397,6 +397,47 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
             weight=20,
         ))
 
+    # ── 5a. SOTP (conglomerates / multi-segment) ──────────────────────────
+    _CONGLOMERATE_KEYWORDS = {"segment", "division", "business unit", "portfolio", "subsidiaries"}
+    _desc_lower = (fund.description + " " + fund.business_model).lower()
+    if any(kw in _desc_lower for kw in _CONGLOMERATE_KEYWORDS) and result.has_revenue and fin.revenue_current:
+        try:
+            import json as _json_sotp, re as _re_sotp
+            sotp_prompt = (
+                f'Company: "{company}". Sector: {fund.sector}. '
+                f'Revenue: ${fin.revenue_current}M total. '
+                f'Description: {fund.description[:300]}. '
+                "List the 2–4 main business segments as a JSON array: "
+                '[{"name":"...", "revenue_pct": 0.X, "ebitda_margin": 0.X, "sector": "..."}]. '
+                "revenue_pct values must sum to 1.0. Return ONLY the JSON array."
+            )
+            seg_resp = client.complete(
+                messages=[{"role": "user", "content": sotp_prompt}],
+                model=client.resolve_model("small"),
+                max_tokens=300,
+            )
+            raw_seg = _re_sotp.sub(r"```[a-z]*\n?|\n?```", "", seg_resp.content.strip())
+            seg_data = _json_sotp.loads(raw_seg)
+            if seg_data and float(fin.revenue_current or 0) > 0:
+                from goldroger.finance.valuation.sotp import Segment, compute_sotp as _compute_sotp
+                _rev = float(fin.revenue_current)
+                _segments = [
+                    Segment(
+                        name=s["name"],
+                        revenue=_rev * float(s.get("revenue_pct", 0.25)),
+                        ebitda_margin=float(s.get("ebitda_margin", 0.15)),
+                        sector=s.get("sector") or fund.sector or "Technology",
+                    )
+                    for s in seg_data
+                ]
+                _sotp = _compute_sotp(_segments)
+                _methods.append(ValuationMethod(name="SOTP", mid=str(round(_sotp.net_ev, 1)), weight=None))
+                console.print(
+                    f"  [cyan]SOTP ({len(_segments)} segments): Net EV ${_sotp.net_ev:.0f}M[/cyan]"
+                )
+        except Exception as _sotp_err:
+            console.print(f"  [dim]SOTP skipped: {_sotp_err}[/dim]")
+
     val = Valuation(
         current_price=str(rec.current_price) if rec.current_price else None,
         implied_value=str(round(blended_ev, 1)) if blended_ev else "N/A",

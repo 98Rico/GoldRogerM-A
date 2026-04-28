@@ -8,6 +8,8 @@ from .crunchbase import CrunchbaseProvider
 from .companies_house import CompaniesHouseProvider
 from .infogreffe import InfogreffeProvider
 from .handelsregister import HandelsregisterProvider
+from .kvk import KVKProvider
+from .registro_mercantil import RegistroMercantilProvider
 
 __all__ = [
     "DataProvider",
@@ -19,4 +21,6 @@ __all__ = [
     "CompaniesHouseProvider",
     "InfogreffeProvider",
     "HandelsregisterProvider",
+    "KVKProvider",
+    "RegistroMercantilProvider",
 ]

@@ -22,6 +22,8 @@ from .providers.crunchbase import CrunchbaseProvider
 from .providers.companies_house import CompaniesHouseProvider
 from .providers.infogreffe import InfogreffeProvider
 from .providers.handelsregister import HandelsregisterProvider
+from .providers.kvk import KVKProvider
+from .providers.registro_mercantil import RegistroMercantilProvider
 from .providers.yfinance import YFinanceProvider
 from .providers.sec_edgar import SECEdgarProvider
 
@@ -90,6 +92,8 @@ def build_default_registry() -> DataRegistry:
     registry.register(CompaniesHouseProvider())
     registry.register(InfogreffeProvider())
     registry.register(HandelsregisterProvider())
+    registry.register(KVKProvider())
+    registry.register(RegistroMercantilProvider())
     registry.register(SECEdgarProvider())
     return registry
 
