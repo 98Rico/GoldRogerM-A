@@ -528,10 +528,44 @@ class ValuationService:
         n = len(series) - 1
         return max(-0.10, min((series[-1] / series[0]) ** (1 / n) - 1, 0.40))
 
+    _fx_cache: dict = {}
+
+    @staticmethod
+    def _live_fx() -> dict:
+        """Fetch live FX rates from yfinance; fall back to hardcoded if unavailable."""
+        if ValuationService._fx_cache:
+            return ValuationService._fx_cache
+        _HARDCODED = {"€": 1.08, "eur": 1.08, "gbp": 1.26, "£": 1.26, "chf": 1.11, "cad": 0.74}
+        try:
+            import yfinance as yf
+            pairs = {"eur": "EURUSD=X", "gbp": "GBPUSD=X", "chf": "CHFUSD=X", "cad": "CADUSD=X"}
+            rates = {}
+            for sym, ticker in pairs.items():
+                try:
+                    info = yf.Ticker(ticker).fast_info
+                    price = getattr(info, "last_price", None) or getattr(info, "lastPrice", None)
+                    if price:
+                        rates[sym] = float(price)
+                except Exception:
+                    pass
+            if len(rates) >= 2:
+                result = {
+                    "€": rates.get("eur", _HARDCODED["eur"]),
+                    "eur": rates.get("eur", _HARDCODED["eur"]),
+                    "gbp": rates.get("gbp", _HARDCODED["gbp"]),
+                    "£": rates.get("gbp", _HARDCODED["gbp"]),
+                    "chf": rates.get("chf", _HARDCODED["chf"]),
+                    "cad": rates.get("cad", _HARDCODED["cad"]),
+                }
+                ValuationService._fx_cache = result
+                return result
+        except Exception:
+            pass
+        return _HARDCODED
+
     @staticmethod
     def _f(v, default=0.0):
-        # Approximate FX rates (updated periodically — good enough for order-of-magnitude)
-        _FX = {"€": 1.08, "eur": 1.08, "gbp": 1.26, "£": 1.26, "chf": 1.11, "cad": 0.74}
+        _FX = ValuationService._live_fx()
         try:
             if v is None:
                 return default

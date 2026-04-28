@@ -214,7 +214,7 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
 
     # ── 1. FUNDAMENTALS ───────────────────────────────────────────────────
     t0 = _step("Fundamentals")
-    fund = parse_model(data_agent.run(company, company_type), Fundamentals, _fund_fallback(company))
+    fund = _parse_with_retry(data_agent, company, company_type, {}, Fundamentals, _fund_fallback(company))
     if market_data:
         if not fund.ticker:
             fund.ticker = market_data.ticker
@@ -225,13 +225,10 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
 
     # ── 2. MARKET ─────────────────────────────────────────────────────────
     t0 = _step("Market Analysis")
-    mkt = parse_model(
-        market_agent.run(company, company_type, {
-            "sector": fund.sector or "",
-            "description": fund.description,
-        }),
-        MarketAnalysis,
-        MarketAnalysis(),
+    mkt = _parse_with_retry(
+        market_agent, company, company_type,
+        {"sector": fund.sector or "", "description": fund.description},
+        MarketAnalysis, MarketAnalysis(),
     )
     log.end_step("market_analysis", t0)
     _done("Market Analysis", t0)
@@ -316,6 +313,28 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
                     console.print(f"  [cyan]Revenue fallback: ${float(rev_val):.0f}M (estimated)[/cyan]")
             except Exception:
                 pass
+    # Private triangulation — if revenue still missing, try multi-signal engine
+    if company_type == "private" and (not fin.revenue_current or fin.revenue_current in ("0", "0.0", "null", "None")):
+        try:
+            from goldroger.data.private_triangulation import triangulate_revenue
+            crunchbase_data = None
+            try:
+                from goldroger.data.providers.crunchbase import CrunchbaseProvider
+                cb = CrunchbaseProvider()
+                if cb.is_available():
+                    cb_md = cb.fetch_by_name(company) if hasattr(cb, "fetch_by_name") else None
+                    crunchbase_data = cb_md._raw if cb_md and hasattr(cb_md, "_raw") else None
+            except Exception:
+                pass
+            tri = triangulate_revenue(company, sector=fund.sector or "", country="", crunchbase_data=crunchbase_data)
+            if tri and tri.revenue_estimate_m > 0:
+                fin.revenue_current = str(tri.revenue_estimate_m)
+                console.print(
+                    f"  [cyan]Triangulation ({tri.confidence}): ${tri.revenue_estimate_m:.0f}M "
+                    f"from {len(tri.signals)} signal(s)[/cyan]"
+                )
+        except Exception:
+            pass
     log.end_step("financials", t0)
     _done("Financials", t0)
 
@@ -532,6 +551,15 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
     )
     log.end_step("thesis", t0)
     _done("Investment Thesis", t0)
+
+    # Wire thesis narratives into football field scenario summaries
+    if football_field and thesis:
+        if football_field.bear and thesis.bear_case:
+            football_field.bear.narrative = thesis.bear_case[:200]
+        if football_field.base and thesis.base_case:
+            football_field.base.narrative = thesis.base_case[:200]
+        if football_field.bull and thesis.bull_case:
+            football_field.bull.narrative = thesis.bull_case[:200]
 
     console.rule("[DONE EQUITY]")
     log.flush()

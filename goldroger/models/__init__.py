@@ -126,6 +126,7 @@ class ScenarioSummary(Model):
     blended_ev: Optional[str] = None
     wacc: Optional[str] = None
     ebitda_margin: Optional[str] = None
+    narrative: Optional[str] = None    # 1-2 sentence description from thesis agent
 
 
 class FootballField(Model):
