@@ -46,7 +46,7 @@
 
 ---
 
-## Ce qui fonctionne (Phases 1–5)
+## Ce qui fonctionne (Phases 1–8)
 
 ### Données & Sources
 
@@ -65,7 +65,7 @@
 
 Pour activer Bloomberg/CapIQ/Crunchbase : ajouter les variables dans `.env`.
 
-> ⚠️ **Note** : Les taux de change EUR/GBP/CHF/CAD sont actuellement **codés en dur** dans `valuation_service.py` (`_FX` dict). Ils doivent être remplacés par des taux live via yfinance (`EURUSD=X`, `GBPUSD=X`, etc.) pour des analyses précises — voir NextSteps 3.1.
+> ⚠️ **Note** : Les taux de change EUR/GBP/CHF/CAD sont actuellement **codés en dur** dans `valuation_service.py` (`_FX` dict). Ils doivent être remplacés par des taux live via yfinance (`EURUSD=X`, `GBPUSD=X`, etc.) pour des analyses précises — voir NextSteps 5.1.
 
 ### Data Provider Registry
 
@@ -221,16 +221,18 @@ L'objectif est de produire une analyse meilleure qu'un analyste M&A humain sur t
 
 **Ce que l'outil bat déjà un analyste sur** : vitesse, cohérence, couverture systématique, zéro biais d'ancrage, disponibilité 24/7.
 
-**Les trois gaps à combler** (voir NextSteps) :
-1. **Private company data depth** — triangulation systématique depuis 6–8 signaux (headcount, funding, web traffic, press, filings, transaction comps) plutôt qu'une seule recherche web
-2. **Transaction comps sans CapIQ** — scraping de press releases M&A pour reconstruire une base de transactions comparables
-3. **Output polish** — vrais graphiques PPT, Excel 3-statement complet, executive summary 1-pager
+**Les trois gaps restants** (voir NextSteps) :
+1. **Private company data depth** — triangulation depuis 6–8 signaux (headcount, funding, web traffic, press, transaction comps) — moteur construit, à enrichir
+2. **Transaction comps sans CapIQ** — scraping de press releases M&A pour ancrer les valorisations sur de vraies transactions
+3. **Output polish** — vrais graphiques PPT (bar chart, courbe DCF), Excel 3-statement, executive summary 1-pager
 
 ## Connectivité Data Dynamique
 
-Le registre `DataRegistry` est conçu pour que n'importe quelle source soit connectable en 30 minutes sans toucher au moteur de valorisation. Priorité d'exécution : Bloomberg → CapIQ → Refinitiv → yfinance → Crunchbase → EDGAR.
+Le registre `DataRegistry` est conçu pour que n'importe quelle source soit connectable en 30 minutes sans toucher au moteur de valorisation. Priorité d'exécution : Bloomberg → CapIQ → Refinitiv → yfinance → Crunchbase → Companies House → Infogreffe → Handelsregister → EDGAR.
 
-**Europe-first, global-ready** : Companies House (UK), Infogreffe (FR), Handelsregister (DE) sont intégrés — données officielles gratuites pour les sociétés privées européennes. Architecture identique pour ajouter KVK (NL), Registro Mercantil (ES), OpenCorporates (140+ pays).
+**Name Resolver** : pour les sociétés privées, `data/name_resolver.py` traduit automatiquement le nom commercial vers l'identifiant correct par source (raison sociale Infogreffe, registered name Companies House, slug Crunchbase, etc.) via LLM one-shot + normalisation accents/suffixes légaux.
+
+**Europe-first, global-ready** : Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪 intégrés. Architecture identique pour KVK (NL), Registro Mercantil (ES), OpenCorporates (140+ pays).
 
 Sources premium (stubs prêts) : PitchBook, Mergermarket, Dealogic, Preqin.
 
@@ -337,3 +339,8 @@ uv run python -m pytest tests/ -v
 ✔ Architecture data pluggable (Bloomberg/CapIQ prêts à brancher)  
 ✔ Crunchbase intégré (freemium, privées)  
 ✔ 20 tests unitaires valuation engine  
+✔ LLM-agnostique (Mistral défaut gratuit, Anthropic/OpenAI en option)  
+✔ EU registries pour sociétés privées (Infogreffe, Companies House, Handelsregister)  
+✔ Name Resolver — identifiants légaux corrects par source  
+✔ No placeholder values — N/A honnête plutôt que données fabriquées  
+✔ Football field fonctionnel pour sociétés privées (revenue fallback)  
