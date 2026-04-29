@@ -260,122 +260,173 @@ def run_analysis(
     log.end_step("fundamentals", t0)
     _done("Fundamentals", t0)
 
-    # ── 2. MARKET ─────────────────────────────────────────────────────────
-    t0 = _step("Market Analysis")
-    mkt = _parse_with_retry(
-        market_agent, company, company_type,
-        {"sector": fund.sector or "", "description": fund.description},
-        MarketAnalysis, MarketAnalysis(),
-    )
-    log.end_step("market_analysis", t0)
-    _done("Market Analysis", t0)
+    # ── 2+2b+3. MARKET / PEERS / FINANCIALS — parallel ────────────────────
+    # All three are independent once we have fund.sector from step 1.
+    from concurrent.futures import ThreadPoolExecutor
 
-    # ── 2b. PEER COMPARABLES ──────────────────────────────────────────────
-    t0 = _step("Peer Comparables")
+    _parallel_t0 = time.time()
+    _peer_rev = market_data.revenue_ttm if market_data and market_data.revenue_ttm else None
+
+    def _do_market():
+        _t = _step("Market Analysis")
+        result = _parse_with_retry(
+            market_agent, company, company_type,
+            {"sector": fund.sector or "", "description": fund.description},
+            MarketAnalysis, MarketAnalysis(),
+        )
+        log.end_step("market_analysis", _t)
+        _done("Market Analysis", _t)
+        return result
+
+    def _do_peers():
+        _t = _step("Peer Comparables")
+        try:
+            raw = peer_agent.run(company, company_type, {
+                "sector": fund.sector or "",
+                "description": fund.description or "",
+                "revenue_usd_m": _peer_rev,
+            })
+            result = (raw, None)
+        except Exception as e:
+            result = (None, e)
+        _done("Peer Comparables", _t)
+        return result
+
+    def _do_financials():
+        _t = _step("Financials")
+        if market_data:
+            f = _fin_from_market(market_data)
+            console.print("  [green]Using verified yfinance financials[/green]")
+        else:
+            f = _parse_with_retry(
+                fin_agent, company, company_type,
+                {"sector": fund.sector or "", "description": fund.description},
+                Financials, _fin_fallback(),
+            )
+            # Revenue fallback: if still null after retry, ask LLM directly (no tools)
+            if not f.revenue_current or f.revenue_current in ("0", "0.0", "null", "None"):
+                try:
+                    rev_prompt = (
+                        f'What is the most recent annual revenue of "{company}"? '
+                        "Return ONLY a JSON object: "
+                        '{"revenue_usd_m": <number>, "source": "<brief source>"}. '
+                        "Convert to USD millions. No markdown."
+                    )
+                    rev_resp = client.complete(
+                        messages=[{"role": "user", "content": rev_prompt}],
+                        model=client.resolve_model("large"),
+                        max_tokens=100,
+                    )
+                    import re as _re
+                    import json as _json
+                    raw = _re.sub(r"```[a-z]*\n?|\n?```", "", rev_resp.content.strip())
+                    rev_data = _json.loads(raw)
+                    rev_val = rev_data.get("revenue_usd_m")
+                    if rev_val and float(rev_val) > 0:
+                        f.revenue_current = str(float(rev_val))
+                        console.print(
+                            f"  [cyan]Revenue fallback: "
+                            f"${float(rev_val):.0f}M (estimated)[/cyan]"
+                        )
+                except Exception:
+                    pass
+            # Private triangulation — if revenue still missing, try multi-signal engine
+            if company_type == "private" and (
+                not f.revenue_current or f.revenue_current in ("0", "0.0", "null", "None")
+            ):
+                try:
+                    from goldroger.data.private_triangulation import triangulate_revenue
+                    crunchbase_data = None
+                    try:
+                        from goldroger.data.providers.crunchbase import CrunchbaseProvider
+                        cb = CrunchbaseProvider()
+                        if cb.is_available():
+                            cb_md = (
+                                cb.fetch_by_name(company)
+                                if hasattr(cb, "fetch_by_name") else None
+                            )
+                            crunchbase_data = (
+                                getattr(cb_md, "_raw", None) if cb_md else None
+                            )
+                    except Exception:
+                        pass
+                    tri = triangulate_revenue(
+                        company, sector=fund.sector or "", country="", crunchbase_data=crunchbase_data
+                    )
+                    if tri and tri.revenue_estimate_m > 0:
+                        f.revenue_current = str(tri.revenue_estimate_m)
+                        console.print(
+                            f"  [cyan]Triangulation ({tri.confidence}): ${tri.revenue_estimate_m:.0f}M "
+                            f"from {len(tri.signals)} signal(s)[/cyan]"
+                        )
+                except Exception:
+                    pass
+        log.end_step("financials", _t)
+        _done("Financials", _t)
+        return f
+
+    with ThreadPoolExecutor(max_workers=3) as _pool:
+        _fut_mkt = _pool.submit(_do_market)
+        _fut_peers = _pool.submit(_do_peers)
+        _fut_fin = _pool.submit(_do_financials)
+        mkt = _fut_mkt.result()
+        _peers_raw, _peers_err = _fut_peers.result()
+        fin = _fut_fin.result()
+
+    _parallel_elapsed = time.time() - _parallel_t0
+    console.print(f"  [dim]Parallel agents: {_parallel_elapsed:.1f}s (≈3× faster than sequential)[/dim]")
+
+    # Post-process peer results (yfinance calls — fast, sequential is fine)
     peer_comps_table: PeerCompsTable | None = None
     peer_multiples = None
-    try:
-        _peer_rev = (market_data.revenue_ttm if market_data and market_data.revenue_ttm else None)
-        raw_peers = peer_agent.run(company, company_type, {
-            "sector": fund.sector or "",
-            "description": fund.description or "",
-            "revenue_usd_m": _peer_rev,
-        })
-        peer_list = parse_peer_agent_output(raw_peers)
-        peer_tickers = resolve_peer_tickers(peer_list)
-        if peer_tickers:
-            peer_multiples = build_peer_multiples(peer_tickers)
-            if peer_multiples.n_peers > 0:
-                console.print(
-                    f"  [cyan]{peer_multiples.n_peers} peers found:[/cyan] "
-                    + ", ".join(p.ticker for p in peer_multiples.peers[:6])
-                )
-                if peer_multiples.ev_ebitda_median:
-                    console.print(
-                        f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x  "
-                        f"EV/Rev: {peer_multiples.ev_revenue_median:.1f}x"
-                        if peer_multiples.ev_revenue_median else
-                        f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x"
-                    )
-                peer_comps_table = PeerCompsTable(
-                    peers=[
-                        PeerComp(
-                            name=p.name,
-                            ticker=p.ticker,
-                            ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
-                            ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
-                            ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
-                            revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
-                        )
-                        for p in peer_multiples.peers
-                    ],
-                    median_ev_ebitda=f"{peer_multiples.ev_ebitda_median:.1f}x" if peer_multiples.ev_ebitda_median else None,
-                    median_ev_revenue=f"{peer_multiples.ev_revenue_median:.1f}x" if peer_multiples.ev_revenue_median else None,
-                    median_ebitda_margin=f"{peer_multiples.ebitda_margin_median:.1%}" if peer_multiples.ebitda_margin_median else None,
-                    n_peers=peer_multiples.n_peers,
-                )
-    except Exception as e:
-        console.print(f"  [yellow]Peer finder skipped: {e}[/yellow]")
-    _done("Peer Comparables", t0)
-
-    # ── 3. FINANCIALS ─────────────────────────────────────────────────────
-    t0 = _step("Financials")
-    if market_data:
-        fin = _fin_from_market(market_data)
-        console.print("  [green]Using verified yfinance financials[/green]")
-    else:
-        fin = _parse_with_retry(
-            fin_agent, company, company_type,
-            {"sector": fund.sector or "", "description": fund.description},
-            Financials, _fin_fallback(),
-        )
-        # Revenue fallback: if still null after retry, ask LLM directly (no tools)
-        if not fin.revenue_current or fin.revenue_current in ("0", "0.0", "null", "None"):
-            try:
-                rev_prompt = (
-                    f'What is the most recent annual revenue of "{company}"? '
-                    "Return ONLY a JSON object: "
-                    '{"revenue_usd_m": <number>, "source": "<brief source>"}. '
-                    "Convert to USD millions. No markdown."
-                )
-                rev_resp = client.complete(
-                    messages=[{"role": "user", "content": rev_prompt}],
-                    model=client.resolve_model("large"),
-                    max_tokens=100,
-                )
-                import re as _re, json as _json
-                raw = _re.sub(r"```[a-z]*\n?|\n?```", "", rev_resp.content.strip())
-                rev_data = _json.loads(raw)
-                rev_val = rev_data.get("revenue_usd_m")
-                if rev_val and float(rev_val) > 0:
-                    fin.revenue_current = str(float(rev_val))
-                    console.print(f"  [cyan]Revenue fallback: ${float(rev_val):.0f}M (estimated)[/cyan]")
-            except Exception:
-                pass
-    # Private triangulation — if revenue still missing, try multi-signal engine
-    if company_type == "private" and (not fin.revenue_current or fin.revenue_current in ("0", "0.0", "null", "None")):
+    if _peers_raw:
         try:
-            from goldroger.data.private_triangulation import triangulate_revenue
-            crunchbase_data = None
-            try:
-                from goldroger.data.providers.crunchbase import CrunchbaseProvider
-                cb = CrunchbaseProvider()
-                if cb.is_available():
-                    cb_md = cb.fetch_by_name(company) if hasattr(cb, "fetch_by_name") else None
-                    crunchbase_data = cb_md._raw if cb_md and hasattr(cb_md, "_raw") else None
-            except Exception:
-                pass
-            tri = triangulate_revenue(company, sector=fund.sector or "", country="", crunchbase_data=crunchbase_data)
-            if tri and tri.revenue_estimate_m > 0:
-                fin.revenue_current = str(tri.revenue_estimate_m)
-                console.print(
-                    f"  [cyan]Triangulation ({tri.confidence}): ${tri.revenue_estimate_m:.0f}M "
-                    f"from {len(tri.signals)} signal(s)[/cyan]"
-                )
-        except Exception:
-            pass
-    log.end_step("financials", t0)
-    _done("Financials", t0)
+            peer_list = parse_peer_agent_output(_peers_raw)
+            peer_tickers = resolve_peer_tickers(peer_list)
+            if peer_tickers:
+                peer_multiples = build_peer_multiples(peer_tickers)
+                if peer_multiples.n_peers > 0:
+                    console.print(
+                        f"  [cyan]{peer_multiples.n_peers} peers found:[/cyan] "
+                        + ", ".join(p.ticker for p in peer_multiples.peers[:6])
+                    )
+                    if peer_multiples.ev_ebitda_median:
+                        console.print(
+                            f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x  "
+                            f"EV/Rev: {peer_multiples.ev_revenue_median:.1f}x"
+                            if peer_multiples.ev_revenue_median else
+                            f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x"
+                        )
+                    peer_comps_table = PeerCompsTable(
+                        peers=[
+                            PeerComp(
+                                name=p.name,
+                                ticker=p.ticker,
+                                ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
+                                ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
+                                ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
+                                revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
+                            )
+                            for p in peer_multiples.peers
+                        ],
+                        median_ev_ebitda=(
+                            f"{peer_multiples.ev_ebitda_median:.1f}x"
+                            if peer_multiples.ev_ebitda_median else None
+                        ),
+                        median_ev_revenue=(
+                            f"{peer_multiples.ev_revenue_median:.1f}x"
+                            if peer_multiples.ev_revenue_median else None
+                        ),
+                        median_ebitda_margin=(
+                            f"{peer_multiples.ebitda_margin_median:.1%}"
+                            if peer_multiples.ebitda_margin_median else None
+                        ),
+                        n_peers=peer_multiples.n_peers,
+                    )
+        except Exception as e:
+            console.print(f"  [yellow]Peer post-processing skipped: {e}[/yellow]")
+    elif _peers_err:
+        console.print(f"  [yellow]Peer finder skipped: {_peers_err}[/yellow]")
 
     # ── 4. ASSUMPTIONS ────────────────────────────────────────────────────
     t0 = _step("Assumptions")
