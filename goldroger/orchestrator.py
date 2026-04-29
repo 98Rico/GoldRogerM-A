@@ -195,11 +195,12 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
         console.print(f"  [dim]Querying as: {_ids.infogreffe_query or _ids.variants[0] if _ids.variants else company}[/dim]")
         market_data = DEFAULT_REGISTRY.fetch_by_name(company)
         if market_data and market_data.revenue_ttm:
-            console.print(f"  [green]Registry[/green] ({market_data.data_source}) Rev=${market_data.revenue_ttm:.0f}M")
+            _conf_tag = " [verified]" if market_data.confidence == "verified" else " [estimated]"
+            console.print(f"  [green]Registry[/green] ({market_data.data_source}){_conf_tag} Rev=${market_data.revenue_ttm:.0f}M")
         elif market_data:
-            console.print(f"  [green]Registry[/green] ({market_data.data_source}) partial data")
+            console.print(f"  [yellow]Registry[/yellow] ({market_data.data_source}) sector only — no revenue")
         else:
-            console.print("  [dim]No EU registry data found[/dim]")
+            console.print("  [dim]No EU registry data found — revenue via web search fallback[/dim]")
         log.end_step("market_data", t0)
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
@@ -247,9 +248,11 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
     peer_comps_table: PeerCompsTable | None = None
     peer_multiples = None
     try:
+        _peer_rev = (market_data.revenue_ttm if market_data and market_data.revenue_ttm else None)
         raw_peers = peer_agent.run(company, company_type, {
             "sector": fund.sector or "",
             "description": fund.description or "",
+            "revenue_usd_m": _peer_rev,
         })
         peer_list = parse_peer_agent_output(raw_peers)
         peer_tickers = resolve_peer_tickers(peer_list)
@@ -623,6 +626,7 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
             "market": mkt.market_size,
             # Hard-lock verified revenue so thesis cannot hallucinate a different number
             "verified_revenue": fin.revenue_current or "unknown",
+            "revenue_confidence": (market_data.confidence if market_data and market_data.revenue_ttm else "estimated"),
         },
         InvestmentThesis,
         InvestmentThesis(thesis="N/A"),

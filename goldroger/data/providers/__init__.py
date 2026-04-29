@@ -5,6 +5,7 @@ from .sec_edgar import SECEdgarProvider
 from .bloomberg import BloombergProvider
 from .capitaliq import CapitalIQProvider
 from .crunchbase import CrunchbaseProvider
+from .pappers import PappersProvider
 from .companies_house import CompaniesHouseProvider
 from .infogreffe import InfogreffeProvider
 from .handelsregister import HandelsregisterProvider
@@ -18,6 +19,7 @@ __all__ = [
     "BloombergProvider",
     "CapitalIQProvider",
     "CrunchbaseProvider",
+    "PappersProvider",
     "CompaniesHouseProvider",
     "InfogreffeProvider",
     "HandelsregisterProvider",

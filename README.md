@@ -54,7 +54,8 @@
 |--------|--------------|---------|
 | **yfinance** | Toujours (gratuit) | Prix, beta, marges, EV, forward estimates |
 | **SEC EDGAR** | Toujours (gratuit) | Revenus annuels US (10-K) |
-| **recherche-entreprises.api.gouv.fr** | Toujours (gratuit, 🇫🇷) | SIREN, NAF/secteur — pas de revenus (Infogreffe supprimé 2025) |
+| **Pappers** | Si `PAPPERS_API_KEY` (🇫🇷, 100 calls/mois gratuit) | CA, résultat net, bilans — **revenus vérifiés sociétés françaises** |
+| **recherche-entreprises.api.gouv.fr** | Toujours (gratuit, 🇫🇷) | SIREN, NAF/secteur — fallback si pas de clé Pappers |
 | **Bundesanzeiger** | Toujours (gratuit, 🇩🇪) | Revenue best-effort HTML |
 | **Registro Mercantil / BORME** | Toujours (gratuit, 🇪🇸) | Existence société — pas de revenus |
 | **Companies House** | Si `COMPANIES_HOUSE_API_KEY` (🇬🇧, gratuit) | SIC/secteur + revenue XBRL best-effort |
@@ -362,3 +363,6 @@ uv run python -m pytest tests/ -v
 ✔ Sector multiples word-boundary regex — fintech → technology (plus de mismatch "financials")  
 ✔ 20 tests unitaires passent — LBO test avec inputs cohérents avec la formule corrigée  
 ✔ Infogreffe migré — `opendata.infogreffe.fr` mort (2025) → `recherche-entreprises.api.gouv.fr` (govt FR officiel, gratuit, toujours up)  
+✔ Pappers intégré — revenus vérifiés (RNCS/INPI) pour sociétés françaises privées (`PAPPERS_API_KEY`, 100 calls/mois gratuit)  
+✔ Peer scale constraint — PeerFinderAgent contraint par revenue bracket ×0.25–×4, évite les mega-caps comme comparables de PME  
+✔ Confidence tagging — `[verified]` / `[estimated]` visible en CLI, propagé au thesis agent  

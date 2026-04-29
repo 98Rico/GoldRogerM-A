@@ -19,6 +19,7 @@ from .providers.base import DataProvider
 from .providers.bloomberg import BloombergProvider
 from .providers.capitaliq import CapitalIQProvider, RefinitivProvider
 from .providers.crunchbase import CrunchbaseProvider
+from .providers.pappers import PappersProvider
 from .providers.companies_house import CompaniesHouseProvider
 from .providers.infogreffe import InfogreffeProvider
 from .providers.handelsregister import HandelsregisterProvider
@@ -89,6 +90,7 @@ def build_default_registry() -> DataRegistry:
     registry.register(RefinitivProvider())
     registry.register(YFinanceProvider())
     registry.register(CrunchbaseProvider())
+    registry.register(PappersProvider())
     registry.register(CompaniesHouseProvider())
     registry.register(InfogreffeProvider())
     registry.register(HandelsregisterProvider())

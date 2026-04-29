@@ -230,12 +230,15 @@ class ReportWriterAgent(BaseAgent):
         rec = context.get("recommendation", "HOLD")
         upside = context.get("upside_downside", context.get("upside", ""))
         verified_revenue = context.get("verified_revenue", "")
+        rev_confidence = context.get("revenue_confidence", "estimated")
+        rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated — treat as approximate"
         revenue_lock = (
             f"\n⚠ VERIFIED FACTS — do NOT contradict these in your output:\n"
-            f"  Revenue: ${verified_revenue}M (USD)\n"
+            f"  Revenue: ${verified_revenue}M (USD) [{rev_conf_label}]\n"
             f"  Implied EV: {context.get('valuation', 'N/A')}\n"
             f"  Recommendation: {rec}\n"
-            "Use ONLY these numbers in your thesis. Never invent a different revenue figure."
+            "Use ONLY these numbers in your thesis. Never invent a different revenue figure.\n"
+            f"  If revenue is marked 'estimated', you MAY note uncertainty but must use this figure."
         ) if verified_revenue and verified_revenue not in ("unknown", "0", "0.0", "null") else ""
         return f"""Write a complete investment thesis for "{company}".
 Recommendation context: {rec} with {upside} upside/downside.{revenue_lock}
@@ -542,16 +545,34 @@ class PeerFinderAgent(BaseAgent):
     def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
         sector = context.get("sector", "unknown")
         description = context.get("description", "")
+        revenue_m = context.get("revenue_usd_m")
+
+        # Build a revenue scale bracket to constrain peer selection
+        if revenue_m and revenue_m > 0:
+            low = revenue_m * 0.25
+            high = revenue_m * 4.0
+            if high < 100:
+                scale_note = f"Target revenue ~${revenue_m:.0f}M. Prefer peers with revenue ${ low:.0f}M–${high:.0f}M. DO NOT select mega-caps."
+            elif high < 2000:
+                scale_note = f"Target revenue ~${revenue_m:.0f}M. Prefer peers with revenue ${low:.0f}M–${high:.0f}M (same order of magnitude). Avoid companies >10× larger."
+            else:
+                scale_note = f"Target revenue ~${revenue_m:.0f}M. Match peers by revenue scale, avoid micro-caps."
+        else:
+            scale_note = "Revenue unknown — match peers on business model and sector."
+
         return f"""Find 4–6 publicly listed companies comparable to "{company}".
 
 Context:
 - Sector: {sector}
 - Description: {description or "N/A"}
 - Company type: {company_type}
+- Scale: {scale_note}
 
 Instructions:
-- Choose peers based on: business model, revenue scale, geography, growth profile
-- Prefer well-known listed companies with liquid stocks (avoid micro-caps)
+- MOST IMPORTANT: match business model similarity first, then revenue scale
+- {scale_note}
+- Avoid selecting industry giants as peers for small/mid-size targets — it inflates multiples
+- Prefer listed peers with public financials (avoid OTC/micro-caps with illiquid data)
 - Use web_search if needed to verify current listings
 
 Return ONLY this JSON:
