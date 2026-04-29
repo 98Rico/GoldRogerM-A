@@ -138,7 +138,7 @@ Architecture `DataProvider` / `DataRegistry` en place — chaque source = 1 fich
 | Crunchbase | Global | Funding, revenus estimés | ✅ intégré |
 | KVK 🇳🇱 | NL | SBI/secteur — pas de revenue | ⚠️ `KVK_API_KEY` requis (gratuit) |
 | Registro Mercantil 🇪🇸 | ES | Existence société via BORME — pas de revenue | ✅ intégré (gratuit, no auth) |
-| PAPPERS 🇫🇷 | FR | CA, résultat net, bilans complets | ✅ intégré — `PAPPERS_API_KEY` requis (100 calls/mois gratuit, pappers.fr/api) |
+| PAPPERS 🇫🇷 | FR | CA, résultat net, bilans complets | ✅ intégré — `PAPPERS_API_KEY` requis (~€30/mois, pappers.fr/api) |
 | Dealroom | EU | Startups, funding | ⬜ freemium |
 | SimilarWeb | Global | Trafic web | ⬜ freemium |
 | OpenCorporates | 140+ pays | Données légales | ⬜ freemium |
@@ -151,7 +151,7 @@ Architecture `DataProvider` / `DataRegistry` en place — chaque source = 1 fich
 
 | Phase | Item | Fichier(s) | Statut |
 |-------|------|-----------|--------|
-| 13 | Pappers provider 🇫🇷 — revenus vérifiés depuis fiches RNCS/INPI (100 calls/mois gratuit) | `data/providers/pappers.py` | ✅ |
+| 13 | Pappers provider 🇫🇷 — revenus vérifiés depuis fiches RNCS/INPI (~€30/mois, pappers.fr/api) | `data/providers/pappers.py` | ✅ |
 | 13 | Peer scale constraint — PeerFinderAgent reçoit `revenue_usd_m`, génère bracket ×0.25–×4 pour éviter les mega-caps comme peers | `agents/specialists.py`, `orchestrator.py` | ✅ |
 | 13 | Confidence tagging visible — CLI affiche `[verified]` / `[estimated]` pour le revenue; thesis agent informé du niveau de confiance | `orchestrator.py`, `agents/specialists.py` | ✅ |
 | 13 | `.env.example` mis à jour — PAPPERS_API_KEY, KVK_API_KEY documentés avec instructions | `.env.example` | ✅ |
@@ -174,7 +174,7 @@ Audit complet (2026-04) — état réel de chaque provider :
 
 **Pour débloquer UK + NL** : ajouter `COMPANIES_HOUSE_API_KEY` et `KVK_API_KEY` dans `.env` (inscription gratuite).
 
-**Prochaine étape données privées recommandée** : ajouter `PAPPERS_API_KEY` dans `.env` (gratuit, 100 calls/mois) — débloque le revenue vérifié pour toutes les sociétés françaises privées.
+**Prochaine étape données privées recommandée** : ajouter `PAPPERS_API_KEY` dans `.env` (~€30/mois, pappers.fr/api) — débloque le revenue vérifié pour toutes les sociétés françaises privées.
 
 ---
 

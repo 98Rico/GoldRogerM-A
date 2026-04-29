@@ -1,18 +1,18 @@
 """
 Pappers.fr provider — French company financials.
 
-Free tier: 100 calls/month with PAPPERS_API_KEY.
-Returns: declared revenue, net income, headcount, NAF/sector, funding.
+Paid service: ~€30/month for 500 credits (pappers.fr/api).
+Returns: declared revenue, net income, EBITDA margin, NAF/sector.
 
-This is the primary source for verified French private company financials.
+This is the cleanest source for verified French private company financials.
 The Infogreffe open-data financials dataset was removed in 2025; Pappers
 aggregates the same RNCS/INPI filing data with a clean API.
 
-Get a free key at: https://www.pappers.fr/api
 Set PAPPERS_API_KEY in .env to activate.
 """
 from __future__ import annotations
 
+import difflib
 import os
 from typing import Optional
 
@@ -41,16 +41,24 @@ _NAF_SECTOR: dict[str, str] = {
     "73": "Communication Services",
 }
 
-# Pappers revenue growth code → approximate multiplier
-_EFF_HEADCOUNT: dict[str, int] = {
-    "00": 0, "01": 1, "02": 3, "03": 6, "11": 10, "12": 20,
-    "21": 35, "22": 75, "31": 150, "32": 350, "41": 750,
-    "42": 1500, "51": 3500, "52": 7500, "53": 15000,
-}
+
+def _parse_finances(finances: list[dict]) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Extract (revenue_eur, net_income_eur, ebitda_margin) from Pappers finances list."""
+    if not finances:
+        return None, None, None
+    latest = finances[0]
+    ca = latest.get("chiffre_affaires")
+    ni = latest.get("resultat_net")
+    ebe = latest.get("excedent_brut_exploitation")  # EBE ≈ EBITDA
+
+    revenue_eur = float(ca) if ca and float(ca) > 0 else None
+    net_income_eur = float(ni) if ni else None
+    ebitda_margin = float(ebe) / revenue_eur if ebe and revenue_eur else None
+    return revenue_eur, net_income_eur, ebitda_margin
 
 
 class PappersProvider(DataProvider):
-    """French company financials via Pappers API (100 free calls/month)."""
+    """French company financials via Pappers API (~€30/month, pappers.fr/api)."""
 
     name = "pappers"
     requires_credentials = True
@@ -65,13 +73,14 @@ class PappersProvider(DataProvider):
         return None  # name-based only
 
     def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
+        """Search Pappers for a company and return its financials."""
         ids = resolve(company_name)
         queries = list(dict.fromkeys(filter(None, [
             ids.infogreffe_query, *ids.variants, company_name,
         ])))
 
         best_siren: Optional[str] = None
-        best_name: Optional[str] = None
+        best_display_name: Optional[str] = None
         best_score = 0.0
 
         for query in queries:
@@ -87,29 +96,25 @@ class PappersProvider(DataProvider):
                 results = resp.json().get("resultats", [])
                 if not results:
                     continue
-
                 candidate_names = [r.get("nom_entreprise", "") for r in results]
                 matched = fuzzy_best_match(company_name, candidate_names, threshold=0.55)
                 if not matched:
                     continue
-
-                import difflib
                 score = difflib.SequenceMatcher(None, company_name.lower(), matched.lower()).ratio()
                 if score > best_score:
                     best_score = score
-                    best = next(r for r in results if r.get("nom_entreprise") == matched)
-                    best_siren = best.get("siren")
-                    best_name = matched
+                    record = next(r for r in results if r.get("nom_entreprise") == matched)
+                    best_siren = record.get("siren")
+                    best_display_name = matched
             except Exception:
                 continue
 
         if not best_siren:
             return None
-
-        return self._fetch_details(best_siren, best_name or company_name)
+        return self._fetch_details(best_siren, best_display_name or company_name)
 
     def _fetch_details(self, siren: str, company_name: str) -> Optional[MarketData]:
-        """Fetch full financials by SIREN."""
+        """Fetch full financials by SIREN and return a MarketData record."""
         try:
             resp = httpx.get(
                 f"{_BASE}/entreprise",
@@ -123,36 +128,15 @@ class PappersProvider(DataProvider):
         except Exception:
             return None
 
-        # --- Revenue ---
-        # Pappers returns finances as a list sorted most-recent-first
-        finances = data.get("finances", [])
-        revenue_eur: Optional[float] = None
-        net_income_eur: Optional[float] = None
-        ebitda_margin: Optional[float] = None
+        revenue_eur, net_income_eur, ebitda_margin = _parse_finances(data.get("finances", []))
 
-        if finances:
-            latest = finances[0]
-            ca = latest.get("chiffre_affaires")       # € (full value, not thousands)
-            ni = latest.get("resultat_net")
-            ebitda_raw = latest.get("excedent_brut_exploitation")  # EBE ≈ EBITDA
-            if ca and float(ca) > 0:
-                revenue_eur = float(ca)
-            if ni:
-                net_income_eur = float(ni)
-            if ebitda_raw and revenue_eur and revenue_eur > 0:
-                ebitda_margin = float(ebitda_raw) / revenue_eur
+        # € → M$ (approximate EUR/USD = 1.08)
+        to_usd_m = lambda v: v / 1_000_000 * 1.08 if v else None
+        revenue_usd_m = to_usd_m(revenue_eur)
+        net_income_usd_m = to_usd_m(net_income_eur)
 
-        # Revenue: € → M$ (approximate EUR/USD = 1.08)
-        revenue_usd_m = revenue_eur / 1_000_000 * 1.08 if revenue_eur else None
-        net_income_usd_m = net_income_eur / 1_000_000 * 1.08 if net_income_eur else None
-
-        # --- Sector ---
         naf = data.get("code_naf", "")
         sector = _NAF_SECTOR.get(naf[:2], "") if naf else ""
-
-        # --- Headcount ---
-        eff_code = data.get("tranche_effectif", "")
-        headcount = _EFF_HEADCOUNT.get(eff_code)
 
         return MarketData(
             ticker=company_name.upper()[:6],
