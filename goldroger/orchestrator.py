@@ -172,7 +172,12 @@ def _fmt_ev_human(v_m: float) -> str:
 # ─────────────────────────────────────────────
 # EQUITY PIPELINE
 # ─────────────────────────────────────────────
-def run_analysis(company: str, company_type: str = "public", llm: str | None = None) -> AnalysisResult:
+def run_analysis(
+    company: str,
+    company_type: str = "public",
+    llm: str | None = None,
+    siren: str | None = None,
+) -> AnalysisResult:
     log = new_run(company, company_type)
     client = _client(llm)
     svc = ValuationService()
@@ -184,21 +189,43 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
     thesis_agent = ReportWriterAgent(client)
     peer_agent = PeerFinderAgent(client)
 
+    from goldroger.utils.sources_log import SourcesLog
+    sources = SourcesLog(company)
+
     console.rule(f"[EQUITY] {company}")
 
     # ── 0. REAL DATA ──────────────────────────────────────────────────────
     market_data: MarketData | None = None
     if company_type == "private":
         t0 = _step("Registry (EU filings)")
-        from goldroger.data.name_resolver import resolve as resolve_company_name
-        _ids = resolve_company_name(company, llm_provider=client)
-        console.print(f"  [dim]Querying as: {_ids.infogreffe_query or _ids.variants[0] if _ids.variants else company}[/dim]")
-        market_data = DEFAULT_REGISTRY.fetch_by_name(company)
+        if siren:
+            # Direct SIREN path — no fuzzy matching needed
+            console.print(f"  [dim]SIREN {siren} — direct lookup[/dim]")
+            from goldroger.data.providers.pappers import PappersProvider
+            from goldroger.data.providers.infogreffe import InfogreffeProvider
+            pp = PappersProvider()
+            market_data = pp.fetch_by_siren(siren, company) if pp.is_available() else None
+            if not market_data:
+                market_data = InfogreffeProvider().fetch_by_siren(siren, company)
+        else:
+            from goldroger.data.name_resolver import resolve as resolve_company_name
+            _ids = resolve_company_name(company, llm_provider=client)
+            _q = _ids.infogreffe_query or (_ids.variants[0] if _ids.variants else company)
+            console.print(f"  [dim]Querying as: {_q}[/dim]")
+            market_data = DEFAULT_REGISTRY.fetch_by_name(company)
         if market_data and market_data.revenue_ttm:
             _conf_tag = " [verified]" if market_data.confidence == "verified" else " [estimated]"
-            console.print(f"  [green]Registry[/green] ({market_data.data_source}){_conf_tag} Rev=${market_data.revenue_ttm:.0f}M")
+            console.print(
+                f"  [green]Registry[/green] ({market_data.data_source})"
+                f"{_conf_tag} Rev=${market_data.revenue_ttm:.0f}M"
+            )
+            sources.add(
+                "Revenue TTM", f"${market_data.revenue_ttm:.0f}M",
+                market_data.data_source, market_data.confidence,
+            )
         elif market_data:
             console.print(f"  [yellow]Registry[/yellow] ({market_data.data_source}) sector only — no revenue")
+            sources.add("Sector", market_data.sector or "unknown", market_data.data_source, "inferred")
         else:
             console.print("  [dim]No EU registry data found — revenue via web search fallback[/dim]")
         log.end_step("market_data", t0)
@@ -461,6 +488,17 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
     else:
         _rec = _raw_rec
 
+    # Track key valuation assumptions in sources log
+    sources.add("WACC", f"{result.wacc_used:.2%}", "capm_model", "inferred")
+    sources.add("Terminal growth", f"{result.terminal_growth_used:.2%}", "sector_default", "inferred")
+    sources.add("Implied EV", _ev_str, "valuation_engine", "inferred")
+    if peer_multiples and peer_multiples.ev_ebitda_median:
+        sources.add(
+            "Peer EV/EBITDA median",
+            f"{peer_multiples.ev_ebitda_median:.1f}x ({peer_multiples.n_peers} peers)",
+            "yfinance_peers", "verified",
+        )
+
     val = Valuation(
         current_price=f"${rec.current_price:.2f}" if rec.current_price else None,
         implied_value=_ev_str,        # enterprise value (human-readable, e.g. "$4.97T")
@@ -657,6 +695,7 @@ def run_analysis(company: str, company_type: str = "public", llm: str | None = N
         football_field=football_field,
         peer_comps=peer_comps_table,
         ic_score=ic_summary,
+        sources_md=sources.to_markdown(),
     )
 
 

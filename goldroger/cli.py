@@ -102,6 +102,7 @@ def print_result(result):
 def main():
     parser = argparse.ArgumentParser(description="Gold Roger — AI-powered equity analysis")
     parser.add_argument("--company", "-c", required=True, help="Company name, ticker, or description")
+    parser.add_argument("--siren", help="French SIREN — bypasses name resolution, calls Pappers directly")
     parser.add_argument("--type", "-t", choices=["public", "private"], default="public",
                         help="public (listed) or private company")
     parser.add_argument("--mode", choices=["equity", "ma", "pipeline"], default="equity",
@@ -149,7 +150,7 @@ def main():
                 border_style="cyan",
             ))
         else:
-            result = run_analysis(args.company, args.type, llm=args.llm)
+            result = run_analysis(args.company, args.type, llm=args.llm, siren=args.siren)
             print_result(result)
 
         if args.output:
@@ -175,6 +176,11 @@ def main():
             deck = outdir / deck_name
             generate_pptx(result, str(deck))
             console.print(f"\n[green]✓[/] PowerPoint generated: {deck}")
+
+        if (args.excel or args.pptx) and hasattr(result, "sources_md") and result.sources_md:
+            src = outdir / "sources.md"
+            src.write_text(result.sources_md, encoding="utf-8")
+            console.print(f"[green]✓[/] Sources log: {src}")
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted.[/]")

@@ -112,5 +112,33 @@ class InfogreffeProvider(DataProvider):
             data_source="infogreffe",
         )
 
+    def fetch_by_siren(self, siren: str, company_name: str = "") -> Optional[MarketData]:
+        """Direct SIREN lookup via recherche-entreprises.api.gouv.fr — sector only, no revenue."""
+        try:
+            resp = httpx.get(
+                _SEARCH_URL,
+                params={"q": siren, "per_page": 1},
+                timeout=10,
+                headers={"Accept": "application/json"},
+            )
+            if resp.status_code != 200:
+                return None
+            results = resp.json().get("results", [])
+            if not results:
+                return None
+            r = results[0]
+            naf = r.get("siege", {}).get("activite_principale", "")
+            sector = _NAF_SECTOR.get(naf[:2], "") if naf else ""
+            return MarketData(
+                ticker=(company_name or siren).upper()[:6],
+                company_name=r.get("nom_complet", company_name or siren),
+                sector=sector,
+                revenue_ttm=None,
+                confidence="inferred",
+                data_source="infogreffe",
+            )
+        except Exception:
+            return None
+
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None

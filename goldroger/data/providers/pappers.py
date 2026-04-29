@@ -113,6 +113,10 @@ class PappersProvider(DataProvider):
             return None
         return self._fetch_details(best_siren, best_display_name or company_name)
 
+    def fetch_by_siren(self, siren: str, company_name: str = "") -> Optional[MarketData]:
+        """Direct lookup by SIREN — bypasses name search entirely."""
+        return self._fetch_details(siren, company_name or siren)
+
     def _fetch_details(self, siren: str, company_name: str) -> Optional[MarketData]:
         """Fetch full financials by SIREN and return a MarketData record."""
         try:
