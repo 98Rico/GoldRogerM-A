@@ -184,6 +184,7 @@ class AnalysisResult(Model):
     football_field: Optional[FootballField] = None
     peer_comps: Optional[PeerCompsTable] = None
     ic_score: Optional[ICScoreSummary] = None
+    sources_md: Optional[str] = None  # markdown sources log, written to sources.md in output dir
 
 
 # ── M&A Extensions ──────────────────────────────────────────────────────────
