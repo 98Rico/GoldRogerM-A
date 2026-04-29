@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from goldroger.config import DEFAULT_CONFIG as _cfg
+
 
 @dataclass
 class ICScoreInput:
@@ -309,11 +311,11 @@ def auto_score_from_valuation(
 def _recommendation(score: float, gates_failed: list[str]) -> str:
     if gates_failed:
         return "NO GO"
-    if score >= 75:
+    if score >= _cfg.ic_score.strong_buy_threshold:
         return "STRONG BUY"
-    if score >= 60:
+    if score >= _cfg.ic_score.buy_threshold:
         return "BUY"
-    if score >= 45:
+    if score >= _cfg.ic_score.watch_threshold:
         return "WATCH"
     return "NO GO"
 

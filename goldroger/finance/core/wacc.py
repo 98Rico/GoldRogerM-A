@@ -11,9 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-# Macroeconomic constants (update periodically)
-RISK_FREE_RATE: float = 0.045        # 10-yr US Treasury proxy, April 2025
-EQUITY_RISK_PREMIUM: float = 0.055   # Damodaran long-run ERP
+from goldroger.config import DEFAULT_CONFIG as _cfg
+
+# Sourced from central config — update via goldroger/config.py
+RISK_FREE_RATE: float = _cfg.wacc.risk_free_rate
+EQUITY_RISK_PREMIUM: float = _cfg.wacc.equity_risk_premium
 
 
 @dataclass
