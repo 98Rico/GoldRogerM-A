@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from goldroger.config import DEFAULT_CONFIG as _cfg
+
 
 @dataclass
 class LBOInput:
@@ -32,9 +34,9 @@ class LBOInput:
     exit_multiple: float                  # EV/EBITDA at exit
     hold_period: int = 5
     transaction_fees_pct: float = 0.015   # % of EV
-    cash_sweep: float = 0.75              # % of FCF used for debt paydown
-    min_irr: float = 0.15
-    max_leverage: float = 6.5
+    cash_sweep: float = field(default_factory=lambda: _cfg.lbo.fcf_sweep_rate)
+    min_irr: float = field(default_factory=lambda: _cfg.lbo.min_irr)
+    max_leverage: float = field(default_factory=lambda: _cfg.lbo.max_leverage)
 
 
 @dataclass

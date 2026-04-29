@@ -15,13 +15,14 @@ import time
 import httpx
 from dotenv import load_dotenv
 
+from goldroger.config import DEFAULT_CONFIG as _cfg
 from .llm_client import LLMProvider, build_llm_provider
 
 load_dotenv()
 
 # Global rate limiter: enforce minimum gap between Mistral API calls (free tier safe)
 _last_api_call: float = 0.0
-_MIN_CALL_GAP = 1.0  # seconds between calls — 429 backoff handles actual rate limits
+_MIN_CALL_GAP: float = _cfg.agent.min_call_gap_s
 
 
 def _rate_limit_wait() -> None:
@@ -211,7 +212,7 @@ class BaseAgent:
     model_tier: str = "small"   # "small" or "large" — resolved per provider
     max_tokens: int = 2048
     max_retries: int = 3
-    max_tool_rounds: int = 3    # max web_search iterations per call
+    max_tool_rounds: int = _cfg.agent.max_tool_rounds
     use_tools: bool = True      # False for synthesis-only agents
 
     def __init__(self, client: LLMProvider | None = None):

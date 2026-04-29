@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from goldroger.config import DEFAULT_CONFIG as _cfg
 from goldroger.data.sector_multiples import get_sector_multiples, is_financial_sector
 from goldroger.finance.core.wacc import (
     compute_capm_wacc,
@@ -190,10 +191,12 @@ class ValuationService:
             }
         # Mega-caps (>$500B): precedent transactions are not applicable —
         # no acquirer can buy Apple or Microsoft. Reweight to DCF 60% / Comps 40%.
-        if market_data and market_data.market_cap and market_data.market_cap > 500_000:
+        _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+        if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
             weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
             notes.append(
-                "Mega-cap (>$500B MCap): tx comps excluded — weights DCF 60% / Comps 40%."
+                f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap): "
+                "tx comps excluded — weights DCF 60% / Comps 40%."
             )
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)
 
@@ -461,8 +464,9 @@ class ValuationService:
     def _run_lbo(self, blended_ev, ebitda, revenue_series, ebitda_margin, capex_pct, tax_rate, market_data=None):
         if ebitda <= 0 or blended_ev <= 0:
             return None
-        # LBO is not applicable to mega-caps (no PE firm can acquire >$500B companies)
-        if market_data and market_data.market_cap and market_data.market_cap > 500_000:
+        # LBO is not applicable to mega-caps
+        _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+        if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
             return None
         try:
             growth = self._historical_cagr(revenue_series)
