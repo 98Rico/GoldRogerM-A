@@ -107,7 +107,7 @@ Gaps réels qui restent :
 | R1 | Supprimer ~600 lignes de code mort (`_backup_specialists.py`, `engine.py`, stubs vides) | Clarté immédiate | 1–2h |
 | R2 | Découper `orchestrator.py` (976 lignes) en 4 modules `pipelines/` | Testabilité | 4–6h |
 | R3 | Centraliser la config (WACC, LBO seuils, IC scoring) dans `config.py` | Maintainabilité | 2–3h |
-| R4 | Implémenter SEC EDGAR + Crunchbase (stubs actuels = revenue manquant US) | Qualité data | 3–4h |
+| R4 | Ajouter `fetch_by_name()` à SEC EDGAR (nom→CIK via EDGAR search); activer clé Crunchbase | Qualité data | 2–3h |
 | R5 | Tests agents + providers + exporters (17 tests → 40+) | Fiabilité | 3–4h |
 
 ---
@@ -123,12 +123,12 @@ Gaps réels qui restent :
 | **Bundesanzeiger** | 🇩🇪 | ⚠️ Best-effort HTML | ✅ Gratuit, no auth |
 | **BORME** | 🇪🇸 | ❌ Existence seulement | ✅ Gratuit, no auth |
 | **KVK** | 🇳🇱 | ❌ Secteur seulement | ⚠️ `KVK_API_KEY` (gratuit) |
-| **SEC EDGAR** | 🇺🇸 | ❌ Stub — retourne None | 🔴 Non implémenté |
-| **Crunchbase** | Global | ❌ Stub — retourne None | 🔴 Non implémenté |
+| **SEC EDGAR** | 🇺🇸 | ✅ Revenue 10-K via XBRL (ticker) | ✅ Actif — pas de `fetch_by_name`, US public seulement |
+| **Crunchbase** | Global | ⚠️ Revenue range estimé | ⚠️ `CRUNCHBASE_API_KEY` (gratuit 200 req/j, data.crunchbase.com) |
 | **Bloomberg** | Global | ✅ Tout | ⬜ Stub, `BLOOMBERG_API_KEY` |
 | **Capital IQ** | Global | ✅ Tout | ⬜ Stub, credentials requis |
 
-**Conséquence** : pour les sociétés US privées, SEC EDGAR ne sert à rien aujourd'hui. Pour les sociétés UK+ NL, ajouter les clés gratuites.
+**Conséquence** : pour les sociétés US privées, SEC EDGAR ne couvre que les publiques (ticker requis). Pour UK+NL, ajouter les clés gratuites. Crunchbase couvre les startups si clé activée.
 
 ---
 

@@ -238,19 +238,25 @@ wacc = DEFAULT_CONFIG.wacc.risk_free_rate
 has a free tier. Both stubs exist — implement them.
 **Worktree**: `refactor/real-providers` (independent from Phase 2/3)
 
-### 4.1 SEC EDGAR implementation (`data/providers/sec_edgar.py`)
-- Use `https://data.sec.gov/submissions/{CIK}.json` — free, no auth, JSON
-- Map company name → CIK via `https://efts.sec.gov/LATEST/search-index?q={name}&dateRange=custom`
-- Extract 10-K `us-gaap/Revenues` or `us-gaap/RevenueFromContractWithCustomerExcludingAssessedTax`
-- Returns `MarketData` with `revenue_ttm` populated (verified, not estimated)
-- Covers all SEC-registered companies — major improvement for US private companies
+### 4.1 SEC EDGAR — add `fetch_by_name()` (`data/providers/sec_edgar.py`)
 
-### 4.2 Crunchbase implementation (`data/providers/crunchbase.py`)
-- Free tier: `https://api.crunchbase.com/api/v4/entities/organizations/{permalink}?user_key={key}`
-- `CRUNCHBASE_API_KEY` in `.env` — 200 free calls/day
-- Extract: `revenue_range`, `funding_total`, `num_employees_enum`, `short_description`
-- Returns `MarketData` with `revenue_ttm = None` (range only) + `employees` + `sector`
-- Used as triangulation input for private companies
+**Status**: already implemented for `fetch(ticker)` — XBRL revenue extraction works.
+**Gap**: no `fetch_by_name()` so private/unlisted company lookups never reach it.
+
+```python
+def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
+    # Use EDGAR full-text search: efts.sec.gov/LATEST/search-index?q={name}&...
+    # Resolve company name → CIK → then call existing fetch(ticker) logic
+```
+Covers: US private companies that file with SEC (less common but worth having).
+
+### 4.2 Crunchbase — activate and verify (`data/providers/crunchbase.py`)
+
+**Status**: already implemented — `fetch_by_name()` + revenue range parsing exist.
+**Gap**: requires `CRUNCHBASE_API_KEY` (free tier, 200 req/day at data.crunchbase.com).
+
+Action: add `CRUNCHBASE_API_KEY` to `.env` and test with a known startup (e.g., Notion, Figma).
+The `_parse_revenue_range()` function handles "$10M to $50M" → midpoint in USD millions.
 
 ---
 
