@@ -102,13 +102,13 @@ Gaps réels qui restent :
 
 **Voir [RefactoringSteps.md](RefactoringSteps.md) pour le plan complet et la méthode worktree.**
 
-| Phase | Objectif | Impact | Effort |
-|-------|---------|--------|--------|
-| R1 | Supprimer ~600 lignes de code mort (`_backup_specialists.py`, `engine.py`, stubs vides) | Clarté immédiate | 1–2h |
-| R2 | Découper `orchestrator.py` (976 lignes) en 4 modules `pipelines/` | Testabilité | 4–6h |
-| R3 | Centraliser la config (WACC, LBO seuils, IC scoring) dans `config.py` | Maintainabilité | 2–3h |
-| R4 | Ajouter `fetch_by_name()` à SEC EDGAR (nom→CIK via EDGAR search); activer clé Crunchbase | Qualité data | 2–3h |
-| R5 | Tests agents + providers + exporters (17 tests → 40+) | Fiabilité | 3–4h |
+| Phase | Objectif | Impact | Effort | Statut |
+|-------|---------|--------|--------|--------|
+| R1 | Supprimer ~600 lignes de code mort (`_backup_specialists.py`, `engine.py`, stubs vides) | Clarté | 1–2h | ✅ |
+| R2 | Découper `orchestrator.py` (976 lignes) en `pipelines/` (equity/ma/pipeline/_shared) | Testabilité | 4–6h | ✅ |
+| R3 | Centraliser la config (WACC, LBO, IC scoring, agents) dans `goldroger/config.py` | Maintainabilité | 2–3h | ✅ |
+| R4 | Ajouter `fetch_by_name()` à SEC EDGAR (nom→CIK via EDGAR search); activer clé Crunchbase | Qualité data | 2–3h | ⬜ |
+| R5 | Tests agents + providers + exporters (20 tests → 40+) | Fiabilité | 3–4h | ⬜ |
 
 ---
 

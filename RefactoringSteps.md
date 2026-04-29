@@ -21,7 +21,7 @@ git worktree add ../goldroger-config   refactor/centralize-config
 
 ---
 
-## PHASE 1 — Dead code removal (1–2h, no risk, immediate)
+## ✅ PHASE 1 — Dead code removal *(DONE)*
 
 **Goal**: delete ~600 lines of dead/duplicate code that pollute the codebase.
 **Risk**: zero — none of these files are imported anywhere.
@@ -83,7 +83,7 @@ rmdir goldroger/llm goldroger/finance/models goldroger/orchestration 2>/dev/null
 
 ---
 
-## PHASE 2 — Split orchestrator.py (4–6h, high value, some risk)
+## ✅ PHASE 2 — Split orchestrator.py *(DONE)*
 
 **Goal**: `orchestrator.py` is 976 lines with `run_analysis()` at 575 lines. Split into focused modules.
 **Risk**: medium — requires careful import reorganization, but logic is just moved, not changed.
@@ -167,7 +167,7 @@ def run_agent(agent, company, company_type, context, model_class, fallback):
 
 ---
 
-## PHASE 3 — Centralize configuration (2–3h, medium value, low risk)
+## ✅ PHASE 3 — Centralize configuration *(DONE)*
 
 **Goal**: eliminate hardcoded constants scattered across 6 files.
 **Risk**: low — values unchanged, just moved to one place.
