@@ -72,6 +72,13 @@
 | 12 | 🇩🇪 Handelsregister — `api.offeneregister.de` DNS dead; removed. Provider now uses Bundesanzeiger directly as primary (best-effort revenue via HTML regex). | `data/providers/handelsregister.py` | ✅ |
 | 12 | 🇪🇸 Registro Mercantil — `api.cif.es` DNS dead; removed. BORME full-text search (`boe.es`) used as sole source (company existence only, no revenue). | `data/providers/registro_mercantil.py` | ✅ |
 | 12 | 🇳🇱 KVK — API requires key despite "no key required" docstring (401). `is_available()` now gates on `KVK_API_KEY`. Free key at developers.kvk.nl | `data/providers/kvk.py` | ✅ |
+| 14 | `--siren` CLI flag — bypasses fuzzy name resolution, calls Pappers then Infogreffe by SIREN ID directly | `cli.py`, `orchestrator.py`, `data/providers/pappers.py`, `data/providers/infogreffe.py` | ✅ |
+| 14 | `SourcesLog` utility — tracks every data point (metric, value, source, confidence, URL) across the pipeline | `utils/sources_log.py` | ✅ |
+| 14 | `sources.md` data room — written to output folder alongside Excel/PPT when `--excel` or `--pptx` used | `cli.py`, `orchestrator.py` | ✅ |
+| 14 | `AnalysisResult.sources_md` field — carries markdown sources table through full pipeline | `models/__init__.py` | ✅ |
+| 15 | Parallel agents — Market + Peers + Financials run concurrently via `ThreadPoolExecutor(max_workers=3)` after Fundamentals | `orchestrator.py` | ✅ |
+| 15 | Revenue fallback + private triangulation moved inside `_do_financials()` — correct thread-local scope | `orchestrator.py` | ✅ |
+| 15 | Timing output — wall-clock elapsed for parallel block displayed in CLI | `orchestrator.py` | ✅ |
 
 ---
 
@@ -191,7 +198,7 @@ Signaux manquants : SimilarWeb traffic, LinkedIn headcount live, transaction com
 
 - ✅ Fuzzy matching `difflib.SequenceMatcher` (score ≥ 0.6) — `fuzzy_best_match()` utilisé par Infogreffe et Companies House pour sélectionner le meilleur résultat parmi les candidats du registry
 - Prompt LLM demande déjà la raison sociale exacte par source (infogreffe_query, companies_house_query, etc.)
-- ⬜ SIRET/SIREN lookup pour Infogreffe (recherche plus précise que dénomination seule)
+- ✅ SIREN lookup — `--siren` CLI flag, direct Pappers → Infogreffe by ID (Phase 14)
 
 ---
 

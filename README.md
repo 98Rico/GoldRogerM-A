@@ -13,7 +13,9 @@
                          │
 ┌────────────────────────▼─────────────────────────────────────────┐
 │                    LLM LAYER (qualitative only)                   │
-│  Fundamentals · Market · Financials · Assumptions · Thesis        │
+│  Step 1: Fundamentals (sequential)                                 │
+│  Steps 2+3+3b: Market · Peers · Financials (parallel — Phase 15)  │
+│  Steps 4–6: Assumptions · Valuation Engine · Thesis (sequential)  │
 │  M&A: Sourcing · Strategic Fit · DD · Execution · LBO            │
 │  PeerFinder: identifies comparable listed companies               │
 │  [RULE: LLM never produces financial numbers used in valuation]  │
@@ -46,7 +48,7 @@
 
 ---
 
-## Ce qui fonctionne (Phases 1–12)
+## Ce qui fonctionne (Phases 1–15)
 
 ### Données & Sources
 
@@ -182,6 +184,15 @@ uv run python -m goldroger.cli --company "Longchamp" --type private --excel --pp
 ```
 
 Output : `outputs/Longchamp_20260427_143022/Longchamp_analysis.xlsx` + `Longchamp_analysis.pptx`
+
+### 2b. Société privée française — lookup par SIREN (Phase 14)
+
+```bash
+# SIREN court-circuite la résolution de nom — appel direct Pappers/Infogreffe
+uv run python -m goldroger.cli --company "Sézane" --siren 804398073 --type private --excel --pptx
+```
+
+Output inclut `sources.md` — data room avec chaque métrique tracée (source, confiance, URL).
 
 ### 3. Pipeline sourcing — Carlyle / B2B SaaS Europe
 
