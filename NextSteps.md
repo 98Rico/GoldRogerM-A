@@ -85,199 +85,94 @@
 ## 🎯 VISION — REMPLACER L'ANALYSTE M&A
 
 **Objectif** : produire une analyse meilleure qu'un analyste M&A humain sur toutes les tâches courantes.
-
-**Scope** : M&A européen en priorité (EU registries gratuits = avantage compétitif clé), architecture globale. Toutes tailles de deal.
-
-**LLM** : Mistral (gratuit, défaut). Architecture LLM-agnostique en place — switch via `.env` ou `--llm` sans toucher au code. Anthropic/OpenAI optionnels (install en une commande).
+**Scope** : M&A européen en priorité (EU registries gratuits = avantage compétitif clé). Toutes tailles de deal.
+**LLM** : Mistral (gratuit, défaut). Switch via `--llm` ou `LLM_PROVIDER` dans `.env` — aucun changement de code.
 
 Ce que l'outil bat déjà un analyste sur :
-- Vitesse (minutes vs jours)
-- Cohérence (même structure, zéro biais d'ancrage)
-- Couverture systématique (10 dimensions)
-- Disponibilité 24/7, zéro fatigue
+- Vitesse (minutes vs jours), cohérence (zéro biais), couverture systématique, 24/7
 
-Les trois vrais gaps restants :
-
-### GAP 1 — Private company data depth
-L'outil triangule maintenant depuis 3 sources (EU registry + web search + LLM fallback). Un analyste senior utilise 6–8 signaux. À ajouter :
-- LinkedIn headcount × revenue/employee benchmark par secteur
-- Crunchbase funding history → implied valuation
-- SimilarWeb / web traffic → proxy revenue DTC/consumer
-- Press NLP → extraction chiffres depuis articles
-- Transaction comps scraping (press releases M&A)
-
-### GAP 2 — Transaction comps sans CapIQ
-Les transaction comps actuelles utilisent un multiple sectoriel par défaut — pas de vraies transactions. Ancrer sur des transactions récentes fermées = différenciation majeure.
-- Scraping PR Newswire / BusinessWire / Cision
-- NLP : acquéreur, cible, secteur, EV, multiple, date
-- Base JSON locale mise à jour à chaque run
-
-### GAP 3 — Output polish
-- PPT : vrais graphiques python-pptx (bar chart football field, courbe DCF, waterfall synergies) vs tables ASCII actuelles
-- Excel : modèle 3-statement lié (P&L → BS → CF) vs DCF standalone
-- Executive summary 1-pager
+Gaps réels qui restent :
+1. **Private data depth** — revenue vérifié pour sociétés privées hors France encore insuffisant
+2. **Transaction comps** — multiples sectoriels par défaut, pas de vraies transactions récentes
+3. **Output polish** — PPT tables text, pas de vrais graphiques; Excel DCF seul, pas 3-statement
 
 ---
 
-## 🔴 PRIORITÉ 1 — Sources de données premium
+## 🔴 PRIORITÉ IMMÉDIATE — Refactoring (avant toute feature)
 
-### 1.1 Bloomberg BLP
-**Fichier** : `data/providers/bloomberg.py` — stub prêt, gate sur `BLOOMBERG_API_KEY`
-Activer : installer `blpapi` SDK + set `BLOOMBERG_API_KEY` dans `.env`.
-Apporte : données intraday, private company estimates, transaction comps, consensus complets.
+**Voir [RefactoringSteps.md](RefactoringSteps.md) pour le plan complet et la méthode worktree.**
 
-### 1.2 Capital IQ
-**Fichier** : `data/providers/capitaliq.py` — stub prêt, gate sur `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD`
-Valeur M&A : transactions database, private company financials, covenants, credit.
+| Phase | Objectif | Impact | Effort |
+|-------|---------|--------|--------|
+| R1 | Supprimer ~600 lignes de code mort (`_backup_specialists.py`, `engine.py`, stubs vides) | Clarté immédiate | 1–2h |
+| R2 | Découper `orchestrator.py` (976 lignes) en 4 modules `pipelines/` | Testabilité | 4–6h |
+| R3 | Centraliser la config (WACC, LBO seuils, IC scoring) dans `config.py` | Maintainabilité | 2–3h |
+| R4 | Implémenter SEC EDGAR + Crunchbase (stubs actuels = revenue manquant US) | Qualité data | 3–4h |
+| R5 | Tests agents + providers + exporters (17 tests → 40+) | Fiabilité | 3–4h |
 
 ---
 
-## 🔴 PRIORITÉ 2 — Connectivité data (sources gratuites manquantes)
+## ⚠️ DATA PROVIDERS — État réel (2026-04)
 
-Architecture `DataProvider` / `DataRegistry` en place — chaque source = 1 fichier, 0 modification au moteur.
-
-| Source | Pays | Données | Statut |
+| Source | Pays | Revenue | Statut |
 |--------|------|---------|--------|
-| Companies House 🇬🇧 | UK | SIC/secteur + revenue XBRL best-effort | ⚠️ `COMPANIES_HOUSE_API_KEY` requis (gratuit) |
-| recherche-entreprises.api.gouv.fr 🇫🇷 | FR | SIREN, NAF/secteur — pas de revenue | ✅ intégré (gratuit, no auth) |
-| Bundesanzeiger 🇩🇪 | DE | Revenue best-effort HTML | ✅ intégré (gratuit, no auth) |
-| SEC EDGAR 🇺🇸 | US | 10-K revenues | ✅ intégré |
-| Crunchbase | Global | Funding, revenus estimés | ✅ intégré |
-| KVK 🇳🇱 | NL | SBI/secteur — pas de revenue | ⚠️ `KVK_API_KEY` requis (gratuit) |
-| Registro Mercantil 🇪🇸 | ES | Existence société via BORME — pas de revenue | ✅ intégré (gratuit, no auth) |
-| PAPPERS 🇫🇷 | FR | CA, résultat net, bilans complets | ✅ intégré — `PAPPERS_API_KEY` requis (~€30/mois, pappers.fr/api) |
-| Dealroom | EU | Startups, funding | ⬜ freemium |
-| SimilarWeb | Global | Trafic web | ⬜ freemium |
-| OpenCorporates | 140+ pays | Données légales | ⬜ freemium |
+| **yfinance** | Global | ✅ Vérifié (public seulement) | ✅ Actif |
+| **Pappers** | 🇫🇷 | ✅ Vérifié RNCS/INPI | ⚠️ `PAPPERS_API_KEY` ~€30/mois |
+| **recherche-entreprises.api.gouv.fr** | 🇫🇷 | ❌ Secteur seulement | ✅ Gratuit, no auth |
+| **Companies House** | 🇬🇧 | ⚠️ Best-effort XBRL | ⚠️ `COMPANIES_HOUSE_API_KEY` (gratuit) |
+| **Bundesanzeiger** | 🇩🇪 | ⚠️ Best-effort HTML | ✅ Gratuit, no auth |
+| **BORME** | 🇪🇸 | ❌ Existence seulement | ✅ Gratuit, no auth |
+| **KVK** | 🇳🇱 | ❌ Secteur seulement | ⚠️ `KVK_API_KEY` (gratuit) |
+| **SEC EDGAR** | 🇺🇸 | ❌ Stub — retourne None | 🔴 Non implémenté |
+| **Crunchbase** | Global | ❌ Stub — retourne None | 🔴 Non implémenté |
+| **Bloomberg** | Global | ✅ Tout | ⬜ Stub, `BLOOMBERG_API_KEY` |
+| **Capital IQ** | Global | ✅ Tout | ⬜ Stub, credentials requis |
 
-**Sources premium (stubs à compléter)** : PitchBook, Mergermarket, Dealogic, Preqin.
-
----
-
-## ✅ PHASES COMPLÉTÉES — Phase 13 (Private Company Data Quality)
-
-| Phase | Item | Fichier(s) | Statut |
-|-------|------|-----------|--------|
-| 13 | Pappers provider 🇫🇷 — revenus vérifiés depuis fiches RNCS/INPI (~€30/mois, pappers.fr/api) | `data/providers/pappers.py` | ✅ |
-| 13 | Peer scale constraint — PeerFinderAgent reçoit `revenue_usd_m`, génère bracket ×0.25–×4 pour éviter les mega-caps comme peers | `agents/specialists.py`, `orchestrator.py` | ✅ |
-| 13 | Confidence tagging visible — CLI affiche `[verified]` / `[estimated]` pour le revenue; thesis agent informé du niveau de confiance | `orchestrator.py`, `agents/specialists.py` | ✅ |
-| 13 | `.env.example` mis à jour — PAPPERS_API_KEY, KVK_API_KEY documentés avec instructions | `.env.example` | ✅ |
+**Conséquence** : pour les sociétés US privées, SEC EDGAR ne sert à rien aujourd'hui. Pour les sociétés UK+ NL, ajouter les clés gratuites.
 
 ---
 
-## ⚠️ EU REGISTRY STATUS — Sociétés Privées
-
-Audit complet (2026-04) — état réel de chaque provider :
-
-| Pays | Provider | Statut | Revenue | Condition |
-|------|----------|--------|---------|-----------|
-| 🇫🇷 FR | recherche-entreprises.api.gouv.fr | ✅ Actif | ❌ Non dispo | Gratuit, aucune clé |
-| 🇬🇧 UK | Companies House API | ⚠️ Clé requise | ⚠️ Best-effort (XBRL) | `COMPANIES_HOUSE_API_KEY` — gratuit (developer.company-information.service.gov.uk) |
-| 🇩🇪 DE | Bundesanzeiger | ✅ Actif | ⚠️ Best-effort (HTML) | Gratuit, aucune clé |
-| 🇪🇸 ES | BORME (boe.es) | ✅ Actif | ❌ Non dispo | Gratuit — confirmation existence seulement |
-| 🇳🇱 NL | KVK | ⚠️ Clé requise | ❌ Non dispo | `KVK_API_KEY` — gratuit (developers.kvk.nl) |
-
-**Conséquence** : pour toutes les sociétés privées européennes, le revenue passe par le fallback web search + LLM. Les registres confirment l'existence et donnent le secteur (FR/DE) mais pas les comptes.
-
-**Pour débloquer UK + NL** : ajouter `COMPANIES_HOUSE_API_KEY` et `KVK_API_KEY` dans `.env` (inscription gratuite).
-
-**Prochaine étape données privées recommandée** : ajouter `PAPPERS_API_KEY` dans `.env` (~€30/mois, pappers.fr/api) — débloque le revenue vérifié pour toutes les sociétés françaises privées.
-
----
-
-## ✅ PRIORITÉ 3 — Triangulation privée systématique
-
-`data/private_triangulation.py` est **câblé** dans l'orchestrateur (Phase 9). Après revenue fallback LLM → si toujours null → `triangulate_revenue()` (médiane pondérée multi-signaux).
-
-Signaux implémentés : EU registry, Crunchbase range, headcount × benchmark, funding ARR proxy, press NLP.
-Signaux manquants : SimilarWeb traffic, LinkedIn headcount live, transaction comps scraping.
-
----
-
-## ✅ PRIORITÉ 4 — Name Resolution : précision améliorée
-
-- ✅ Fuzzy matching `difflib.SequenceMatcher` (score ≥ 0.6) — `fuzzy_best_match()` utilisé par Infogreffe et Companies House pour sélectionner le meilleur résultat parmi les candidats du registry
-- Prompt LLM demande déjà la raison sociale exacte par source (infogreffe_query, companies_house_query, etc.)
-- ✅ SIREN lookup — `--siren` CLI flag, direct Pappers → Infogreffe by ID (Phase 14)
-
----
-
-## 🟡 PRIORITÉ 5 — Qualité Engine
-
-### ✅ 5.1 Taux de change live
-`_live_fx()` dans `ValuationService` — `yf.Ticker("EURUSD=X")` etc. avec cache en mémoire et fallback hardcoded.
-
-### 5.2 Transaction comps sans CapIQ
-Actuellement : multiple sectoriel par défaut — non ancré sur de vraies transactions.
-Fix : `TransactionCompsAgent` — scrape press releases M&A → NLP → base JSON locale.
-
-### ✅ 5.3 SOTP pour conglomérats
-Câblé dans `run_analysis` : détection par mots-clés ("segment", "division", "business unit", etc.) → LLM extrait les segments → `compute_sotp()` → `ValuationMethod("SOTP")` ajouté.
-
-### ✅ 5.4 Retry JSON pour tous les agents
-`_parse_with_retry()` câblé pour Fundamentals, Market, Financials, Assumptions.
-
-### ✅ 5.5 Scenario narratives
-`ScenarioSummary.narrative` wired depuis `thesis.bear_case` / `base_case` / `bull_case`.
-
----
-
-## 🟡 PRIORITÉ 6 — Output quality (PPT + Excel)
+## 🟡 PRIORITÉ 1 — Output polish
 
 ### PPT Goldman-quality
-- Vrais graphiques python-pptx : bar chart football field horizontal, courbe DCF projetée, waterfall synergies
-- Template configurable (couleurs, logo client)
-- Slide 0 : executive summary 1-pager (société, recommandation, EV implied, IC score, 3 bullets)
+- Vrais graphiques python-pptx : bar chart football field horizontal, courbe DCF projetée
+- Slide executive summary 1-pager (recommandation, EV, IC score, 3 bullets)
 
 ### Excel 3-statement
 - P&L + Bilan + Cash Flow liés (modèle intégré)
 - Onglets : Assumptions / P&L / BS / CF / DCF / LBO / Scenarios / Sensitivities
-- Actuellement : DCF standalone uniquement
 
 ---
 
-## 🟡 PRIORITÉ 7 — Opportunity Screening (sourcing actif)
+## 🟡 PRIORITÉ 2 — Transaction comps réels
 
-### 7.1 Scoring de pertinence des cibles
-Aujourd'hui toutes les cibles du pipeline ont le même poids. Ajouter un score de pertinence vs brief client (taille, géo, secteur, stade).
-
-### 7.2 Comparaison à une société de référence
-Si le client donne "trouve-moi des cibles comme Veeva", extraire le profil de référence et l'utiliser comme filtre de screening.
-
-### 7.3 Shortlist scorecard PPT
-Nouveau slide pipeline : tableau des cibles avec score de pertinence, EV estimée, IC score, statut, next step.
-
-**Fichiers** : `agents/specialists.py` (SourcingAgent), `orchestrator.py` (run_pipeline), `exporters/pptx.py`
+Actuellement : multiple sectoriel moyen par défaut.
+Cible : `TransactionCompsAgent` scrape press releases M&A (PR Newswire, BusinessWire) → NLP → base JSON locale mise à jour à chaque run. Acquéreur, cible, secteur, EV, multiple, date.
 
 ---
 
-## 🟢 PRIORITÉ 8 — Productisation SaaS
+## 🟡 PRIORITÉ 3 — Opportunity Screening amélioré
 
-### 8.1 Frontend Next.js (périmètre minimal)
-- Search bar → `run_analysis()` → affichage memo + football field
-- Export PPT / Excel one-click
-- Pipeline M&A view avec shortlist scorecard
-- Bouton switch LLM provider
+- Score de pertinence des cibles vs brief client (taille, géo, secteur, stade)
+- Comparaison à une société de référence ("trouve-moi des cibles comme Veeva")
+- Shortlist scorecard PPT : tableau cibles avec score, EV, IC score, statut, next step
 
-### 8.2 Cache persistent
-Cache actuel : in-process (reset à chaque restart). Passer à fichier JSON avec TTL.
+---
 
-### 8.3 Multi-user / API keys
-FastAPI avec auth Bearer (en place), rate limiting par user.
+## 🟢 PRIORITÉ 4 — Productisation SaaS
+
+- Frontend Next.js minimal : search bar → memo + football field + export PPT/Excel one-click
+- Cache persistent (fichier JSON, TTL configurable)
+- Multi-user / API keys via FastAPI auth Bearer (déjà en place)
 
 ---
 
 ## ⚠️ RÈGLE NON NÉGOCIABLE
 
-**LLM = analyse qualitative + estimation de dernier recours uniquement.**
+**Le LLM ne produit jamais les chiffres de valorisation (EV, WACC, multiples).**
 
-Hiérarchie des sources pour les chiffres financiers (dans l'ordre, toujours) :
-1. **Bloomberg / CapIQ** (premium, si credentials) — priorité maximale, données vérifiées
-2. **yfinance / SEC EDGAR** (gratuit) — défaut sociétés publiques, données vérifiées
-3. **EU Registries** (gratuit) — Infogreffe / Companies House / Handelsregister, données officielles
-4. **Crunchbase** (freemium) — revenus estimés startups/privées, taggé `estimated`
-5. **Private triangulation** (multi-signal) — médiane pondérée, taggé `estimated`
-6. **LLM estimation** (fallback) — revenue fallback uniquement si aucune autre source, taggé `estimated`
-7. **Defaults sectoriels** (dernier recours) — taggé `inferred`
+Hiérarchie des sources :
+1. Bloomberg / CapIQ → 2. yfinance / SEC EDGAR → 3. EU Registries → 4. Crunchbase
+5. Private triangulation → 6. LLM fallback (revenue uniquement, taggé `estimated`)
 
-Le LLM ne produit **jamais** les chiffres finaux de valorisation (EV, WACC, multiples de sortie). Il peut estimer le revenue d'une société privée comme fallback, explicitement taggué `estimated`.
+Chaque métrique est taguée `[verified]` / `[estimated]` / `[inferred]` dans les outputs.

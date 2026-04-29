@@ -1,50 +1,88 @@
 # Gold Roger — Moteur de Valorisation Institutionnel
 
-## Architecture Globale
+## Architecture
+
+### Vue d'ensemble
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                    DATA LAYER (pluggable)                         │
-│  Bloomberg → Capital IQ → Refinitiv → yfinance → Crunchbase      │
-│                          → SEC EDGAR                              │
-│  DataRegistry: priority chain, auto-fallback, credential-gated   │
-│  PeerFinder: 4-6 listed peers fetched live via yfinance           │
-└────────────────────────┬─────────────────────────────────────────┘
-                         │
-┌────────────────────────▼─────────────────────────────────────────┐
-│                    LLM LAYER (qualitative only)                   │
-│  Step 1: Fundamentals (sequential)                                 │
-│  Steps 2+3+3b: Market · Peers · Financials (parallel — Phase 15)  │
-│  Steps 4–6: Assumptions · Valuation Engine · Thesis (sequential)  │
-│  M&A: Sourcing · Strategic Fit · DD · Execution · LBO            │
-│  PeerFinder: identifies comparable listed companies               │
-│  [RULE: LLM never produces financial numbers used in valuation]  │
-└────────────────────────┬─────────────────────────────────────────┘
-                         │
-┌────────────────────────▼─────────────────────────────────────────┐
-│              VALUATION ENGINE (pure Python, deterministic)        │
-│                                                                   │
-│  Path A: Standard  → DCF + EV/EBITDA comps + EV/Revenue tx       │
-│  Path B: Financial → P/E + P/B  (banks, insurers, asset mgrs)    │
-│  Path C: SOTP      → Segment × sector multiple                   │
-│                                                                   │
-│  Comps anchored to REAL peer multiples (not sector table avg)     │
-│  WACC: CAPM (β réel) → LLM assumption → sector default           │
-│  Growth: analyst forward estimate (fade curve 5Y) → CAGR → def.  │
-│  Bear/Base/Bull: 3 full DCF scenarios with driver-level deltas    │
-│  LBO engine: IRR/MOIC/feasibility (skipped for mega-caps >$500B) │
-│  IC Scoring: 6 dimensions from agent outputs, not neutral 5/10   │
-└────────────────────────┬─────────────────────────────────────────┘
-                         │
-┌────────────────────────▼─────────────────────────────────────────┐
-│                    EXPORT LAYER                                   │
-│  PowerPoint (10 slides):                                          │
-│    Title · Overview · Market · Financials · Valuation Summary     │
-│    Football Field · Peer Comps · IC Score · Thesis · Risks        │
-│  Excel: DCF workbook + sensitivity matrix                         │
-│  API: FastAPI · CLI                                               │
-└──────────────────────────────────────────────────────────────────┘
+CLI / FastAPI
+     │
+     ▼
+orchestrator.py  ←── point d'entrée unique
+     │
+     ├── 1. DATA LAYER
+     │       ├── yfinance (public: prix, beta, marges, EV, forward estimates)
+     │       ├── Pappers  (🇫🇷 privé: CA, bilans — PAPPERS_API_KEY ~€30/mois)
+     │       ├── recherche-entreprises.api.gouv.fr (🇫🇷 gratuit: SIREN, NAF)
+     │       ├── Companies House (🇬🇧 gratuit avec clé: SIC, revenue XBRL)
+     │       ├── Bundesanzeiger (🇩🇪 gratuit: revenue best-effort HTML)
+     │       ├── BORME (🇪🇸 gratuit: existence seulement)
+     │       ├── KVK (🇳🇱 gratuit avec clé: SBI/secteur)
+     │       ├── SEC EDGAR (🇺🇸 gratuit: revenus 10-K — stub)
+     │       ├── Crunchbase (freemium: funding, headcount — stub)
+     │       └── Bloomberg / Capital IQ / Refinitiv (premium — stubs)
+     │
+     ├── 2. LLM LAYER  (qualitatif uniquement — jamais de chiffres de valorisation)
+     │       ├── Step 1 [séquentiel]: Fundamentals
+     │       ├── Steps 2+3+4 [parallèle — ThreadPoolExecutor]:
+     │       │       Market Analysis · Peer Finder · Financial Modeler
+     │       ├── Step 5 [séquentiel]: Valuation Assumptions
+     │       └── Step 6 [séquentiel]: Thesis / Narrative
+     │
+     ├── 3. VALUATION ENGINE  (Python pur, déterministe)
+     │       ├── Path A Standard  → DCF + EV/EBITDA comps + EV/Revenue tx
+     │       ├── Path B Financial → P/E + P/B  (banques, assureurs, asset mgrs)
+     │       └── Path C SOTP      → segments × multiple sectoriel
+     │           Inputs: CAPM WACC, forward estimates, peer multiples réels
+     │           Outputs: Bear/Base/Bull × {DCF, comps, blended} + sensitivity 5×5
+     │
+     └── 4. EXPORT LAYER
+             ├── PowerPoint 10 slides (Title, Overview, Market, Financials,
+             │   Valuation, Football Field, Peer Comps, IC Score, Thesis, Risks)
+             ├── Excel (Dashboard, DCF, Sensitivity, Comparables, Financials)
+             └── Markdown sources.md  (data room — traçabilité complète)
 ```
+
+### Modules principaux
+
+| Module | Fichier | Rôle | Lignes |
+|--------|---------|------|--------|
+| Orchestrateur | `orchestrator.py` | Coordination complète 3 modes | 976 ⚠️ |
+| Agents LLM | `agents/specialists.py` | 12 agents spécialisés | 584 |
+| Moteur valorisation | `finance/core/valuation_service.py` | DCF + comps + LBO | 613 |
+| DCF engine | `finance/valuation/dcf.py` | FCFF + terminal value | 105 |
+| LBO engine | `finance/valuation/lbo.py` | IRR + MOIC | 184 |
+| Scenarios | `finance/core/scenarios.py` | Bear/Base/Bull | 232 |
+| Fetcher marché | `data/fetcher.py` | yfinance + cache | 350 |
+| Comparables | `data/comparables.py` | Peer multiples réels | 157 |
+| IC Scoring | `ma/scoring.py` | 6 dimensions | 386 |
+| Excel exporter | `exporters/excel.py` | Classeur DCF | 632 |
+| PPT exporter | `exporters/pptx.py` | Deck 10 slides | 692 |
+| Modèles Pydantic | `models/__init__.py` | Tous les types de sortie | 296 |
+
+### Règle fondamentale
+
+> **Le LLM ne produit jamais les chiffres de valorisation.**
+> Hiérarchie des sources pour EV, WACC, multiples :
+> `Bloomberg/CapIQ > yfinance/SEC EDGAR > EU Registries > Crunchbase > Triangulation > LLM fallback`
+> Chaque source est taguée `[verified]` / `[estimated]` / `[inferred]` dans les outputs.
+
+### Ce que l'outil produit aujourd'hui
+
+| Mode | Commande | Outputs |
+|------|---------|---------|
+| **Equity** (public) | `--company NVIDIA` | EV implicite, target price, BUY/HOLD/SELL, football field, PPT+Excel |
+| **Equity** (privé) | `--company Sézane --type private` | EV estimée, ATTRACTIVE/NEUTRAL/EXPENSIVE, PPT+Excel |
+| **Equity** (SIREN) | `--siren 804398073 --type private` | Même chose + revenue vérifié depuis Pappers/Infogreffe |
+| **M&A** | `--mode ma --company Target --acquirer Buyer` | Deal sourcing, strategic fit, DD red flags, LBO, IC score |
+| **Pipeline** | `--mode pipeline --buyer LVMH --focus "skincare DTC"` | Liste cibles qualifiées + IC score par cible |
+
+### Limites actuelles connues
+
+- `orchestrator.py` est une god function (976 lignes, `run_analysis()` fait 575 lignes) → voir [RefactoringSteps.md](RefactoringSteps.md)
+- SEC EDGAR et Crunchbase sont des stubs (retournent None) — données manquantes pour sociétés US
+- Graphiques PPT sont des tableaux texte, pas de vrais charts python-pptx
+- Aucun test pour agents, exporters, providers, orchestration — uniquement les engines finance
 
 ---
 
