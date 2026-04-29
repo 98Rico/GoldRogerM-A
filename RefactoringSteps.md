@@ -260,7 +260,7 @@ The `_parse_revenue_range()` function handles "$10M to $50M" → midpoint in USD
 
 ---
 
-## PHASE 5 — Expand test coverage (3–4h, high value for long-term)
+## ✅ PHASE 5 — Expand test coverage *(DONE)*
 
 **Goal**: go from 20 unit tests (finance engines only) to 40+ tests covering all layers.
 **Worktree**: `refactor/tests`
@@ -314,7 +314,7 @@ The `_parse_revenue_range()` function handles "$10M to $50M" → midpoint in USD
 
 ---
 
-## PHASE 6 — Clean up `models/__init__.py` (1–2h, low risk)
+## ✅ PHASE 6 — Clean up `models/__init__.py` *(DONE)*
 
 **Goal**: 296-line mega-file with 50+ Pydantic models in one file. Split by domain.
 **Worktree**: can be part of Phase 2 cleanup.
@@ -380,9 +380,9 @@ Phase 7 (API cleanup)       ─── after Phase 2 ─────────�
 
 ## Definition of Done
 
-- [ ] Phase 1: `uv run pytest tests/ -q` passes 20/20; `_backup_specialists.py` deleted; all 0-line stubs deleted
-- [ ] Phase 2: `orchestrator.py` < 200 lines; `run_analysis()` < 50 lines; same 20 tests pass
-- [ ] Phase 3: `config.py` exists; no hardcoded thresholds in `wacc.py`, `lbo.py`, `scoring.py`
+- [x] Phase 1: `uv run pytest tests/ -q` passes 20/20; `_backup_specialists.py` deleted; all 0-line stubs deleted
+- [x] Phase 2: `orchestrator.py` < 200 lines; `run_analysis()` < 50 lines; same 20 tests pass
+- [x] Phase 3: `config.py` exists; no hardcoded thresholds in `wacc.py`, `lbo.py`, `scoring.py`
 - [ ] Phase 4: SEC EDGAR returns real revenue for Apple/Tesla; Crunchbase returns org data for Notion
-- [ ] Phase 5: 40+ tests pass including agent mock tests and provider tests
-- [ ] Phase 6: `models/__init__.py` < 30 lines (re-exports only)
+- [x] Phase 5: 55 tests pass — json_parser, config, scoring, agents, providers
+- [x] Phase 6: `models/__init__.py` 25 lines (re-exports only); domain files in `models/`
