@@ -261,6 +261,8 @@ def run_analysis(
     )
 
     # Post-process peer results (yfinance calls — sequential is fine)
+    # target_sector comes from Fundamentals agent output for sector validation
+    _target_sector = fund.sector or "" if fund else ""
     peer_comps_table: PeerCompsTable | None = None
     peer_multiples: PeerMultiples | None = None
     if _peers_raw:
@@ -268,11 +270,24 @@ def run_analysis(
             peer_list = parse_peer_agent_output(_peers_raw)
             peer_tickers = resolve_peer_tickers(peer_list)
             if peer_tickers:
-                peer_multiples = build_peer_multiples(peer_tickers)
+                peer_multiples = build_peer_multiples(
+                    peer_tickers, target_sector=_target_sector
+                )
+                # Log validation summary
+                drops: list[str] = []
+                if peer_multiples.n_dropped_no_data:
+                    drops.append(f"{peer_multiples.n_dropped_no_data} not found")
+                if peer_multiples.n_dropped_sector:
+                    drops.append(f"{peer_multiples.n_dropped_sector} wrong sector")
+                if peer_multiples.n_dropped_sanity:
+                    drops.append(f"{peer_multiples.n_dropped_sanity} bad multiples")
+                drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
+
                 if peer_multiples.n_peers > 0:
                     console.print(
-                        f"  [cyan]{peer_multiples.n_peers} peers found:[/cyan] "
+                        f"  [cyan]{peer_multiples.n_peers} validated peers:[/cyan] "
                         + ", ".join(p.ticker for p in peer_multiples.peers[:6])
+                        + drop_note
                     )
                     if peer_multiples.ev_ebitda_median:
                         console.print(
@@ -307,6 +322,11 @@ def run_analysis(
                             if peer_multiples.ebitda_margin_median else None
                         ),
                         n_peers=peer_multiples.n_peers,
+                    )
+                else:
+                    console.print(
+                        f"  [yellow]Peer comps: fewer than 3 validated peers{drop_note} "
+                        f"— using sector-table multiples[/yellow]"
                     )
         except Exception as e:
             console.print(f"  [yellow]Peer post-processing skipped: {e}[/yellow]")

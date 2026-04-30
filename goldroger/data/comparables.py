@@ -2,10 +2,18 @@
 Peer comparables engine.
 
 For any company (public or private), identifies 4-6 listed peers via LLM,
-fetches their real market data from yfinance, and computes median/mean multiples.
+fetches their real market data from yfinance, validates sector + size fit,
+and computes median multiples.
 
-This replaces sector-table averages with real live market data — critical for
-accurate private company valuation and up-to-date comps.
+Validation rules (applied before any peer enters the multiple computation):
+  1. Ticker must resolve to real yfinance data (not a hallucinated symbol)
+  2. Peer sector must be compatible with target sector (broad GICS group match)
+  3. Numeric sanity gates: EV/EBITDA 1–150, EV/Rev 0.1–50, P/E 3–200
+  4. Minimum 3 validated peers required — falls back to sector-table if fewer
+
+If fewer than MIN_VALID_PEERS pass, the returned PeerMultiples will have
+source="sector_fallback" and n_peers=0 to signal upstream that sector-table
+multiples should be used instead.
 """
 from __future__ import annotations
 
@@ -15,6 +23,80 @@ from typing import Optional
 
 from goldroger.data.fetcher import fetch_market_data, resolve_ticker, MarketData
 
+MIN_VALID_PEERS = 3
+
+# ── Sector compatibility ──────────────────────────────────────────────────────
+
+# Broad GICS-like groups. Both target sector (LLM free text) and peer sector
+# (yfinance standardized) are matched against these keyword sets.
+# If a sector matches no group it's "unclassified" — peer is not rejected.
+_SECTOR_GROUPS: dict[str, frozenset[str]] = {
+    "tech": frozenset([
+        "technology", "software", "saas", "semiconductor", "cloud",
+        "hardware", "it ", "information technology", "tech",
+    ]),
+    "healthcare": frozenset([
+        "healthcare", "pharma", "pharmaceutical", "biotech", "medtech",
+        "health", "life science", "medical",
+    ]),
+    "consumer": frozenset([
+        "consumer", "retail", "ecommerce", "luxury", "food", "beverage",
+        "apparel", "fashion", "cyclical", "defensive", "staple", "fmcg",
+        "cosmetic", "beauty",
+    ]),
+    "financials": frozenset([
+        "financial", "banking", "bank", "insurance", "fintech",
+        "asset management", "wealth", "investment",
+    ]),
+    "industrials": frozenset([
+        "industrial", "aerospace", "defense", "manufacturing",
+        "logistics", "transport", "engineering",
+    ]),
+    "energy": frozenset([
+        "energy", "oil", "gas", "utility", "utilities", "renewable",
+        "clean energy",
+    ]),
+    "comms": frozenset([
+        "communication", "media", "telecom", "entertainment",
+        "gaming", "social", "advertising",
+    ]),
+    "materials": frozenset([
+        "material", "chemical", "mining", "metal", "agriculture",
+    ]),
+    "real_estate": frozenset([
+        "real estate", "reit", "property",
+    ]),
+}
+
+
+def _sector_group(sector: str) -> Optional[str]:
+    """Return the broad sector group, preferring the longest keyword match."""
+    s = sector.lower()
+    best_group: Optional[str] = None
+    best_len = 0
+    for group, keywords in _SECTOR_GROUPS.items():
+        for kw in keywords:
+            if kw in s and len(kw) > best_len:
+                best_group = group
+                best_len = len(kw)
+    return best_group
+
+
+def _sectors_compatible(target: str, peer: str) -> bool:
+    """
+    Return True if target and peer sectors belong to the same broad group.
+    Returns True (don't reject) when either sector is unrecognized.
+    """
+    if not target or not peer:
+        return True
+    tg = _sector_group(target)
+    pg = _sector_group(peer)
+    if tg is None or pg is None:
+        return True  # unclassified — give benefit of the doubt
+    return tg == pg
+
+
+# ── Data structures ───────────────────────────────────────────────────────────
 
 @dataclass
 class PeerData:
@@ -26,6 +108,7 @@ class PeerData:
     ebitda_margin: Optional[float] = None
     revenue_growth: Optional[float] = None
     market_cap: Optional[float] = None
+    sector: Optional[str] = None
 
 
 @dataclass
@@ -40,7 +123,7 @@ class PeerMultiples:
     ebitda_margin_median: Optional[float] = None
     revenue_growth_median: Optional[float] = None
 
-    # Ranges for football field
+    # Ranges for football field (25th–75th percentile)
     ev_ebitda_low: Optional[float] = None
     ev_ebitda_high: Optional[float] = None
     ev_revenue_low: Optional[float] = None
@@ -49,6 +132,13 @@ class PeerMultiples:
     n_peers: int = 0
     source: str = "yfinance_peers"
 
+    # Validation metadata — useful for CLI output and debugging
+    n_dropped_sector: int = 0     # peers dropped for sector mismatch
+    n_dropped_no_data: int = 0    # peers dropped because yfinance returned nothing
+    n_dropped_sanity: int = 0     # peers dropped for extreme multiples
+
+
+# ── Aggregation helpers ───────────────────────────────────────────────────────
 
 def _median(values: list[float]) -> Optional[float]:
     clean = sorted(v for v in values if v and v > 0)
@@ -68,29 +158,64 @@ def _percentile(values: list[float], pct: float) -> Optional[float]:
     return clean[max(0, min(idx, len(clean) - 1))]
 
 
-def build_peer_multiples(peer_tickers: list[str]) -> PeerMultiples:
+# ── Core functions ────────────────────────────────────────────────────────────
+
+def build_peer_multiples(
+    peer_tickers: list[str],
+    target_sector: str = "",
+) -> PeerMultiples:
     """
-    Fetch market data for each peer ticker and compute aggregated multiples.
-    Filters out peers where data is unavailable or multiples look extreme.
+    Fetch market data for each peer ticker and compute validated multiples.
+
+    Validation steps (in order):
+      1. yfinance must return real data (ticker exists)
+      2. Peer sector must be compatible with target_sector
+      3. Multiples must be within sanity bounds
+
+    If fewer than MIN_VALID_PEERS pass all checks, returns PeerMultiples with
+    source="sector_fallback" and n_peers=0 — caller should use sector-table fallback.
+
+    Args:
+        peer_tickers:  list of ticker symbols from PeerFinderAgent (pre-deduplicated)
+        target_sector: sector string for the company being valued (free text OK)
     """
     peers: list[PeerData] = []
+    n_no_data = n_sector = n_sanity = 0
 
     for ticker in peer_tickers:
         md = fetch_market_data(ticker)
+
+        # Gate 1 — ticker must exist in yfinance
         if md is None:
+            n_no_data += 1
             continue
 
+        # Gate 2 — sector compatibility
+        if target_sector and md.sector:
+            if not _sectors_compatible(target_sector, md.sector):
+                n_sector += 1
+                continue
+
+        # Gate 3 — numeric sanity
         ev_ebitda = md.ev_ebitda_market
         ev_revenue = md.ev_revenue_market
         pe = md.pe_ratio or md.forward_pe
 
-        # Basic sanity gates — exclude extreme outliers
+        sanity_fail = False
         if ev_ebitda is not None and (ev_ebitda < 1 or ev_ebitda > 150):
             ev_ebitda = None
+            sanity_fail = True
         if ev_revenue is not None and (ev_revenue < 0.1 or ev_revenue > 50):
             ev_revenue = None
+            sanity_fail = True
         if pe is not None and (pe < 3 or pe > 200):
             pe = None
+            sanity_fail = True
+
+        # Only count as sanity-dropped if ALL multiples were bad
+        if sanity_fail and ev_ebitda is None and ev_revenue is None and pe is None:
+            n_sanity += 1
+            continue
 
         peers.append(PeerData(
             name=md.company_name,
@@ -101,10 +226,18 @@ def build_peer_multiples(peer_tickers: list[str]) -> PeerMultiples:
             ebitda_margin=md.ebitda_margin,
             revenue_growth=md.forward_revenue_growth or md.revenue_growth_yoy,
             market_cap=md.market_cap,
+            sector=md.sector,
         ))
 
-    if not peers:
-        return PeerMultiples()
+    # Not enough validated peers → signal sector-table fallback
+    if len(peers) < MIN_VALID_PEERS:
+        return PeerMultiples(
+            n_peers=0,
+            n_dropped_no_data=n_no_data,
+            n_dropped_sector=n_sector,
+            n_dropped_sanity=n_sanity,
+            source="sector_fallback",
+        )
 
     ev_ebitdas = [p.ev_ebitda for p in peers if p.ev_ebitda]
     ev_revenues = [p.ev_revenue for p in peers if p.ev_revenue]
@@ -124,6 +257,9 @@ def build_peer_multiples(peer_tickers: list[str]) -> PeerMultiples:
         ev_revenue_low=_percentile(ev_revenues, 0.25),
         ev_revenue_high=_percentile(ev_revenues, 0.75),
         n_peers=len(peers),
+        n_dropped_no_data=n_no_data,
+        n_dropped_sector=n_sector,
+        n_dropped_sanity=n_sanity,
         source="yfinance_peers",
     )
 
@@ -131,7 +267,8 @@ def build_peer_multiples(peer_tickers: list[str]) -> PeerMultiples:
 def resolve_peer_tickers(raw_peers: list[dict]) -> list[str]:
     """
     Given LLM-returned peer list [{name, ticker, exchange}], resolve valid tickers.
-    Falls back to yfinance resolve_ticker if provided ticker fails.
+    Falls back to yfinance name search if provided ticker fails to resolve.
+    Returns deduplicated list.
     """
     tickers: list[str] = []
     for p in raw_peers:
@@ -139,7 +276,7 @@ def resolve_peer_tickers(raw_peers: list[dict]) -> list[str]:
         if ticker:
             tickers.append(ticker)
             continue
-        # Fallback: try to resolve by name
+        # Ticker missing — try to resolve by name
         name = p.get("name", "")
         if name:
             resolved = resolve_ticker(name)
