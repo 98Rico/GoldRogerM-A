@@ -2,177 +2,298 @@
 
 ---
 
-## ✅ PHASES COMPLÉTÉES (1–12)
+## PRODUCT VISION
 
-| Phase | Item | Fichier(s) | Statut |
-|-------|------|-----------|--------|
-| 1 | Fetcher yfinance (données vérifiées) | `data/fetcher.py` | ✅ |
-| 1 | Tables multiples sectorielles (20+ secteurs) | `data/sector_multiples.py` | ✅ |
-| 1 | WACC CAPM (β réel, Rf=4.5%, ERP=5.5%) | `finance/core/wacc.py` | ✅ |
-| 1 | DCF corrigé (NWC incrémental + D&A tax shield) | `finance/valuation/dcf.py` | ✅ |
-| 1 | ValuationService orchestrateur | `finance/core/valuation_service.py` | ✅ |
-| 2 | Estimations forward analystes | `data/fetcher.py` | ✅ |
-| 2 | Path P/E + P/B secteur financier | `finance/core/valuation_service.py` | ✅ |
-| 2 | LBO engine déterministe (IRR, MOIC) | `finance/valuation/lbo.py` | ✅ |
-| 2 | SOTP framework (implémenté, pas encore câblé auto) | `finance/valuation/sotp.py` | ✅ |
-| 3 | `run_ma_analysis()` — pipeline M&A complet | `orchestrator.py` | ✅ |
-| 3 | `run_pipeline()` — pipeline acquisitions | `orchestrator.py` | ✅ |
-| 3 | IC Scoring institutionnel (6 dimensions) | `ma/scoring.py` | ✅ |
-| 4 | Cache TTL (1h yfinance, 24h ticker) | `utils/cache.py` | ✅ |
-| 4 | Logging structuré JSON-lines | `utils/logger.py` | ✅ |
-| 5 | Data provider layer pluggable (`DataRegistry`) | `data/providers/` + `data/registry.py` | ✅ |
-| 5 | Crunchbase API (freemium, privées) | `data/providers/crunchbase.py` | ✅ |
-| 5 | Peer comparables réels (PeerFinderAgent + yfinance) | `data/comparables.py` | ✅ |
-| 5 | Bear/Base/Bull scenarios (football field) | `finance/core/scenarios.py` | ✅ |
-| 5 | IC scoring enrichi depuis outputs agents | `ma/scoring.py` | ✅ |
-| 5 | PPT 10 slides (football field + peer comps + IC) | `exporters/pptx.py` | ✅ |
-| 5 | DCF poids 0% banques (path pe_pb) | `finance/core/valuation_service.py` | ✅ |
-| 5 | LBO skippé mega-caps (MCap > $500B) | `finance/core/valuation_service.py` | ✅ |
-| 5 | Rate limit Mistral (backoff + global gap) | `agents/base.py` | ✅ |
-| 5 | 20 tests unitaires (WACC, DCF, LBO, scenarios) | `tests/` | ✅ |
-| 6 | Auto output subfolder `outputs/<name>_<ts>/` | `cli.py` | ✅ |
-| 6 | Pipeline: 3 targets, mistral-small, `--quick` flag | `agents/specialists.py`, `cli.py` | ✅ |
-| 6 | Pipeline retry on 0 targets + Optional fields | `orchestrator.py`, `models/__init__.py` | ✅ |
-| 6 | Football field unit bug (EV passé comme multiple) | `orchestrator.py` | ✅ |
-| 6 | Agent speed: rate gap 1s, tool rounds 3, synthesis agents no web search | `agents/base.py`, `agents/specialists.py` | ✅ |
-| 7 | LLM-agnostic: Mistral/Anthropic/OpenAI via `--llm` + `LLM_PROVIDER` | `agents/llm_client.py`, `agents/providers/` | ✅ |
-| 7 | EU registries: Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪 | `data/providers/` | ✅ |
-| 7 | Private triangulation engine (5-signal weighted median) | `data/private_triangulation.py` | ✅ |
-| 8 | DataCollectorAgent hérite BaseAgent (fix LLMProvider) | `agents/specialists.py` | ✅ |
-| 8 | No placeholder values — DCF/comps omis si revenue manquant, `N/A` honnête | `finance/core/valuation_service.py`, `orchestrator.py` | ✅ |
-| 8 | Optional LLM deps (anthropic/openai groupes optionnels, erreur claire) | `pyproject.toml`, `agents/llm_client.py` | ✅ |
-| 8 | `.env.example` documenté (toutes variables, instructions) | `.env.example` | ✅ |
-| 8 | `fetch_by_name()` dans DataRegistry — EU registries appelés pour privées | `data/registry.py`, `orchestrator.py` | ✅ |
-| 8 | Name Resolver — LLM one-shot → identifiants légaux par source + normalisation | `data/name_resolver.py` | ✅ |
-| 8 | Revenue fallback — si null après 2 LLM attempts → appel ciblé → football field débloqué | `orchestrator.py` | ✅ |
-| 8 | FinancialModelerAgent prompt renforcé — revenue_current NEVER null si données trouvées | `agents/specialists.py` | ✅ |
-| 10 | Target price bug — `implied_value` now human-readable EV ("$4.97T"); `target_price` = per-share intrinsic; unambiguous labels in CLI + PPT | `models/__init__.py`, `orchestrator.py`, `cli.py`, `exporters/pptx.py` | ✅ |
-| 10 | Mega-cap tx comps exclusion — weight=0 for MCap >$500B; reweight DCF 60% / Comps 40% | `finance/core/valuation_service.py` | ✅ |
-| 10 | Private company recommendation — "HOLD" translated to ATTRACTIVE / NEUTRAL / EXPENSIVE | `orchestrator.py` | ✅ |
-| 10 | Revenue reconciliation — thesis agent receives `verified_revenue` lock; cannot contradict data layer | `agents/specialists.py`, `orchestrator.py` | ✅ |
-| 10 | Thesis agent retry — now uses `_parse_with_retry` like other agents | `orchestrator.py` | ✅ |
-| 9 | KVK 🇳🇱 provider (free, `api.kvk.nl`) — sector from SBI code | `data/providers/kvk.py` | ✅ |
-| 9 | Registro Mercantil 🇪🇸 provider (BORME + cif.es fallback) | `data/providers/registro_mercantil.py` | ✅ |
-| 9 | Fuzzy name matching (difflib) — `fuzzy_best_match()` in name_resolver, used by Infogreffe + Companies House | `data/name_resolver.py`, providers | ✅ |
-| 9 | SOTP auto-detect — keyword detection → LLM segment split → `compute_sotp()` → ValuationMethod | `orchestrator.py`, `finance/valuation/sotp.py` | ✅ |
-| 9 | Scenario narratives wired — bear/base/bull.narrative from thesis agent | `orchestrator.py`, `models/__init__.py` | ✅ |
-| 9 | JSON retry for Fundamentals + Market agents (5.4 done) | `orchestrator.py` | ✅ |
-| 9 | Private triangulation wired (5.3 done) | `orchestrator.py`, `data/private_triangulation.py` | ✅ |
-| 9 | Live FX rates via yfinance with hardcoded fallback | `finance/core/valuation_service.py` | ✅ |
-| 11 | DCF NWC year-1 fix — `DCFInput.base_revenue` anchors NWC delta to actual year-0 revenue | `finance/valuation/dcf.py`, `finance/core/valuation_service.py`, `finance/core/scenarios.py` | ✅ |
-| 11 | LBO revenue fix — `entry_ebitda / ebitda_margin` (was `(entry_ev / exit_multiple) / ebitda_margin`) | `finance/valuation/lbo.py` | ✅ |
-| 11 | Scenarios year-0 anchor — all 3 scenarios share same y0 actual revenue; delta applies to growth rate not level | `finance/core/scenarios.py` | ✅ |
-| 11 | Aggregator normalization — weights auto-normalize to 1.0; `blended = mid` (was biased average) | `finance/valuation/aggregator.py` | ✅ |
-| 11 | Sector multiples word-boundary fix — `_word_in()` regex prevents "fintech" → "financials" misfires | `data/sector_multiples.py` | ✅ |
-| 11 | WACC net-cash note — logs "unlevered WACC (D=0)" when net_debt < 0 | `finance/core/valuation_service.py` | ✅ |
-| 11 | LBO test updated — `_standard_lbo()` inputs internally consistent with corrected formula (entry 5x, no expansion, 5% growth) | `tests/test_lbo.py` | ✅ |
-| 12 | EU registry audit — dead APIs removed, `is_available()` corrected, silent 401s eliminated across all 5 providers | see below | ✅ |
-| 12 | 🇫🇷 Infogreffe rewritten — `opendata.infogreffe.fr` dead; replaced with `recherche-entreprises.api.gouv.fr` (official FR govt, no auth). Sector only — no revenue. | `data/providers/infogreffe.py` | ✅ |
-| 12 | 🇬🇧 Companies House — anonymous access removed (401). `is_available()` now gates on `COMPANIES_HOUSE_API_KEY`. Free key at developer.company-information.service.gov.uk | `data/providers/companies_house.py` | ✅ |
-| 12 | 🇩🇪 Handelsregister — `api.offeneregister.de` DNS dead; removed. Provider now uses Bundesanzeiger directly as primary (best-effort revenue via HTML regex). | `data/providers/handelsregister.py` | ✅ |
-| 12 | 🇪🇸 Registro Mercantil — `api.cif.es` DNS dead; removed. BORME full-text search (`boe.es`) used as sole source (company existence only, no revenue). | `data/providers/registro_mercantil.py` | ✅ |
-| 12 | 🇳🇱 KVK — API requires key despite "no key required" docstring (401). `is_available()` now gates on `KVK_API_KEY`. Free key at developers.kvk.nl | `data/providers/kvk.py` | ✅ |
-| 14 | `--siren` CLI flag — bypasses fuzzy name resolution, calls Pappers then Infogreffe by SIREN ID directly | `cli.py`, `orchestrator.py`, `data/providers/pappers.py`, `data/providers/infogreffe.py` | ✅ |
-| 14 | `SourcesLog` utility — tracks every data point (metric, value, source, confidence, URL) across the pipeline | `utils/sources_log.py` | ✅ |
-| 14 | `sources.md` data room — written to output folder alongside Excel/PPT when `--excel` or `--pptx` used | `cli.py`, `orchestrator.py` | ✅ |
-| 14 | `AnalysisResult.sources_md` field — carries markdown sources table through full pipeline | `models/__init__.py` | ✅ |
-| 15 | Parallel agents — Market + Peers + Financials run concurrently via `ThreadPoolExecutor(max_workers=3)` after Fundamentals | `orchestrator.py` | ✅ |
-| 15 | Revenue fallback + private triangulation moved inside `_do_financials()` — correct thread-local scope | `orchestrator.py` | ✅ |
-| 15 | Timing output — wall-clock elapsed for parallel block displayed in CLI | `orchestrator.py` | ✅ |
+**What this is**: An M&A analysis platform for funds and advisors.
+Two modes:
+1. **Company analysis** — enter any company (public or private), get a full memo: valuation, football field, scenarios, IC score, investment thesis, slide deck, Excel model.
+2. **Deal sourcing** — enter a client investment brief, get a shortlist of real target companies with scoring, rationale, and preliminary valuation.
+
+**Core rule (non-negotiable)**: LLMs produce language, never numbers. Every financial figure — revenue, margin, EV, multiple — must originate from a verified data source or a clearly-tagged deterministic estimate. N/A is not an acceptable output.
+
+**LLM strategy**: Mistral by default (free). Switchable via `--llm` or `LLM_PROVIDER`. Architecture is already LLM-agnostic — no code change needed to switch providers.
+
+**Data strategy**: Free tier must produce excellent analysis. Architecture is pluggable — Bloomberg, CapIQ, Refinitiv, Crunchbase Pro can be connected per client without touching core logic.
+
+**UI**: CLI for now. Web interface (Next.js + FastAPI) once data layer is solid.
 
 ---
 
-## 🎯 VISION — REMPLACER L'ANALYSTE M&A
+## WHAT WORKS TODAY
 
-**Objectif** : produire une analyse meilleure qu'un analyste M&A humain sur toutes les tâches courantes.
-**Scope** : M&A européen en priorité (EU registries gratuits = avantage compétitif clé). Toutes tailles de deal.
-**LLM** : Mistral (gratuit, défaut). Switch via `--llm` ou `LLM_PROVIDER` dans `.env` — aucun changement de code.
-
-Ce que l'outil bat déjà un analyste sur :
-- Vitesse (minutes vs jours), cohérence (zéro biais), couverture systématique, 24/7
-
-Gaps réels qui restent :
-1. **Private data depth** — revenue vérifié pour sociétés privées hors France encore insuffisant
-2. **Transaction comps** — multiples sectoriels par défaut, pas de vraies transactions récentes
-3. **Output polish** — PPT tables text, pas de vrais graphiques; Excel DCF seul, pas 3-statement
-
----
-
-## 🔴 PRIORITÉ IMMÉDIATE — Refactoring (avant toute feature)
-
-**Voir [RefactoringSteps.md](RefactoringSteps.md) pour le plan complet et la méthode worktree.**
-
-| Phase | Objectif | Impact | Effort | Statut |
-|-------|---------|--------|--------|--------|
-| R1 | Supprimer ~600 lignes de code mort (`_backup_specialists.py`, `engine.py`, stubs vides) | Clarté | 1–2h | ✅ |
-| R2 | Découper `orchestrator.py` (976 lignes) en `pipelines/` (equity/ma/pipeline/_shared) | Testabilité | 4–6h | ✅ |
-| R3 | Centraliser la config (WACC, LBO, IC scoring, agents) dans `goldroger/config.py` | Maintainabilité | 2–3h | ✅ |
-| R4 | Ajouter `fetch_by_name()` à SEC EDGAR (nom→CIK via EDGAR search); activer clé Crunchbase | Qualité data | 2–3h | ⬜ |
-| R5 | Tests agents + providers + exporters (20 tests → 40+) | Fiabilité | 3–4h | ⬜ |
+| Capability | Status | Notes |
+|-----------|--------|-------|
+| Public company valuation (DCF + Comps + LBO) | ✅ Solid | yfinance, CAPM WACC, sector multiples |
+| M&A pipeline scoring (IC 6-dim) | ✅ Solid | Weighted scorecard |
+| EU company registries (FR, UK, DE, ES, NL) | ✅ Wired | Revenue quality varies by country |
+| Parallel agents (Market + Peers + Financials) | ✅ Fast | ThreadPoolExecutor, ~2–3 min/company |
+| Bear/Base/Bull scenarios + football field | ✅ Solid | Anchored to actual revenue y0 |
+| PPT 10 slides | ✅ Functional | Tables only, no charts yet |
+| Excel DCF | ✅ Functional | Single model, not 3-statement |
+| 55 unit tests | ✅ | Finance engines + agents + providers |
 
 ---
 
-## ⚠️ DATA PROVIDERS — État réel (2026-04)
+## WHAT IS BROKEN OR INSUFFICIENT
 
-| Source | Pays | Revenue | Statut |
-|--------|------|---------|--------|
-| **yfinance** | Global | ✅ Vérifié (public seulement) | ✅ Actif |
-| **Pappers** | 🇫🇷 | ✅ Vérifié RNCS/INPI | ⚠️ `PAPPERS_API_KEY` ~€30/mois |
-| **recherche-entreprises.api.gouv.fr** | 🇫🇷 | ❌ Secteur seulement | ✅ Gratuit, no auth |
-| **Companies House** | 🇬🇧 | ⚠️ Best-effort XBRL | ⚠️ `COMPANIES_HOUSE_API_KEY` (gratuit) |
-| **Bundesanzeiger** | 🇩🇪 | ⚠️ Best-effort HTML | ✅ Gratuit, no auth |
-| **BORME** | 🇪🇸 | ❌ Existence seulement | ✅ Gratuit, no auth |
-| **KVK** | 🇳🇱 | ❌ Secteur seulement | ⚠️ `KVK_API_KEY` (gratuit) |
-| **SEC EDGAR** | 🇺🇸 | ✅ Revenue 10-K via XBRL (ticker) | ✅ Actif — pas de `fetch_by_name`, US public seulement |
-| **Crunchbase** | Global | ⚠️ Revenue range estimé | ⚠️ `CRUNCHBASE_API_KEY` (gratuit 200 req/j, data.crunchbase.com) |
-| **Bloomberg** | Global | ✅ Tout | ⬜ Stub, `BLOOMBERG_API_KEY` |
-| **Capital IQ** | Global | ✅ Tout | ⬜ Stub, credentials requis |
-
-**Conséquence** : pour les sociétés US privées, SEC EDGAR ne couvre que les publiques (ticker requis). Pour UK+NL, ajouter les clés gratuites. Crunchbase couvre les startups si clé activée.
+| Problem | Impact | Root cause |
+|---------|--------|-----------|
+| Private company revenue often missing | Blocks valuation entirely | Registries don't expose revenue (DE/ES/NL) |
+| Peer comps: wrong sector or geography | Wrong multiples → wrong EV | PeerFinderAgent uses LLM names without validation |
+| Transaction comps: sector average only | Overly broad multiples | No real deal database |
+| LLM can inject financial figures via thesis | Silent hallucination risk | Thesis agent receives revenue lock but can still drift |
+| PPT is text tables | Not presentable to fund clients | No charts in python-pptx |
+| Excel is DCF only | Missing BS + CF | Not a real 3-statement model |
+| N/A appears when data chain fails | Unacceptable in client output | No hard fallback policy enforced |
 
 ---
 
-## 🟡 PRIORITÉ 1 — Output polish
+## PRIORITY ROADMAP
 
-### PPT Goldman-quality
-- Vrais graphiques python-pptx : bar chart football field horizontal, courbe DCF projetée
-- Slide executive summary 1-pager (recommandation, EV, IC score, 3 bullets)
+### 🔴 PRIORITY 0 — Data quality firewall (before anything else)
 
-### Excel 3-statement
-- P&L + Bilan + Cash Flow liés (modèle intégré)
-- Onglets : Assumptions / P&L / BS / CF / DCF / LBO / Scenarios / Sensitivities
+These are the trust foundation. Nothing else matters if numbers are wrong.
+
+#### 0.1 — No-N/A policy (enforcement)
+
+Every financial field must resolve to a value, never `None` displayed as `N/A`.
+
+| Field | Fallback chain |
+|-------|---------------|
+| `revenue_current` | Registry → Crunchbase → Private triangulation → LLM-estimated (tagged) |
+| `ebitda_margin` | Sector average from `sector_multiples.py` (tagged `[sector avg]`) |
+| `revenue_growth` | LLM-estimated from business description (tagged `[estimated]`) |
+| `ev_ebitda`, `ev_revenue` | Sector median (always available) |
+| `peer_comps` | Validated yfinance peers (see 0.2) |
+
+**Implementation**: add a `fill_gaps()` post-processing step after all agents complete — walks every required field, applies fallback chain, ensures no `None` reaches the exporter.
+
+#### 0.2 — Peer comps validation
+
+**Problem**: `PeerFinderAgent` returns company names from LLM. These may not exist, be in the wrong sector, or have no yfinance data.
+
+**Fix**:
+1. PeerFinderAgent outputs only ticker symbols (not names)
+2. After agent call: fetch each ticker from yfinance — drop any that fail or have `sector != target sector`
+3. Compute medians from validated set only
+4. Minimum 3 peers required — if fewer pass validation, expand search to sector ETF constituents
+
+#### 0.3 — LLM hallucination firewall
+
+**Problem**: thesis agent and other text agents sometimes echo financial figures that differ from the data layer.
+
+**Fix**:
+- Expand the `verified_revenue` lock pattern (already exists for thesis agent) to ALL text-producing agents
+- Add a post-processing assertion: `assert result.financials.revenue_current == pipeline_revenue` — fail loudly, not silently
+- Tag all agent-originated text: strip any dollar figures from agent outputs if they contradict data layer (regex replace with `[see valuation]`)
+
+#### 0.4 — Activate Crunchbase free tier
+
+**Status**: implemented, tested — just needs `CRUNCHBASE_API_KEY` in `.env`.
+
+**Action**:
+- Document setup in `.env.example` (key at data.crunchbase.com, free, 200 req/day)
+- Crunchbase covers most VC-backed private companies globally → covers the private company revenue gap for startups
+
+#### 0.5 — SEC EDGAR `fetch_by_name()`
+
+**Status**: `fetch(ticker)` works. Missing: name → CIK lookup for private US filers.
+
+**Implementation**:
+```python
+# data/providers/sec_edgar.py
+def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
+    # POST to efts.sec.gov/LATEST/search-index?q={name}&dateRange=custom&...
+    # Resolve name → CIK → call existing XBRL revenue logic
+```
+Covers: US private companies that file 10-K with SEC (uncommon but high-value).
 
 ---
 
-## 🟡 PRIORITÉ 2 — Transaction comps réels
+### 🟠 PRIORITY 1 — Transaction comps (real deal data)
 
-Actuellement : multiple sectoriel moyen par défaut.
-Cible : `TransactionCompsAgent` scrape press releases M&A (PR Newswire, BusinessWire) → NLP → base JSON locale mise à jour à chaque run. Acquéreur, cible, secteur, EV, multiple, date.
+**Current**: EV/EBITDA multiples come from `sector_multiples.py` — static sector averages.
+
+**Problem for M&A funds**: a fund building a deal thesis needs multiples from *comparable recent transactions*, not generic sector averages. "SaaS" could mean 8x or 25x depending on growth profile.
+
+**Solution**: `TransactionCompsAgent` + local deal cache
+
+```
+data/
+  transaction_comps.json    ← local cache, updated per run
+  providers/
+    mergermarket.py         ← stub (requires subscription)
+    press_releases.py       ← free: scrape PR Newswire + BusinessWire M&A announcements
+```
+
+**Agent behavior**:
+1. web_search: `"{sector}" acquisition deal "{year}" EV EBITDA multiple`
+2. Extract: acquirer, target, sector, deal EV, revenue/EBITDA at deal, implied multiple, date
+3. Cache to `transaction_comps.json` (append, dedup by target)
+4. ValuationService uses transaction comps as 3rd method (alongside DCF + peer comps)
+
+**Output impact**: `Valuation.methods` gains a real `Transactions` row with actual deal references.
 
 ---
 
-## 🟡 PRIORITÉ 3 — Opportunity Screening amélioré
+### 🟠 PRIORITY 2 — Output polish (client-ready)
 
-- Score de pertinence des cibles vs brief client (taille, géo, secteur, stade)
-- Comparaison à une société de référence ("trouve-moi des cibles comme Veeva")
-- Shortlist scorecard PPT : tableau cibles avec score, EV, IC score, statut, next step
+M&A fund clients expect outputs that look like they came from a bank. Current output would not pass that bar.
+
+#### 2.1 — PPT: real charts
+
+| Slide | Current | Target |
+|-------|---------|--------|
+| Football field | Text table | Horizontal bar chart (bear/base/bull ranges per method) |
+| DCF | Text | Waterfall: FCF bars + terminal value |
+| Peer comps | Text table | Scatter plot: EV/EBITDA vs EBITDA margin |
+| IC Score | Text table | Radar/spider chart (6 dimensions) |
+
+All implementable with `python-pptx` chart API (`prs.slides[x].shapes.add_chart()`).
+
+#### 2.2 — Excel: 3-statement model
+
+Current: DCF tab only.
+Target: 7-tab model used by analysts:
+
+| Tab | Content |
+|-----|---------|
+| `Assumptions` | Revenue CAGR, margins, WACC, exit multiple — all editable |
+| `P&L` | 5-year projected Income Statement |
+| `Balance Sheet` | Simplified (assets, debt, equity) |
+| `Cash Flow` | Operating + investing + financing |
+| `DCF` | FCF waterfall → EV → equity value |
+| `LBO` | Entry/exit, debt schedule, IRR/MOIC |
+| `Scenarios` | Bear/Base/Bull sensitivity matrix |
+
+#### 2.3 — Executive summary slide
+
+First slide only: company name, recommendation (BUY/HOLD/SELL), EV range, 3 key bullets, IC score badge. One page — the slide a partner reads before the full deck.
 
 ---
 
-## 🟢 PRIORITÉ 4 — Productisation SaaS
+### 🟡 PRIORITY 3 — Deal sourcing (investment brief → target shortlist)
 
-- Frontend Next.js minimal : search bar → memo + football field + export PPT/Excel one-click
-- Cache persistent (fichier JSON, TTL configurable)
-- Multi-user / API keys via FastAPI auth Bearer (déjà en place)
+This is the second product mode. A client says "we want to acquire a €50–200M EBITDA SaaS company in Southern Europe." The tool returns 5–10 screened targets with scoring.
+
+**Current state**: `run_pipeline()` exists but uses LLM-hallucinated company names.
+
+**Target state**:
+1. **Real company sourcing**: use Crunchbase + EU registries + web search to find actual companies matching brief criteria (sector, geography, revenue range, stage)
+2. **Scoring against brief**: score each target on: sector fit, size fit, geography, growth profile, deal complexity, estimated valuation
+3. **Output**: shortlist PPT (one slide per target: overview, financials, why attractive, estimated EV, IC score, next step)
+4. **Validation**: every target must be a real company verifiable via at least one data source
+
+**New command**: `goldroger source --brief "SaaS, €50–200M EBITDA, Southern Europe" --n 10`
 
 ---
 
-## ⚠️ RÈGLE NON NÉGOCIABLE
+### 🟢 PRIORITY 4 — Pluggable data connectors (client tier)
 
-**Le LLM ne produit jamais les chiffres de valorisation (EV, WACC, multiples).**
+Architecture: already has `DataRegistry` + `DataProvider` ABC. Adding a new source = one new file in `data/providers/`.
 
-Hiérarchie des sources :
-1. Bloomberg / CapIQ → 2. yfinance / SEC EDGAR → 3. EU Registries → 4. Crunchbase
-5. Private triangulation → 6. LLM fallback (revenue uniquement, taggé `estimated`)
+**What to document and formalize**:
 
-Chaque métrique est taguée `[verified]` / `[estimated]` / `[inferred]` dans les outputs.
+```python
+# To add Bloomberg:
+class BloombergProvider(DataProvider):
+    name = "bloomberg"
+    requires_credentials = True
+
+    def is_available(self) -> bool:
+        return bool(os.getenv("BLOOMBERG_API_KEY"))
+
+    def fetch(self, ticker: str) -> Optional[MarketData]:
+        # Bloomberg Data License API call
+        ...
+
+    def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
+        # BDP() lookup by name
+        ...
+```
+
+**Priority connectors** (most requested by M&A funds):
+
+| Source | Covers | Notes |
+|--------|--------|-------|
+| **Crunchbase Pro** | Global private, VC-backed | Free tier already active (P0.4) |
+| **Companies House** | 🇬🇧 UK private revenue | Free API key, XBRL revenue parsing improvement needed |
+| **Bloomberg** | Global, all assets | Stub exists, needs BDP API implementation |
+| **Capital IQ** | Global private + transactions | Stub exists |
+| **Pappers** | 🇫🇷 French private (best) | ~€30/mo, RNCS verified revenue |
+| **Refinitiv / LSEG** | Global M&A transactions | Best source for real deal comps |
+
+**Connector SDK**: write `data/providers/TEMPLATE.py` + `docs/adding_a_provider.md` so a client's tech team can plug in their data source in < 2h.
+
+---
+
+### 🔵 PRIORITY 5 — Web interface
+
+**When**: after Priority 0 + 1 are done (data is trusted).
+**Stack**: Next.js frontend + existing FastAPI backend (`api.py`).
+
+**MVP screens**:
+1. Search bar → analysis in progress → memo page with PPT/Excel download
+2. Deal sourcing form → target shortlist with scores
+3. Data source configuration page (connect Pappers, Bloomberg, etc.)
+
+**Not before**: a web interface built on bad data just makes wrong numbers more visible.
+
+---
+
+## DATA PROVIDER STATE
+
+| Source | Country | Revenue | Auth | Priority |
+|--------|---------|---------|------|----------|
+| **yfinance** | Global | ✅ Verified (public) | None | Active |
+| **SEC EDGAR** | 🇺🇸 | ✅ 10-K XBRL (ticker) | None | Add `fetch_by_name` (P0.5) |
+| **Crunchbase** | Global | ⚠️ Range estimate | Free key needed | Activate now (P0.4) |
+| **recherche-entreprises** | 🇫🇷 | ❌ Sector only | None | Active (no revenue) |
+| **Pappers** | 🇫🇷 | ✅ RNCS verified | ~€30/mo | Active if key present |
+| **Companies House** | 🇬🇧 | ⚠️ Best-effort XBRL | Free key | Improve parsing |
+| **Bundesanzeiger** | 🇩🇪 | ⚠️ Best-effort HTML | None | Active |
+| **BORME** | 🇪🇸 | ❌ Existence only | None | Active (no revenue) |
+| **KVK** | 🇳🇱 | ❌ Sector only | Free key | Active if key present |
+| **Bloomberg** | Global | ✅ Everything | License | Stub ready |
+| **Capital IQ** | Global | ✅ Everything + deals | License | Stub ready |
+| **Refinitiv** | Global | ✅ M&A transactions | License | Not yet stubbed |
+
+---
+
+## REFACTORING STATUS
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| R1 | Delete ~600 lines dead code | ✅ Done |
+| R2 | Split orchestrator → `pipelines/` | ✅ Done |
+| R3 | Centralize config → `goldroger/config.py` | ✅ Done |
+| R4 | Split `models/__init__.py` → domain files; delete dead code | ✅ Done |
+| R5 | Tests 20 → 55 (agents, providers, scoring, json_parser, config) | ✅ Done |
+| R6 | SEC EDGAR `fetch_by_name()` + Crunchbase activation | ⬜ P0 |
+
+---
+
+## COMPLETED PHASES (1–15)
+
+<details>
+<summary>Click to expand</summary>
+
+| Phase | Item | Status |
+|-------|------|--------|
+| 1 | yfinance fetcher, sector multiples, WACC CAPM, DCF, ValuationService | ✅ |
+| 2 | Forward estimates, P/E path (banks), LBO engine, SOTP framework | ✅ |
+| 3 | `run_ma_analysis()`, `run_pipeline()`, IC scoring 6-dim | ✅ |
+| 4 | Cache TTL, structured logging | ✅ |
+| 5 | DataRegistry + provider layer, Crunchbase, peer comps, scenarios, PPT, LBO/DCF fixes | ✅ |
+| 6 | Auto output folder, `--quick` flag, pipeline retry, speed optimizations | ✅ |
+| 7 | LLM-agnostic (Mistral/Anthropic/OpenAI), EU registries (FR/UK/DE), private triangulation | ✅ |
+| 8 | DataCollectorAgent fix, no-placeholder policy, optional LLM deps, name resolver, revenue fallback | ✅ |
+| 9 | KVK 🇳🇱, Registro Mercantil 🇪🇸, fuzzy matching, SOTP auto-detect, scenario narratives | ✅ |
+| 10 | Target price fix, mega-cap tx exclusion, private recommendation, revenue lock | ✅ |
+| 11 | DCF NWC fix, LBO revenue fix, scenarios anchor, aggregator normalization | ✅ |
+| 12 | EU registry audit — dead APIs removed, auth gating corrected | ✅ |
+| 13 | (reserved) | — |
+| 14 | `--siren` CLI flag, SourcesLog, `sources.md` output | ✅ |
+| 15 | Parallel agents (ThreadPoolExecutor), revenue fallback in correct scope, timing output | ✅ |
+
+</details>
