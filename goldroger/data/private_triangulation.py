@@ -258,42 +258,67 @@ def _signal_funding_arr(cb_data: dict) -> Optional[float]:
 
 
 def _signal_press_nlp(company_name: str) -> Optional[float]:
-    """Extract revenue figure from DuckDuckGo search snippets."""
+    """Extract revenue figure from web search snippets (DuckDuckGo + fallback)."""
+    queries = [
+        f'"{company_name}" annual revenue',
+        f'"{company_name}" revenue turnover annual report',
+        f'{company_name} revenue sales fiscal year',
+    ]
+    for query in queries:
+        result = _ddg_revenue(query)
+        if result:
+            return result
+    return None
+
+
+def _ddg_revenue(query: str) -> Optional[float]:
+    """Single DuckDuckGo query → revenue extraction."""
     try:
         resp = httpx.get(
             "https://api.duckduckgo.com/",
-            params={
-                "q": f'"{company_name}" revenue annual turnover',
-                "format": "json",
-                "no_html": "1",
-            },
+            params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
             timeout=8,
-            headers={"User-Agent": "Mozilla/5.0"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; goldroger-research/1.0)"},
         )
         if resp.status_code != 200:
             return None
-        text = resp.json().get("AbstractText", "") + " ".join(
-            r.get("Text", "") for r in resp.json().get("RelatedTopics", [])[:5]
-        )
-        return _extract_revenue_from_text(text)
+        data = resp.json()
+        # Collect all text snippets
+        snippets = [data.get("AbstractText", "")]
+        snippets += [r.get("Text", "") for r in data.get("RelatedTopics", [])[:8]]
+        snippets += [r.get("FirstURL", "") + " " + r.get("Text", "")
+                     for r in data.get("Results", [])[:3]]
+        combined = " ".join(snippets)
+        return _extract_revenue_from_text(combined)
     except Exception:
         return None
 
 
 def _extract_revenue_from_text(text: str) -> Optional[float]:
-    """Parse revenue mentions like '$120M', '€1.2B', '£450 million'."""
+    """Parse revenue mentions like '$120M', '€1.2B', '£450 million', '1.2 billion euros'."""
+    # Patterns ordered from most specific to most general
     patterns = [
-        r'(?:revenue|turnover|sales)[^\d$€£]{0,30}[\$€£]?\s*([\d.]+)\s*(billion|million|bn|m\b)',
-        r'[\$€£]([\d.]+)\s*(billion|million|bn|m\b)\s+(?:in\s+)?(?:revenue|turnover|sales)',
+        # "$120M revenue" or "revenue of $1.2B"
+        r'(?:revenue|turnover|sales|chiffre\s*d\'affaires)[^\d$€£]{0,40}[\$€£]?\s*([\d,.]+)\s*(trillion|billion|million|bn|tn|m\b)',
+        r'[\$€£]([\d,.]+)\s*(trillion|billion|million|bn|tn|m\b)\s{0,5}(?:in\s+)?(?:revenue|turnover|sales)',
+        # "1.2 billion in revenue" or "revenues of 450 million euros"
+        r'([\d,.]+)\s*(trillion|billion|million|bn)\s+(?:in\s+|of\s+)?(?:[\$€£])?\s*(?:revenue|turnover|sales|euros?|dollars?)',
+        # "revenues reached €1.2 billion"
+        r'(?:revenue|turnover|sales)[^.]{0,60}?([\d,.]+)\s*(billion|million|bn)',
     ]
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            val = float(match.group(1))
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            raw = match.group(1).replace(",", "")
             unit = match.group(2).lower()
+            try:
+                val = float(raw)
+            except ValueError:
+                continue
+            if unit in ("trillion", "tn"):
+                return round(val * 1_000_000, 1)
             if unit in ("billion", "bn"):
-                return round(val * 1000, 1)
-            return round(val, 1)
+                return round(val * 1_000, 1)
+            return round(val, 1)  # million / m
     return None
 
 

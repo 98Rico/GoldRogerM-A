@@ -24,8 +24,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import re as _re
+
 from pptx import Presentation
+from pptx.chart.data import ChartData
 from pptx.dml.color import RGBColor
+from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
@@ -172,6 +176,210 @@ def _safe_str(s: str | None, fallback: str = "N/A") -> str:
     return s2 if s2 else fallback
 
 
+# Chart colour constants
+_BEAR_RED = RGBColor(192, 0, 0)
+_BASE_GOLD = RGBColor(255, 192, 0)
+_BULL_GREEN = RGBColor(0, 176, 80)
+_IC_BLUE = RGBColor(31, 73, 125)
+_IC_TARGET = RGBColor(180, 180, 180)
+
+
+def _parse_ev_m(s: str | None) -> float | None:
+    """Parse EV string like '$1.2B' or '$450M' to float in $M."""
+    if not s:
+        return None
+    m = _re.search(r"\$?([\d.]+)\s*([TBMKtbmk]?)", s.replace(",", ""))
+    if not m:
+        return None
+    val = float(m.group(1))
+    suffix = m.group(2).upper()
+    if suffix == "T":
+        return val * 1_000_000
+    if suffix == "B":
+        return val * 1_000
+    if suffix == "K":
+        return val / 1_000
+    return val  # M or unitless
+
+
+def _parse_score(s: str | None) -> float | None:
+    """Parse '7.5/10' or '7.5' to float; returns None on failure."""
+    if not s:
+        return None
+    try:
+        return float(str(s).split("/")[0].strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _add_ff_chart(slide: object, ff: "FootballField") -> None:
+    """Add a horizontal clustered bar chart for the football field."""
+    bear, base, bull = ff.bear, ff.base, ff.bull
+    if not (bear and base and bull):
+        return
+
+    rows = {
+        "DCF EV": (
+            _parse_ev_m(bear.dcf_ev),
+            _parse_ev_m(base.dcf_ev),
+            _parse_ev_m(bull.dcf_ev),
+        ),
+        "Comps EV": (
+            _parse_ev_m(bear.comps_ev),
+            _parse_ev_m(base.comps_ev),
+            _parse_ev_m(bull.comps_ev),
+        ),
+        "Blended EV": (
+            _parse_ev_m(bear.blended_ev),
+            _parse_ev_m(base.blended_ev),
+            _parse_ev_m(bull.blended_ev),
+        ),
+    }
+    # Drop methods where all values are None
+    rows = {k: v for k, v in rows.items() if any(x is not None for x in v)}
+    if not rows:
+        return
+
+    categories = list(rows.keys())
+    bear_vals = tuple(v[0] or 0 for v in rows.values())
+    base_vals = tuple(v[1] or 0 for v in rows.values())
+    bull_vals = tuple(v[2] or 0 for v in rows.values())
+
+    cd = ChartData()
+    cd.categories = categories
+    cd.add_series("Bear", bear_vals)
+    cd.add_series("Base", base_vals)
+    cd.add_series("Bull", bull_vals)
+
+    chart_shape = slide.shapes.add_chart(
+        XL_CHART_TYPE.BAR_CLUSTERED,
+        Inches(0.5), Inches(1.2),
+        Inches(12.5), Inches(5.8),
+        cd,
+    )
+    chart = chart_shape.chart
+    chart.has_legend = True
+    chart.has_title = True
+    chart.chart_title.text_frame.text = "Valuation Football Field  ($M EV)"
+
+    for i, colour in enumerate([_BEAR_RED, _BASE_GOLD, _BULL_GREEN]):
+        series = chart.series[i]
+        series.format.fill.solid()
+        series.format.fill.fore_color.rgb = colour
+
+
+def _add_ic_radar(slide: object, ic: "ICScoreSummary") -> None:
+    """Add an IC score radar/spider chart on the right half of an IC slide."""
+    dim_map = {
+        "Strategy": _parse_score(ic.strategy),
+        "Synergies": _parse_score(ic.synergies),
+        "Financial": _parse_score(ic.financial),
+        "LBO": _parse_score(ic.lbo),
+        "Integration": _parse_score(ic.integration),
+        "Risk": _parse_score(ic.risk),
+    }
+    vals = tuple(v if v is not None else 5.0 for v in dim_map.values())
+
+    cd = ChartData()
+    cd.categories = list(dim_map.keys())
+    cd.add_series("Score", vals)
+    cd.add_series("Midpoint", (5.0,) * 6)
+
+    chart_shape = slide.shapes.add_chart(
+        XL_CHART_TYPE.RADAR_FILLED,
+        Inches(6.8), Inches(1.2),
+        Inches(6.3), Inches(5.8),
+        cd,
+    )
+    chart = chart_shape.chart
+    chart.has_legend = False
+    chart.has_title = False
+
+    chart.series[0].format.fill.solid()
+    chart.series[0].format.fill.fore_color.rgb = _IC_BLUE
+    chart.series[1].format.line.color.rgb = _IC_TARGET
+
+
+def _add_exec_summary_slide(prs: Presentation, result: AnalysisResult) -> None:
+    """Insert an executive summary as the first slide."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    f = result.fundamentals
+    v = result.valuation
+    ic = result.ic_score
+    fin = result.financials
+
+    _add_header(
+        slide,
+        _safe_str(f.company_name, result.company),
+        f"Executive Summary  |  {_safe_str(f.sector)}  |  {result.company_type.title()}",
+    )
+
+    rec = _safe_str(v.recommendation if v else None, "HOLD").upper()
+    rec_colors = {"BUY": _BULL_GREEN, "ATTRACTIVE": _BULL_GREEN, "SELL": _BEAR_RED,
+                  "EXPENSIVE": _BEAR_RED, "HOLD": _BASE_GOLD, "NEUTRAL": _BASE_GOLD}
+    rec_color = rec_colors.get(rec, NAVY)
+
+    # Recommendation badge (large, centred)
+    badge = slide.shapes.add_textbox(Inches(4.5), Inches(1.5), Inches(4.0), Inches(0.9))
+    tf = badge.text_frame
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.CENTER
+    r = p.add_run()
+    r.text = rec
+    r.font.bold = True
+    r.font.size = Pt(36)
+    r.font.color.rgb = rec_color
+    r.font.name = "Calibri"
+
+    # Three key metrics
+    implied_ev = _safe_str(v.implied_value if v else None)
+    revenue = _safe_str(fin.revenue_current)
+    ebitda_m = _safe_str(fin.ebitda_margin)
+    upside = _safe_str(v.upside_downside if v else None)
+    ic_score_str = _safe_str(ic.ic_score if ic else None)
+
+    kpi_box = slide.shapes.add_textbox(Inches(0.5), Inches(2.6), Inches(12.3), Inches(1.4))
+    tf2 = kpi_box.text_frame
+    tf2.clear()
+    p2 = tf2.paragraphs[0]
+    p2.alignment = PP_ALIGN.CENTER
+    r2 = p2.add_run()
+    r2.text = (
+        f"Implied EV: {implied_ev}     |     Revenue: ${revenue}M"
+        f"     |     EBITDA Margin: {ebitda_m}"
+        f"     |     Upside/Downside: {upside}"
+    )
+    _set_run(r2, bold=True, size=15, color=NAVY)
+
+    # IC Score badge
+    if ic_score_str not in ("N/A", ""):
+        ic_box = slide.shapes.add_textbox(Inches(5.2), Inches(4.0), Inches(2.8), Inches(0.7))
+        tf3 = ic_box.text_frame
+        p3 = tf3.paragraphs[0]
+        p3.alignment = PP_ALIGN.CENTER
+        r3 = p3.add_run()
+        r3.text = f"IC Score: {ic_score_str}"
+        _set_run(r3, bold=True, size=16, color=NAVY)
+
+    # 3-bullet thesis summary
+    thesis_bullets = []
+    if result.thesis:
+        if result.thesis.base_case:
+            thesis_bullets.append(f"Base case: {result.thesis.base_case[:130]}")
+        if result.thesis.bull_case:
+            thesis_bullets.append(f"Bull: {result.thesis.bull_case[:130]}")
+        if result.thesis.bear_case:
+            thesis_bullets.append(f"Bear: {result.thesis.bear_case[:130]}")
+
+    if thesis_bullets:
+        _add_bullets(
+            slide,
+            Inches(0.5), Inches(4.9), Inches(12.3), Inches(2.3),
+            "Key Scenarios",
+            thesis_bullets,
+        )
+
+
 def _build_equity_deck(result: AnalysisResult) -> Presentation:
     prs = Presentation()
     prs.slide_width = Inches(13.333)  # 16:9
@@ -182,6 +390,9 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
     fin = result.financials
     v = result.valuation
     t = result.thesis
+
+    # 0) Executive Summary (first slide — what a partner reads first)
+    _add_exec_summary_slide(prs, result)
 
     # 1) Title
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
@@ -329,38 +540,43 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
         methods_rows,
     )
 
-    # 6) Football Field — Bear / Base / Bull
+    # 6) Football Field — Bear / Base / Bull (horizontal bar chart)
     ff = result.football_field
     if ff:
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         _add_header(slide, "Valuation Football Field — Bear / Base / Bull")
-        ff_rows = []
-        for scenario in [ff.bear, ff.base, ff.bull]:
-            if scenario:
-                ff_rows.append([
-                    scenario.name,
-                    _safe_str(scenario.dcf_ev),
-                    _safe_str(scenario.comps_ev),
-                    _safe_str(scenario.blended_ev),
-                    _safe_str(scenario.wacc),
-                    _safe_str(scenario.ebitda_margin),
-                ])
-        if ff_rows:
-            _add_table(
-                slide,
-                Inches(0.75), Inches(1.3), Inches(12.1), Inches(3.5),
-                "Scenario Analysis",
-                ["Scenario", "DCF EV", "Comps EV", "Blended EV", "WACC", "EBITDA Margin"],
-                ff_rows,
-            )
+        try:
+            _add_ff_chart(slide, ff)
+        except Exception:
+            # Chart failed — fall back to text table
+            ff_rows = []
+            for scenario in [ff.bear, ff.base, ff.bull]:
+                if scenario:
+                    ff_rows.append([
+                        scenario.name,
+                        _safe_str(scenario.dcf_ev),
+                        _safe_str(scenario.comps_ev),
+                        _safe_str(scenario.blended_ev),
+                        _safe_str(scenario.wacc),
+                        _safe_str(scenario.ebitda_margin),
+                    ])
+            if ff_rows:
+                _add_table(
+                    slide,
+                    Inches(0.75), Inches(1.3), Inches(12.1), Inches(4.5),
+                    "Scenario Analysis",
+                    ["Scenario", "DCF EV", "Comps EV", "Blended EV", "WACC", "EBITDA Margin"],
+                    ff_rows,
+                )
+        # Range summary always shown as text below chart
         _add_bullets(
             slide,
-            Inches(0.75), Inches(5.0), Inches(12.2), Inches(2.2),
-            "Ranges",
+            Inches(0.5), Inches(7.1), Inches(12.3), Inches(0.3),
+            "",
             [
-                f"DCF range:     {_safe_str(ff.dcf_range)}",
-                f"Comps range:   {_safe_str(ff.comps_range)}",
-                f"Blended range: {_safe_str(ff.blended_range)}",
+                f"Blended range: {_safe_str(ff.blended_range)}   "
+                f"DCF: {_safe_str(ff.dcf_range)}   "
+                f"Comps: {_safe_str(ff.comps_range)}",
             ],
         )
 
@@ -398,15 +614,15 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
             peer_rows,
         )
 
-    # 8) IC Score Breakdown
+    # 8) IC Score Breakdown (left: scores table + rationale; right: radar chart)
     ic = result.ic_score
     if ic:
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         rec_label = _safe_str(ic.recommendation)
-        _add_header(slide, f"IC Score — {rec_label}", f"Investment Committee Scorecard")
+        _add_header(slide, f"IC Score — {rec_label}", "Investment Committee Scorecard")
         _add_table(
             slide,
-            Inches(0.75), Inches(1.2), Inches(5.8), Inches(4.5),
+            Inches(0.5), Inches(1.2), Inches(5.9), Inches(3.8),
             "Dimension Scores",
             ["Dimension", "Score"],
             [
@@ -421,10 +637,14 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
         )
         _add_bullets(
             slide,
-            Inches(7.0), Inches(1.2), Inches(5.8), Inches(4.5),
+            Inches(0.5), Inches(5.2), Inches(5.9), Inches(2.0),
             "Rationale & Next Steps",
             [_safe_str(ic.rationale, "N/A")] + _safe_list(ic.next_steps),
         )
+        try:
+            _add_ic_radar(slide, ic)
+        except Exception:
+            pass
 
     # 9) Investment Thesis
     slide = prs.slides.add_slide(prs.slide_layouts[6])

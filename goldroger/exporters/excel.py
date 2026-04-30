@@ -612,6 +612,234 @@ def _build_financials_sheet(wb: Workbook, r: AnalysisResult) -> None:
             _data_cell(ws, row, 3, km.delta or "—", bg=bg)
 
 
+# ── 3-Statement model helpers ─────────────────────────────────────────────────
+
+def _revenue_series_m(r: AnalysisResult) -> list[float]:
+    """Return 5-year projected revenue series in $M."""
+    fin = r.financials
+    rev0 = _to_m(_parse_num(fin.revenue_current)) or 0.0
+    growth = _parse_pct(fin.revenue_growth) or 0.07
+    # Cap wild LLM growth estimates
+    growth = max(-0.30, min(growth, 0.50))
+    return [rev0 * (1 + growth) ** y for y in range(1, 6)]
+
+
+def _build_pl_sheet(wb: Workbook, r: AnalysisResult) -> None:
+    """P&L — 5-year projected income statement."""
+    ws = wb.create_sheet("P&L")
+    ws.sheet_view.showGridLines = False
+
+    fin = r.financials
+    for col, w in zip("ABCDEFGH", [32, 16, 14, 14, 14, 14, 14, 14]):
+        ws.column_dimensions[col].width = w
+
+    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Projected P&L  ($M, 5-year)", 7)
+    ws["A2"].value = "All values in $M  |  Based on stated assumptions"
+    ws["A2"].font = _font(9, color=MID_GRAY, italic=True)
+    ws.merge_cells("A2:G2")
+
+    years = [f"Y{i}" for i in range(1, 6)]
+    headers = ["Line Item"] + years + ["CAGR"]
+    _style_col_headers(ws, 4, headers, 1)
+
+    rev_series = _revenue_series_m(r)
+    ebitda_m = _parse_pct(fin.ebitda_margin) or 0.18
+    gross_m = _parse_pct(fin.gross_margin) or min(ebitda_m + 0.25, 0.80)
+    net_m = _parse_pct(fin.net_margin) or (ebitda_m * 0.55)
+    da_pct = 0.05  # D&A ~5% of revenue
+
+    def _cagr(s: list[float]) -> str:
+        if not s or s[0] <= 0:
+            return "—"
+        return f"{((s[-1] / s[0]) ** (1 / (len(s) - 1)) - 1):.1%}"
+
+    gross_series = [v * gross_m for v in rev_series]
+    ebitda_series = [v * ebitda_m for v in rev_series]
+    da_series = [v * da_pct for v in rev_series]
+    ebit_series = [e - d for e, d in zip(ebitda_series, da_series)]
+    net_series = [v * net_m for v in rev_series]
+
+    sections = [
+        ("Revenue", rev_series, LIGHT_BLUE, True),
+        ("  COGS", [-v * (1 - gross_m) for v in rev_series], WHITE, False),
+        ("Gross Profit", gross_series, STRIPE, True),
+        ("  Gross Margin %", [v / r2 if r2 else 0 for v, r2 in zip(gross_series, rev_series)], WHITE, False, "0.0%"),
+        ("  OpEx (est.)", [-(v - e) for v, e in zip(gross_series, ebitda_series)], WHITE, False),
+        ("EBITDA", ebitda_series, LIGHT_BLUE, True),
+        ("  EBITDA Margin %", [v / r2 if r2 else 0 for v, r2 in zip(ebitda_series, rev_series)], WHITE, False, "0.0%"),
+        ("  D&A (est.)", [-v for v in da_series], WHITE, False),
+        ("EBIT", ebit_series, STRIPE, True),
+        ("  Interest (est.)", [0.0] * 5, WHITE, False),
+        ("  Tax (25%)", [-v * 0.25 for v in ebit_series], WHITE, False),
+        ("Net Income", net_series, LIGHT_BLUE, True),
+        ("  Net Margin %", [v / r2 if r2 else 0 for v, r2 in zip(net_series, rev_series)], WHITE, False, "0.0%"),
+    ]
+
+    row = 5
+    for item in sections:
+        label, vals = item[0], item[1]
+        bg = item[2]
+        bold = item[3]
+        fmt = item[4] if len(item) > 4 else "#,##0.0"
+        _data_cell(ws, row, 1, label, bold=bold, bg=bg, align="left")
+        for ci, v in enumerate(vals, 2):
+            _data_cell(ws, row, ci, round(v, 1), bold=bold, bg=bg, fmt=fmt)
+        # CAGR for non-margin rows
+        if fmt != "0.0%":
+            cagr_v = _cagr(vals)
+            c = ws.cell(row=row, column=7)
+            c.value = cagr_v
+            c.font = _font(10, bold=bold, color=MID_GRAY)
+            c.alignment = Alignment(horizontal="center")
+            c.fill = _fill(bg)
+        row += 1
+
+    ws["A2"].value = (
+        f"All values $M  |  Revenue growth assumed {(_parse_pct(fin.revenue_growth) or 0.07):.1%}/yr  |"
+        f"  EBITDA margin {ebitda_m:.1%}  |  Net margin {net_m:.1%}"
+    )
+
+
+def _build_bs_sheet(wb: Workbook, r: AnalysisResult) -> None:
+    """Balance Sheet — simplified 5-year projected."""
+    ws = wb.create_sheet("Balance Sheet")
+    ws.sheet_view.showGridLines = False
+
+    fin = r.financials
+    for col, w in zip("ABCDEFGH", [32, 16, 14, 14, 14, 14, 14, 14]):
+        ws.column_dimensions[col].width = w
+
+    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Simplified Balance Sheet  ($M)", 7)
+    ws["A2"].value = "Simplified model — actual figures may vary  |  All values in $M"
+    ws["A2"].font = _font(9, color=MID_GRAY, italic=True)
+    ws.merge_cells("A2:G2")
+
+    years = [f"Y{i}" for i in range(1, 6)]
+    headers = ["Line Item"] + years + ["Notes"]
+    _style_col_headers(ws, 4, headers, 1)
+
+    rev_series = _revenue_series_m(r)
+    ebitda_m = _parse_pct(fin.ebitda_margin) or 0.18
+    net_series = [v * (_parse_pct(fin.net_margin) or ebitda_m * 0.55) for v in rev_series]
+    da_series = [v * 0.05 for v in rev_series]
+    capex_series = [v * 0.04 for v in rev_series]
+
+    d_e = _parse_num(fin.debt_to_equity) or 0.5
+    debt0 = (rev_series[0] * ebitda_m * 3) * (d_e / (1 + d_e)) if d_e > 0 else 0
+    cash0 = rev_series[0] * 0.08
+
+    # Build cumulative retained earnings
+    retained = []
+    ret = 0.0
+    for ni in net_series:
+        ret += ni * 0.7  # assume 30% dividend payout
+        retained.append(ret)
+
+    cash_series = [cash0 + sum(net_series[:i + 1]) * 0.3 for i in range(5)]
+    ppe_series = [rev_series[i] * 0.25 - sum(capex_series[:i + 1]) + sum(da_series[:i + 1]) for i in range(5)]
+    ppe_series = [max(p, 0) for p in ppe_series]
+    debt_series = [max(debt0 - sum(capex_series[:i + 1]) * 0.5, 0) for i in range(5)]
+
+    ta_series = [c + r + p + r2 * 0.12 for c, p, r, r2 in zip(cash_series, ppe_series, retained, rev_series)]
+    equity_series = [ta - d for ta, d in zip(ta_series, debt_series)]
+
+    sections = [
+        ("ASSETS", None, NAVY, True),
+        ("  Cash & equivalents", cash_series, LIGHT_BLUE, False),
+        ("  Receivables (12% rev)", [v * 0.12 for v in rev_series], WHITE, False),
+        ("  Total Current Assets", [c + v * 0.12 for c, v in zip(cash_series, rev_series)], STRIPE, True),
+        ("  PP&E (net)", ppe_series, WHITE, False),
+        ("Total Assets", ta_series, LIGHT_BLUE, True),
+        ("LIABILITIES & EQUITY", None, NAVY, True),
+        ("  Payables (8% rev)", [v * 0.08 for v in rev_series], WHITE, False),
+        ("  Long-term Debt", debt_series, WHITE, False),
+        ("  Total Liabilities", [d + v * 0.08 for d, v in zip(debt_series, rev_series)], STRIPE, True),
+        ("  Retained Earnings", retained, WHITE, False),
+        ("Total Equity", equity_series, LIGHT_BLUE, True),
+    ]
+
+    row = 5
+    for item in sections:
+        label, vals = item[0], item[1]
+        bg = item[2]
+        bold = item[3]
+        _data_cell(ws, row, 1, label, bold=bold, bg=bg, align="left")
+        if vals:
+            for ci, v in enumerate(vals, 2):
+                _data_cell(ws, row, ci, round(v, 1), bold=bold, bg=bg, fmt="#,##0.0")
+        row += 1
+
+
+def _build_cf_sheet(wb: Workbook, r: AnalysisResult) -> None:
+    """Cash Flow Statement — 5-year projected."""
+    ws = wb.create_sheet("Cash Flow")
+    ws.sheet_view.showGridLines = False
+
+    fin = r.financials
+    for col, w in zip("ABCDEFGH", [32, 16, 14, 14, 14, 14, 14, 14]):
+        ws.column_dimensions[col].width = w
+
+    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Cash Flow Statement  ($M)", 7)
+    ws["A2"].value = "Simplified model  |  All values in $M"
+    ws["A2"].font = _font(9, color=MID_GRAY, italic=True)
+    ws.merge_cells("A2:G2")
+
+    years = [f"Y{i}" for i in range(1, 6)]
+    _style_col_headers(ws, 4, ["Line Item"] + years + ["Total"], 1)
+
+    rev_series = _revenue_series_m(r)
+    ebitda_m = _parse_pct(fin.ebitda_margin) or 0.18
+    net_m = _parse_pct(fin.net_margin) or ebitda_m * 0.55
+    da_pct = 0.05
+    capex_pct = 0.04
+    nwc_pct = 0.03  # working capital build ~3% of revenue growth
+
+    net_inc = [v * net_m for v in rev_series]
+    da = [v * da_pct for v in rev_series]
+    d_rev = [rev_series[i] - (rev_series[i - 1] if i > 0 else rev_series[0] / 1.07) for i in range(5)]
+    delta_nwc = [-d * nwc_pct for d in d_rev]
+    op_cf = [n + d + w for n, d, w in zip(net_inc, da, delta_nwc)]
+
+    capex = [-v * capex_pct for v in rev_series]
+    fcf = [o + c for o, c in zip(op_cf, capex)]
+
+    fin_cf = [0.0] * 5  # simplified: no external financing assumed
+
+    net_cash = [o + c + f for o, c, f in zip(op_cf, capex, fin_cf)]
+
+    sections = [
+        ("OPERATING ACTIVITIES", None, NAVY, True),
+        ("  Net Income", net_inc, LIGHT_BLUE, False),
+        ("  + D&A", da, WHITE, False),
+        ("  ± Change in NWC", delta_nwc, WHITE, False),
+        ("Operating Cash Flow", op_cf, STRIPE, True),
+        ("INVESTING ACTIVITIES", None, NAVY, True),
+        ("  Capital Expenditure", capex, WHITE, False),
+        ("Free Cash Flow", fcf, LIGHT_BLUE, True),
+        ("FINANCING ACTIVITIES", None, NAVY, True),
+        ("  Net Debt / Equity Change", fin_cf, WHITE, False),
+        ("Net Change in Cash", net_cash, STRIPE, True),
+    ]
+
+    row = 5
+    for item in sections:
+        label, vals = item[0], item[1]
+        bg = item[2]
+        bold = item[3]
+        _data_cell(ws, row, 1, label, bold=bold, bg=bg, align="left")
+        if vals:
+            for ci, v in enumerate(vals, 2):
+                _data_cell(ws, row, ci, round(v, 1), bold=bold, bg=bg, fmt="#,##0.0")
+            total = sum(vals)
+            c = ws.cell(row=row, column=7)
+            c.value = round(total, 1)
+            c.font = _font(10, bold=bold, color=DARK_GRAY)
+            c.number_format = "#,##0.0"
+            c.alignment = Alignment(horizontal="center")
+            c.fill = _fill(bg)
+        row += 1
+
+
 # ── Public API ──────────────────────────────────────────────────────────────
 
 def generate_excel(result: AnalysisResult, output_path: str = "analysis.xlsx") -> str:
@@ -623,6 +851,9 @@ def generate_excel(result: AnalysisResult, output_path: str = "analysis.xlsx") -
     _build_comparables_sheet(wb, result)
     _build_sensitivity_sheet(wb, result)
     _build_financials_sheet(wb, result)
+    _build_pl_sheet(wb, result)
+    _build_bs_sheet(wb, result)
+    _build_cf_sheet(wb, result)
 
     # Remove default empty sheet
     if "Sheet" in wb.sheetnames:

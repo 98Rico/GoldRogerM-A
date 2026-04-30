@@ -318,3 +318,75 @@ def get_sector_multiples(sector: str) -> SectorMultiples:
 def is_financial_sector(sector: str) -> bool:
     """Return True if this sector uses P/E / P/B valuation (not EV/EBITDA)."""
     return get_sector_multiples(sector).valuation_method == "pe_pb"
+
+
+# ── Sector benchmark tables (EBITDA margin + revenue growth) ─────────────────
+# Used by fill_gaps to tag estimated values when live data is absent.
+
+_SECTOR_EBITDA_MARGINS: dict[str, float] = {
+    "technology": 0.20,
+    "software": 0.25,
+    "semiconductors": 0.30,
+    "healthcare": 0.18,
+    "biotechnology": -0.05,
+    "pharmaceuticals": 0.22,
+    "consumer staples": 0.15,
+    "consumer discretionary": 0.12,
+    "retail": 0.08,
+    "industrials": 0.12,
+    "aerospace": 0.12,
+    "energy": 0.20,
+    "utilities": 0.30,
+    "financials": 0.30,
+    "banking": 0.30,
+    "insurance": 0.15,
+    "asset management": 0.30,
+    "real estate": 0.35,
+    "materials": 0.15,
+    "telecom": 0.28,
+    "communication services": 0.22,
+    "media": 0.18,
+    "e-commerce": 0.08,
+    "default": 0.18,
+}
+
+_SECTOR_REV_GROWTH: dict[str, float] = {
+    "technology": 0.12,
+    "software": 0.18,
+    "semiconductors": 0.12,
+    "healthcare": 0.08,
+    "biotechnology": 0.20,
+    "pharmaceuticals": 0.06,
+    "consumer staples": 0.04,
+    "consumer discretionary": 0.06,
+    "retail": 0.04,
+    "industrials": 0.05,
+    "aerospace": 0.06,
+    "energy": 0.03,
+    "utilities": 0.03,
+    "financials": 0.06,
+    "banking": 0.05,
+    "insurance": 0.04,
+    "asset management": 0.07,
+    "real estate": 0.05,
+    "materials": 0.04,
+    "telecom": 0.03,
+    "communication services": 0.08,
+    "media": 0.04,
+    "e-commerce": 0.15,
+    "default": 0.07,
+}
+
+
+def get_sector_ebitda_margin(sector: str) -> float:
+    """Return the typical EBITDA margin for a sector (decimal)."""
+    key = sector.strip().lower()
+    canonical = _ALIASES.get(key, key)
+    return _SECTOR_EBITDA_MARGINS.get(canonical, _SECTOR_EBITDA_MARGINS["default"])
+
+
+def get_sector_rev_growth(sector: str) -> float:
+    """Return the typical revenue growth rate for a sector (decimal)."""
+    key = sector.strip().lower()
+    canonical = _ALIASES.get(key, key)
+    return _SECTOR_REV_GROWTH.get(canonical, _SECTOR_REV_GROWTH["default"])

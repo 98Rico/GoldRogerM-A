@@ -129,23 +129,23 @@ class CompaniesHouseProvider(DataProvider):
     def _fetch_revenue(self, company_number: str) -> Optional[float]:
         filings = self._get(
             f"/company/{company_number}/filing-history",
-            {"category": "accounts", "items_per_page": 5},
+            {"category": "accounts", "items_per_page": 10},
         )
         if not filings:
             return None
         items = filings.get("items", [])
-        for filing in items:
-            # Only full accounts have revenue; abbreviated don't
-            ftype = filing.get("type", "")
-            if ftype in ("AA", "ACCOUNTS TYPE FULL", "ACCOUNTS TYPE SMALL"):
-                doc_url = (
-                    filing.get("links", {})
-                    .get("document_metadata", "")
-                )
-                if doc_url:
-                    revenue = self._parse_xbrl_revenue(doc_url)
-                    if revenue:
-                        return revenue
+        # Prefer full/small accounts over abbreviated (abbreviated rarely have revenue)
+        priority_types = {"AA", "ACCOUNTS TYPE FULL", "ACCOUNTS TYPE SMALL", "AA01"}
+        sorted_filings = sorted(
+            items,
+            key=lambda f: (0 if f.get("type", "") in priority_types else 1),
+        )
+        for filing in sorted_filings:
+            doc_url = filing.get("links", {}).get("document_metadata", "")
+            if doc_url:
+                revenue = self._parse_xbrl_revenue(doc_url)
+                if revenue:
+                    return revenue
         return None
 
     def _parse_xbrl_revenue(self, metadata_url: str) -> Optional[float]:
@@ -162,21 +162,53 @@ class CompaniesHouseProvider(DataProvider):
             doc_url = links.get("document", "")
             if not doc_url:
                 return None
-            doc = httpx.get(doc_url, auth=self._auth(), timeout=15)
+            doc = httpx.get(doc_url, auth=self._auth(), timeout=20)
             if doc.status_code != 200:
                 return None
-            # Look for turnover/revenue in XBRL inline tags
-            import re
             text = doc.text
-            patterns = [
-                r'ix:nonFraction[^>]*name="[^"]*[Tt]urnover[^"]*"[^>]*>\s*([\d,]+)',
-                r'ix:nonFraction[^>]*name="[^"]*[Rr]evenue[^"]*"[^>]*>\s*([\d,]+)',
+            import re
+
+            # Strategy 1: iXBRL inline tags — multiple known revenue concepts
+            # UK GAAP / FRS 102 / IFRS concepts in order of reliability
+            xbrl_patterns = [
+                # FRS 102 / UK GAAP
+                r'(?:name|contextRef)="[^"]*(?:Turnover|Revenue|GrossProfit)[^"]*"[^>]*>\s*([£]?[\d,]+)',
+                r'ix:nonFraction[^>]*name="[^"]*(?:Turnover|Revenue)[^"]*"[^>]*>\s*([\d,]+)',
+                # Core UK taxonomy
+                r'uk-core:(?:Turnover|Revenue)[^>]*>\s*([\d,]+)',
+                r'bus:(?:Turnover|TotalRevenue)[^>]*>\s*([\d,]+)',
+                # Inline XBRL data attributes
+                r'data-xbrl-concept="[^"]*(?:turnover|revenue)[^"]*"[^>]*>\s*([£]?[\d,]+)',
             ]
-            for pattern in patterns:
-                match = re.search(pattern, text)
-                if match:
-                    val = float(match.group(1).replace(",", ""))
-                    return val / 1_000_000  # convert to USD millions (approximate, GBP→USD)
+            for pattern in xbrl_patterns:
+                for m in re.finditer(pattern, text, re.IGNORECASE):
+                    raw = m.group(1).replace(",", "").replace("£", "").strip()
+                    try:
+                        val = float(raw)
+                        if val > 1000:  # raw pence/units below 1000 not plausible revenue
+                            gbp_usd = 1.27  # approximate GBP→USD
+                            # Values in CH are in GBP (£) — determine scale by magnitude
+                            if val < 1_000_000:
+                                # Likely in thousands
+                                return val * gbp_usd / 1_000
+                            else:
+                                # Likely in full GBP
+                                return val * gbp_usd / 1_000_000
+                    except ValueError:
+                        continue
+
+            # Strategy 2: plain-text fallback — "Turnover ... £X,XXX,XXX" or "Revenue £X"
+            text_patterns = [
+                r'(?:Turnover|Revenue|Sales)\D{0,30}£\s*([\d,]+)',
+                r'£\s*([\d,]+)\s*(?:turnover|revenue|sales)',
+            ]
+            for pattern in text_patterns:
+                m = re.search(pattern, text, re.IGNORECASE)
+                if m:
+                    raw = float(m.group(1).replace(",", ""))
+                    if raw > 100:
+                        gbp_usd = 1.27
+                        return raw * gbp_usd / (1 if raw > 1_000_000 else 1_000)
         except Exception:
             pass
         return None

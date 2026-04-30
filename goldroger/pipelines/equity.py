@@ -57,6 +57,7 @@ from ._shared import (
     _step,
     console,
 )
+from .fill_gaps import fill_gaps
 
 load_dotenv()
 
@@ -663,7 +664,7 @@ def run_analysis(
     console.rule("[DONE EQUITY]")
     log.flush()
 
-    return AnalysisResult(
+    analysis = AnalysisResult(
         company=company,
         company_type=company_type,
         fundamentals=fund,
@@ -676,3 +677,5 @@ def run_analysis(
         ic_score=ic_summary,
         sources_md=sources.to_markdown(),
     )
+    fill_gaps(analysis, fund.sector or "")
+    return analysis
