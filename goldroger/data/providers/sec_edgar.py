@@ -23,6 +23,7 @@ from .base import DataProvider, ProviderCapabilities
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 _HEADERS = {"User-Agent": "GoldRoger Research goldroger@research.ai"}
 _TIMEOUT = 15
 
@@ -48,6 +49,40 @@ def _load_cik_map() -> None:
 def _get_cik(ticker: str) -> Optional[str]:
     _load_cik_map()
     return _ticker_to_cik.get(ticker.upper())
+
+
+def _search_cik_by_name(company_name: str) -> Optional[str]:
+    """Search EDGAR full-text index for a company name → return zero-padded CIK."""
+    from goldroger.data.name_resolver import fuzzy_best_match
+
+    for query in [f'"{company_name}"', company_name]:
+        try:
+            resp = httpx.get(
+                _SEARCH_URL,
+                params={"q": query, "forms": "10-K", "dateRange": "custom", "startdt": "2019-01-01"},
+                headers=_HEADERS,
+                timeout=_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                continue
+            hits = resp.json().get("hits", {}).get("hits", [])
+            if not hits:
+                continue
+            candidates = [
+                (h["_source"]["entity_name"], str(h["_source"]["entity_id"]).zfill(10))
+                for h in hits[:10]
+                if "_source" in h and "entity_name" in h["_source"] and "entity_id" in h["_source"]
+            ]
+            if not candidates:
+                continue
+            best = fuzzy_best_match(company_name, [c[0] for c in candidates], threshold=0.5)
+            for name, cik in candidates:
+                if name == best:
+                    return cik
+            return candidates[0][1]  # take top hit if no fuzzy match
+        except Exception:
+            continue
+    return None
 
 
 def _extract_revenue(facts: dict) -> Optional[float]:
@@ -112,6 +147,33 @@ class SECEdgarProvider(DataProvider):
         except Exception:
             return None
 
+    def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
+        """Look up a US company by name via EDGAR full-text search → CIK → revenue."""
+        cik = _search_cik_by_name(company_name)
+        if not cik:
+            return None
+        try:
+            resp = httpx.get(
+                _FACTS_URL.format(cik=cik),
+                headers=_HEADERS,
+                timeout=_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                return None
+            facts = resp.json()
+            revenue = _extract_revenue(facts)
+            name = facts.get("entityName", company_name)
+            return MarketData(
+                ticker=company_name.upper()[:6],
+                company_name=name,
+                sector="",
+                revenue_ttm=revenue,
+                confidence="verified" if revenue else "inferred",
+                data_source="sec_edgar",
+            )
+        except Exception:
+            return None
+
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None  # EDGAR search is slow; yfinance handles this better
 
@@ -119,9 +181,9 @@ class SECEdgarProvider(DataProvider):
         return ProviderCapabilities(
             name="sec_edgar",
             display_name="SEC EDGAR",
-            description="US public company filings — 10-K revenue via XBRL (no key required)",
+            description="US company 10-K filings — revenue via XBRL; name search for private US filers",
             coverage=["US"],
-            company_types=["public"],
+            company_types=["public", "private"],
             data_fields=["revenue"],
             cost_tier="free",
             requires_key=False,

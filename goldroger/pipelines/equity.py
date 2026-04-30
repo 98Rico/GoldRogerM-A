@@ -14,7 +14,14 @@ from goldroger.agents.specialists import (
     PeerFinderAgent,
     ReportWriterAgent,
     SectorAnalystAgent,
+    TransactionCompsAgent,
     ValuationEngineAgent,
+)
+from goldroger.data.transaction_comps import (
+    add_comps,
+    load_cache,
+    parse_agent_output as parse_tx_output,
+    sector_medians,
 )
 from goldroger.data.comparables import (
     PeerMultiples,
@@ -79,6 +86,7 @@ def run_analysis(
     val_agent = ValuationEngineAgent(client)
     thesis_agent = ReportWriterAgent(client)
     peer_agent = PeerFinderAgent(client)
+    tx_agent = TransactionCompsAgent(client)
 
     console.rule(f"[EQUITY] {company}")
 
@@ -249,13 +257,29 @@ def run_analysis(
         _done("Financials", _t)
         return f
 
-    with ThreadPoolExecutor(max_workers=3) as _pool:
+    def _do_tx_comps():
+        _t = _step("Transaction Comps")
+        try:
+            import datetime
+            raw = tx_agent.run(company, company_type, {
+                "sector": fund.sector or "",
+                "current_year": str(datetime.date.today().year),
+            })
+            result = (raw, None)
+        except Exception as e:
+            result = (None, e)
+        _done("Transaction Comps", _t)
+        return result
+
+    with ThreadPoolExecutor(max_workers=4) as _pool:
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
+        _fut_tx = _pool.submit(_do_tx_comps)
         mkt = _fut_mkt.result()
         _peers_raw, _peers_err = _fut_peers.result()
         fin = _fut_fin.result()
+        _tx_raw, _tx_err = _fut_tx.result()
 
     # Override LLM-derived financials with registry-verified values when available
     fin = _reconcile_financials(fin, market_data, console)
@@ -338,6 +362,34 @@ def run_analysis(
     elif _peers_err:
         console.print(f"  [yellow]Peer finder skipped: {_peers_err}[/yellow]")
 
+    # Post-process transaction comps — cache + extract medians
+    _tx_medians: dict = {}
+    if _tx_raw:
+        try:
+            new_comps = parse_tx_output(_tx_raw, fund.sector or "")
+            if new_comps:
+                all_comps = add_comps(new_comps)
+                _tx_medians = sector_medians(all_comps, fund.sector or "")
+                console.print(
+                    f"  [cyan]Transaction comps:[/cyan] {len(new_comps)} new deals cached "
+                    f"({_tx_medians.get('n_deals', 0)} total in sector) "
+                    + (f"EV/EBITDA median {_tx_medians['ev_ebitda_median']:.1f}x"
+                       if _tx_medians.get("ev_ebitda_median") else "")
+                )
+            else:
+                # Use cached comps for the sector even if agent returned nothing usable
+                _tx_medians = sector_medians(load_cache(), fund.sector or "")
+                if _tx_medians.get("n_deals"):
+                    console.print(
+                        f"  [dim]Transaction comps: using {_tx_medians['n_deals']} "
+                        f"cached deals for sector[/dim]"
+                    )
+        except Exception as e:
+            console.print(f"  [yellow]Transaction comps post-processing skipped: {e}[/yellow]")
+    elif _tx_err:
+        console.print(f"  [yellow]Transaction comps agent skipped: {_tx_err}[/yellow]")
+        _tx_medians = sector_medians(load_cache(), fund.sector or "")
+
     # ── 4. ASSUMPTIONS ────────────────────────────────────────────────────
     t0 = _step("Assumptions")
     assumptions = _parse_with_retry(
@@ -363,6 +415,15 @@ def run_analysis(
         console.print(
             f"  [cyan]Comps anchored to {peer_multiples.n_peers} real peers: "
             f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
+        )
+
+    # Feed real transaction comp multiple into valuation if available
+    if _tx_medians.get("ev_ebitda_median"):
+        assumptions_dict["tx_multiple"] = _tx_medians["ev_ebitda_median"]
+        console.print(
+            f"  [cyan]Transaction comps: anchored tx_multiple to "
+            f"{_tx_medians['ev_ebitda_median']:.1f}x "
+            f"({_tx_medians.get('n_deals', '?')} real deals)[/cyan]"
         )
 
     result = svc.run_full_valuation(
@@ -394,8 +455,12 @@ def run_analysis(
             weight=30,
         ))
     if result.has_revenue and result.transactions:
+        tx_label = "Transaction Comps"
+        tx_n = _tx_medians.get("n_deals", 0)
+        if tx_n:
+            tx_label = f"Transaction Comps ({tx_n} deals)"
         _methods.append(ValuationMethod(
-            name="Transaction Comps",
+            name=tx_label,
             mid=str(round(result.transactions.implied_value, 1)),
             weight=20,
         ))

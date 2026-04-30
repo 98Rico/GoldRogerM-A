@@ -267,6 +267,59 @@ Return ONLY this JSON:
 }}"""
 
 
+# ── Transaction comps agent ──────────────────────────────────────────────────
+
+
+class TransactionCompsAgent(BaseAgent):
+    """Search for real M&A deal multiples for a given sector.
+
+    Returns a JSON list of recent deals with EV, revenue, EBITDA, and multiples.
+    Uses web_search to find press-release / news data — never invents numbers.
+    """
+
+    name = "TransactionComps"
+    model_tier = "large"
+    max_tokens = 2400
+
+    def _system_prompt(self) -> str:
+        return (
+            "You are an M&A research analyst specializing in transaction comps. "
+            "Use web_search to find REAL recent M&A deals with verifiable multiples. "
+            "NEVER invent deal data. Only include a deal if you found an actual source. "
+            "Respond ONLY with a valid JSON array — no markdown fences, no preamble."
+        )
+
+    def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
+        sector = context.get("sector", "")
+        year = context.get("current_year", "2024")
+        return f"""Find 4–8 real M&A transactions in the "{sector}" sector from 2020–{year}.
+
+Use web_search with queries like:
+  - "{sector} acquisition deal EV multiple 2023 2024"
+  - "{sector} M&A transaction enterprise value EBITDA multiple"
+  - "acquired {sector} company million billion 2022 2023 2024"
+
+For each real deal you find, extract:
+- target: acquired company name
+- acquirer: buying company name
+- sector: sub-sector if known
+- year: deal close year (integer)
+- ev_m: enterprise value in USD millions (convert if needed)
+- revenue_m: target revenue in USD millions at deal time (null if unknown)
+- ebitda_m: target EBITDA in USD millions at deal time (null if unknown)
+- ev_ebitda: EV/EBITDA multiple if stated (null if unknown)
+- ev_revenue: EV/Revenue multiple if stated (null if unknown)
+- source: URL or publication name
+
+Return ONLY a JSON array:
+[
+  {{"target": "...", "acquirer": "...", "sector": "...", "year": 2023,
+    "ev_m": 450.0, "revenue_m": 85.0, "ebitda_m": 18.0,
+    "ev_ebitda": 25.0, "ev_revenue": 5.3, "source": "https://..."}},
+  ...
+]"""
+
+
 # ── M&A workflow agents (optional) ──────────────────────────────────────────
 
 
