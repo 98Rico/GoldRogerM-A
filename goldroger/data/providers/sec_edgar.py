@@ -19,7 +19,7 @@ from typing import Optional
 import httpx
 
 from goldroger.data.fetcher import MarketData
-from .base import DataProvider
+from .base import DataProvider, ProviderCapabilities
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -114,3 +114,15 @@ class SECEdgarProvider(DataProvider):
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None  # EDGAR search is slow; yfinance handles this better
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            name="sec_edgar",
+            display_name="SEC EDGAR",
+            description="US public company filings — 10-K revenue via XBRL (no key required)",
+            coverage=["US"],
+            company_types=["public"],
+            data_fields=["revenue"],
+            cost_tier="free",
+            requires_key=False,
+        )

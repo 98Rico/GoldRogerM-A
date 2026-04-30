@@ -19,7 +19,7 @@ import os
 from typing import Optional
 
 from goldroger.data.fetcher import MarketData
-from .base import DataProvider
+from .base import DataProvider, ProviderCapabilities
 
 
 class CapitalIQProvider(DataProvider):
@@ -43,6 +43,20 @@ class CapitalIQProvider(DataProvider):
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None
 
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            name="capital_iq",
+            display_name="S&P Capital IQ",
+            description="M&A transaction comps, private company financials, credit data",
+            coverage=["GLOBAL"],
+            company_types=["public", "private"],
+            data_fields=["revenue", "ebitda", "comps", "transactions", "credit"],
+            cost_tier="paid",
+            requires_key=True,
+            key_env_var="CAPITALIQ_USERNAME",
+            key_signup_url="https://www.spglobal.com/marketintelligence/en/solutions/capital-iq-platform",
+        )
+
 
 class RefinitivProvider(DataProvider):
     """Refinitiv Eikon / LSEG stub — similar tier to Capital IQ."""
@@ -55,8 +69,21 @@ class RefinitivProvider(DataProvider):
     def fetch(self, ticker: str) -> Optional[MarketData]:
         if not self.is_available():
             return None
-        # TODO: implement via refinitiv-data Python SDK
         raise NotImplementedError("Refinitiv integration pending.")
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            name="refinitiv",
+            display_name="Refinitiv / LSEG",
+            description="M&A transactions, news analytics, real-time market data",
+            coverage=["GLOBAL"],
+            company_types=["public", "private"],
+            data_fields=["revenue", "ebitda", "transactions", "news"],
+            cost_tier="paid",
+            requires_key=True,
+            key_env_var="REFINITIV_APP_KEY",
+            key_signup_url="https://www.lseg.com/en/data-analytics",
+        )

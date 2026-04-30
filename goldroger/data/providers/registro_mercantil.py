@@ -64,3 +64,16 @@ class RegistroMercantilProvider(DataProvider):
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None
+
+    def capabilities(self) -> "ProviderCapabilities":
+        from .base import ProviderCapabilities
+        return ProviderCapabilities(
+            name="registro_mercantil",
+            display_name="Registro Mercantil (ES)",
+            description="Spanish commercial registry via BORME — company existence only, no financials",
+            coverage=["ES"],
+            company_types=["public", "private"],
+            data_fields=["sector"],
+            cost_tier="free",
+            requires_key=False,
+        )

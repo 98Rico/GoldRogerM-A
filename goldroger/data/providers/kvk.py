@@ -70,3 +70,18 @@ class KVKProvider(DataProvider):
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None
+
+    def capabilities(self) -> "ProviderCapabilities":
+        from .base import ProviderCapabilities
+        return ProviderCapabilities(
+            name="kvk",
+            display_name="KVK (NL)",
+            description="Dutch Chamber of Commerce registry — sector only, no revenue",
+            coverage=["NL"],
+            company_types=["public", "private"],
+            data_fields=["sector", "employees"],
+            cost_tier="free",
+            requires_key=True,
+            key_env_var="KVK_API_KEY",
+            key_signup_url="https://developers.kvk.nl/",
+        )

@@ -183,3 +183,18 @@ class CompaniesHouseProvider(DataProvider):
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None  # CH companies are private, no tickers
+
+    def capabilities(self) -> "ProviderCapabilities":
+        from .base import ProviderCapabilities
+        return ProviderCapabilities(
+            name="companies_house",
+            display_name="Companies House",
+            description="UK company registry — revenue from XBRL filings where available",
+            coverage=["GB"],
+            company_types=["public", "private"],
+            data_fields=["revenue", "sector", "employees"],
+            cost_tier="free",
+            requires_key=True,
+            key_env_var="COMPANIES_HOUSE_API_KEY",
+            key_signup_url="https://developer.company-information.service.gov.uk/",
+        )

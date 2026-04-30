@@ -19,7 +19,7 @@ import os
 from typing import Optional
 
 from goldroger.data.fetcher import MarketData
-from .base import DataProvider
+from .base import DataProvider, ProviderCapabilities
 
 
 class BloombergProvider(DataProvider):
@@ -43,6 +43,19 @@ class BloombergProvider(DataProvider):
         )
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
-        # Bloomberg uses its own ticker format: "AAPL US Equity"
-        # Requires a BDP lookup — implement when blpapi is wired
         return None
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            name="bloomberg",
+            display_name="Bloomberg Terminal",
+            description="Real-time prices, private company data, M&A comps, consensus estimates",
+            coverage=["GLOBAL"],
+            company_types=["public", "private"],
+            data_fields=["revenue", "ebitda", "margins", "multiples", "comps", "estimates"],
+            cost_tier="paid",
+            requires_key=True,
+            key_env_var="BLOOMBERG_API_KEY",
+            key_signup_url="https://www.bloomberg.com/professional/",
+            rate_limit="",
+        )

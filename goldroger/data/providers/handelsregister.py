@@ -104,3 +104,16 @@ class HandelsregisterProvider(DataProvider):
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None
+
+    def capabilities(self) -> "ProviderCapabilities":
+        from .base import ProviderCapabilities
+        return ProviderCapabilities(
+            name="handelsregister",
+            display_name="Bundesanzeiger (DE)",
+            description="German company registry via Bundesanzeiger — best-effort revenue from annual accounts",
+            coverage=["DE"],
+            company_types=["public", "private"],
+            data_fields=["revenue", "sector"],
+            cost_tier="free",
+            requires_key=False,
+        )

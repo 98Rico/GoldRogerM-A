@@ -18,7 +18,7 @@ from typing import Optional
 import httpx
 
 from goldroger.data.fetcher import MarketData
-from .base import DataProvider
+from .base import DataProvider, ProviderCapabilities
 
 _BASE = "https://api.crunchbase.com/api/v4"
 
@@ -87,7 +87,22 @@ class CrunchbaseProvider(DataProvider):
         )
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
-        return None  # Crunchbase has no tickers
+        return None
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            name="crunchbase",
+            display_name="Crunchbase",
+            description="Funding rounds, estimated revenue, headcount for VC-backed private companies",
+            coverage=["GLOBAL"],
+            company_types=["private"],
+            data_fields=["revenue", "headcount", "funding"],
+            cost_tier="freemium",
+            requires_key=True,
+            key_env_var="CRUNCHBASE_API_KEY",
+            key_signup_url="https://data.crunchbase.com/docs/using-the-api",
+            rate_limit="200 req/day (free tier)",
+        )
 
 
 def _parse_revenue_range(range_str: Optional[str]) -> Optional[float]:

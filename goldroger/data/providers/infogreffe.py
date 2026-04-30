@@ -142,3 +142,16 @@ class InfogreffeProvider(DataProvider):
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None
+
+    def capabilities(self) -> "ProviderCapabilities":
+        from .base import ProviderCapabilities
+        return ProviderCapabilities(
+            name="infogreffe",
+            display_name="Infogreffe (FR gov)",
+            description="French company registry via recherche-entreprises.api.gouv.fr — sector only, no revenue",
+            coverage=["FR"],
+            company_types=["public", "private"],
+            data_fields=["sector", "employees"],
+            cost_tier="free",
+            requires_key=False,
+        )
