@@ -51,6 +51,58 @@ def _fin_from_market(md: MarketData) -> Financials:
     )
 
 
+def _reconcile_financials(
+    fin: Financials,
+    market_data: MarketData | None,
+    console: Console | None = None,
+) -> Financials:
+    """Override LLM-derived financial figures with registry-verified values when available.
+
+    Called after the FinancialModelerAgent returns so that any drift between LLM
+    output and real registry data is corrected before the valuation engine runs.
+    """
+    if market_data is None:
+        return fin
+
+    changed: list[str] = []
+
+    # Revenue override — registry always wins over LLM estimate
+    if market_data.revenue_ttm:
+        llm_rev: float | None = None
+        try:
+            llm_rev = float(fin.revenue_current) if fin.revenue_current else None
+        except (ValueError, TypeError):
+            pass
+        registry_rev = market_data.revenue_ttm
+        if llm_rev and abs(llm_rev - registry_rev) / registry_rev > 0.20:
+            changed.append(
+                f"revenue {llm_rev:.0f}→{registry_rev:.0f}M "
+                f"(delta {abs(llm_rev - registry_rev) / registry_rev:.0%})"
+            )
+        fin.revenue_current = str(registry_rev)
+
+    # EBITDA margin override — registry wins if available
+    if market_data.ebitda_margin is not None:
+        llm_margin: float | None = None
+        try:
+            llm_margin = float(fin.ebitda_margin) if fin.ebitda_margin else None
+        except (ValueError, TypeError):
+            pass
+        registry_margin = market_data.ebitda_margin
+        if llm_margin and abs(llm_margin - registry_margin) > 0.10:
+            changed.append(
+                f"ebitda_margin {llm_margin:.1%}→{registry_margin:.1%}"
+            )
+        fin.ebitda_margin = str(registry_margin)
+
+    if changed and console is not None:
+        console.print(
+            f"  [yellow]⚠ Reconciled (LLM→registry): {'; '.join(changed)}[/yellow]"
+        )
+
+    return fin
+
+
 # ── Timer helpers ──────────────────────────────────────────────────────────
 def _step(name: str) -> float:
     console.rule(f"[bold cyan]{name}")

@@ -53,6 +53,7 @@ from ._shared import (
     _fmt_ev_human,
     _fund_fallback,
     _parse_with_retry,
+    _reconcile_financials,
     _step,
     console,
 )
@@ -254,6 +255,9 @@ def run_analysis(
         mkt = _fut_mkt.result()
         _peers_raw, _peers_err = _fut_peers.result()
         fin = _fut_fin.result()
+
+    # Override LLM-derived financials with registry-verified values when available
+    fin = _reconcile_financials(fin, market_data, console)
 
     _parallel_elapsed = time.time() - _parallel_t0
     console.print(
@@ -628,9 +632,18 @@ def run_analysis(
             "upside": val.upside_downside,
             "wacc": result.wacc_used,
             "market": mkt.market_size,
-            "verified_revenue": fin.revenue_current or "unknown",
+            "verified_revenue": (
+                str(market_data.revenue_ttm)
+                if market_data and market_data.revenue_ttm
+                else fin.revenue_current or "unknown"
+            ),
             "revenue_confidence": (
                 market_data.confidence if market_data and market_data.revenue_ttm else "estimated"
+            ),
+            "ebitda_margin": (
+                f"{market_data.ebitda_margin:.1%}"
+                if market_data and market_data.ebitda_margin is not None
+                else fin.ebitda_margin or ""
             ),
         },
         InvestmentThesis,

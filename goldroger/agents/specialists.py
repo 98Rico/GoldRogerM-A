@@ -231,14 +231,18 @@ class ReportWriterAgent(BaseAgent):
         upside = context.get("upside_downside", context.get("upside", ""))
         verified_revenue = context.get("verified_revenue", "")
         rev_confidence = context.get("revenue_confidence", "estimated")
-        rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated — treat as approximate"
+        ebitda_margin = context.get("ebitda_margin", "")
+        rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated"
+        margin_line = f"  EBITDA Margin: {ebitda_margin}\n" if ebitda_margin else ""
         revenue_lock = (
-            f"\n⚠ VERIFIED FACTS — do NOT contradict these in your output:\n"
+            f"\n⚠ VERIFIED FACTS — do NOT contradict or invent alternatives to these:\n"
             f"  Revenue: ${verified_revenue}M (USD) [{rev_conf_label}]\n"
+            f"{margin_line}"
             f"  Implied EV: {context.get('valuation', 'N/A')}\n"
             f"  Recommendation: {rec}\n"
-            "Use ONLY these numbers in your thesis. Never invent a different revenue figure.\n"
-            f"  If revenue is marked 'estimated', you MAY note uncertainty but must use this figure."
+            "CRITICAL: Do NOT state any specific revenue, EV, margin, or price figures beyond "
+            "those listed above — all financial figures are computed by the valuation engine "
+            "and will be inserted separately. Reference trends and context only."
         ) if verified_revenue and verified_revenue not in ("unknown", "0", "0.0", "null") else ""
         return f"""Write a complete investment thesis for "{company}".
 Recommendation context: {rec} with {upside} upside/downside.{revenue_lock}
