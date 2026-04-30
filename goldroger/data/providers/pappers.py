@@ -155,3 +155,18 @@ class PappersProvider(DataProvider):
 
     def resolve_ticker(self, company_name: str) -> Optional[str]:
         return None
+
+    def capabilities(self) -> "ProviderCapabilities":
+        from .base import ProviderCapabilities
+        return ProviderCapabilities(
+            name="pappers",
+            display_name="Pappers",
+            description="French company registry with verified revenue from RNCS/INPI filings",
+            coverage=["FR"],
+            company_types=["public", "private"],
+            data_fields=["revenue", "net_income", "sector", "employees"],
+            cost_tier="paid",
+            requires_key=True,
+            key_env_var="PAPPERS_API_KEY",
+            key_signup_url="https://www.pappers.fr/api",
+        )
