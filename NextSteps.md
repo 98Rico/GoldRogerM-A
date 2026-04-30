@@ -87,13 +87,12 @@ Every financial field must resolve to a value, never `None` displayed as `N/A`.
 - Add a post-processing assertion: `assert result.financials.revenue_current == pipeline_revenue` — fail loudly, not silently
 - Tag all agent-originated text: strip any dollar figures from agent outputs if they contradict data layer (regex replace with `[see valuation]`)
 
-#### 0.4 — Activate Crunchbase free tier
+#### 0.4 — Crunchbase (enterprise, if available)
 
-**Status**: implemented, tested — just needs `CRUNCHBASE_API_KEY` in `.env`.
+**Status**: implemented and tested — set `CRUNCHBASE_API_KEY` in `.env` to activate.
 
-**Action**:
-- Document setup in `.env.example` (key at data.crunchbase.com, free, 200 req/day)
-- Crunchbase covers most VC-backed private companies globally → covers the private company revenue gap for startups
+**Note**: Crunchbase removed their free tier in 2024. The API is now enterprise-only (contact sales).
+If a client already has a Crunchbase subscription, activating it immediately covers most VC-backed private companies globally.
 
 #### 0.5 — SEC EDGAR `fetch_by_name()`
 
@@ -247,7 +246,7 @@ class BloombergProvider(DataProvider):
 |--------|---------|---------|------|----------|
 | **yfinance** | Global | ✅ Verified (public) | None | Active |
 | **SEC EDGAR** | 🇺🇸 | ✅ 10-K XBRL (ticker) | None | Add `fetch_by_name` (P0.5) |
-| **Crunchbase** | Global | ⚠️ Range estimate | Free key needed | Activate now (P0.4) |
+| **Crunchbase** | Global | ⚠️ Range estimate | Enterprise only (no free tier) | Active if key present |
 | **recherche-entreprises** | 🇫🇷 | ❌ Sector only | None | Active (no revenue) |
 | **Pappers** | 🇫🇷 | ✅ RNCS verified | ~€30/mo | Active if key present |
 | **Companies House** | 🇬🇧 | ⚠️ Best-effort XBRL | Free key | Improve parsing |

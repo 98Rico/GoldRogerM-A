@@ -9,7 +9,5 @@ wheels/
 # Virtual environments
 .venv
 
-# Local env files (real secrets — never commit)
+# Local env file (real secrets — never commit)
 .env
-
-# .env.example is intentionally committed — it's a template, not a secrets file

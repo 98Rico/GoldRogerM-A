@@ -1,14 +1,11 @@
 """
-Crunchbase data provider — freemium, useful for private companies.
+Crunchbase data provider — enterprise API (no free tier as of 2024).
 
-Free tier: 200 requests/day via Basic API.
 Provides: funding rounds, estimated revenue, headcount, investors, founders.
+Best for: VC-backed startups and scale-ups globally.
 
-To activate: set CRUNCHBASE_API_KEY in your .env file.
-Get a free key at: https://data.crunchbase.com/docs/using-the-api
-
-Best for: startups, scale-ups, VC-backed private companies.
-Less useful for: family-owned businesses (Longchamp), unlisted conglomerates.
+To activate: set CRUNCHBASE_API_KEY in .env.
+Contact: https://about.crunchbase.com/solutions/crunchbase-api/
 """
 from __future__ import annotations
 
@@ -97,11 +94,11 @@ class CrunchbaseProvider(DataProvider):
             coverage=["GLOBAL"],
             company_types=["private"],
             data_fields=["revenue", "headcount", "funding"],
-            cost_tier="freemium",
+            cost_tier="paid",
             requires_key=True,
             key_env_var="CRUNCHBASE_API_KEY",
-            key_signup_url="https://data.crunchbase.com/docs/using-the-api",
-            rate_limit="200 req/day (free tier)",
+            key_signup_url="https://about.crunchbase.com/solutions/crunchbase-api/",
+            rate_limit="",
         )
 
 
