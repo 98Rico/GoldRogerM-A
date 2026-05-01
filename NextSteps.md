@@ -31,9 +31,12 @@ Two modes:
 | LBO growth-equity detection | ✅ Done | EV/Revenue > 12x OR EV/EBITDA > 25x (config-driven) |
 | Interactive data source selector | ✅ Done | `--interactive` — Y/N per provider, manual revenue override |
 | Non-interactive source selector | ✅ Done | `--sources auto/all/name1,name2` + `--list-sources`; missing credentials auto-skip |
+| Private revenue quality merge | ✅ Done | confidence-weighted provider merge + deterministic outlier rejection |
 | Private recommendation labels | ✅ Done | ATTRACTIVE ENTRY / CONDITIONAL GO / SELECTIVE BUY / FULL PRICE |
 | Scenario weights match engine weights | ✅ Done | `run_scenarios(weights=result.weights_used)` |
 | Deterministic assumption guardrail | ✅ Done | WACC / terminal growth no longer sourced from LLM by default |
+| LLM standalone revenue fallback removed | ✅ Done | no separate “guess revenue JSON” call |
+| Transaction comp acceptance hardening | ✅ Done | stricter EV/year/source filters before cache inclusion |
 | Thread-safe rate limiter | ✅ Done | `threading.Lock` — no more 429 races |
 | JSON repair (Mistral free tier) | ✅ Done | Trailing commas, None literals, truncated output recovery |
 | Wikipedia revenue signal | ✅ Done | Signal 5 in private triangulation |
@@ -53,10 +56,10 @@ Two modes:
 |---------|--------|-----------|
 | Private revenue still often missing | Blocks accurate valuation | FR SAS confidentiality law; DE/ES/NL registries expose no revenue |
 | Mistral free tier JSON failures | Agent output silently discarded | Token-limit truncation + non-standard JSON; repair catches most but not all |
-| Transaction comps: sector average only | Multiples too broad | No real deal database — LLM M&A data is anecdotal |
+| Transaction comps coverage still thin | Multiples can be sparse | No paid deal feed yet (Capital IQ / Refinitiv / Mergermarket) |
 | PPT is text tables | Not presentable to fund clients | No charts in python-pptx |
 | Excel is DCF only | Missing BS + CF | Not a real 3-statement model |
-| SEC EDGAR name lookup partial | US private coverage still incomplete | `fetch_by_name()` exists but hit quality varies by filer naming quality |
+| SEC EDGAR match quality variable | US private coverage uneven | `fetch_by_name()` depends on filing-name quality and aliases |
 | IC auto-score floor ~54 for private | Requires agent data to reach BUY | Strategy/synergies neutral at 5.0 without agent intelligence |
 
 ---
@@ -65,10 +68,10 @@ Two modes:
 
 ### 🔴 PRIORITY 0 — Data quality (before anything else)
 
-#### 0.1 — SEC EDGAR `fetch_by_name()` quality hardening
+#### 0.1 — Private revenue confidence scoring refinement
 
 **Status**: implemented and active.  
-**Remaining work**: improve match precision + fallback aliases to raise hit-rate on private US filers.
+**Remaining work**: add country-specific weighting profiles and confidence calibration by sector.
 
 #### 0.2 — Crunchbase activation
 
@@ -102,7 +105,7 @@ data/
 **Agent behavior refinement**:
 1. `TransactionCompsAgent` outputs structured JSON: `{acquirer, target, sector, ev_usd_m, revenue_usd_m, ev_rev_multiple, date}`
 2. Cache deduplicated by target name + year
-3. Validation: multiple must be in 1x–50x range; date must be within last 5 years
+3. Validation: strict EV/multiple bounds + recency window + source-quality threshold
 4. `ValuationService` uses median of validated cache, not raw LLM suggestion
 
 ---
@@ -192,7 +195,7 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | Source | Country | Revenue | Auth | Status |
 |--------|---------|---------|------|--------|
 | **yfinance** | Global | ✅ Verified (public) | None | Active |
-| **SEC EDGAR** | 🇺🇸 | ✅ 10-K XBRL (ticker) | None | Active — `fetch_by_name()` missing (P0.1) |
+| **SEC EDGAR** | 🇺🇸 | ✅ 10-K XBRL (ticker + name) | None | Active |
 | **Crunchbase** | Global | ⚠️ Range estimate | Enterprise key | Active if key set |
 | **recherche-entreprises** | 🇫🇷 | ❌ Sector only | None | Active |
 | **Pappers** | 🇫🇷 | ✅ RNCS verified | ~€30/mo | Active if key set |
@@ -217,7 +220,7 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | R5 | Tests 20 → 55+ (agents, providers, scoring, json_parser) | ✅ Done |
 | R6 | Scoring decoupled from sector data | ✅ Done |
 | R7 | Valuation weights sector-aware + weight propagation | ✅ Done |
-| R8 | SEC EDGAR `fetch_by_name()` + Companies House XBRL improvement | ⬜ P0 |
+| R8 | SEC EDGAR `fetch_by_name()` + Companies House XBRL improvement | 🟨 In progress |
 
 ---
 
@@ -253,5 +256,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 23 | Interactive data source selector — `--interactive`, country-filtered, credential-aware, manual revenue | ✅ |
 | 24 | Scenario weights propagation — `run_scenarios(weights=result.weights_used)`, display weights corrected | ✅ |
 | 25 | CLI source control (`--sources`, `--list-sources`) + auto-skip missing credentials + deterministic WACC/TG guardrail | ✅ |
+| 26 | Deterministic private revenue merge + stricter transaction comp acceptance + tests | ✅ |
 
 </details>

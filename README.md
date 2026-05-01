@@ -18,7 +18,7 @@ orchestrator.py  ←── single entry point
      │       ├── Handelsregister (🇩🇪 free: revenue best-effort HTML)
      │       ├── Registro Mercantil / BORME (🇪🇸 free: existence only)
      │       ├── KVK (🇳🇱 free with key: SBI/sector)
-     │       ├── SEC EDGAR (🇺🇸 free: annual revenue 10-K — ticker only)
+     │       ├── SEC EDGAR (🇺🇸 free: annual revenue 10-K — ticker + name lookup)
      │       ├── Private Triangulation (Wikipedia NLP + DuckDuckGo + headcount signals)
      │       ├── Crunchbase (freemium: funding, headcount — key required)
      │       └── Bloomberg / Capital IQ / Refinitiv (premium — stubs ready)
@@ -70,7 +70,7 @@ orchestrator.py  ←── single entry point
 
 > **The LLM never produces valuation numbers.**
 > Source hierarchy for EV, WACC, multiples:
-> `Bloomberg/CapIQ > yfinance/SEC EDGAR > EU Registries > Crunchbase > Triangulation > LLM fallback`
+> `Bloomberg/CapIQ > yfinance/SEC EDGAR > EU Registries > Crunchbase > Triangulation`
 > Every source tagged `[verified]` / `[estimated]` / `[inferred]` in outputs.
 
 In addition:
@@ -112,6 +112,8 @@ Default private behavior uses `--sources auto`:
 - country-relevant free sources + keyed sources if credentials are available
 - premium stubs (`bloomberg`, `capitaliq`) excluded from auto mode
 - missing credentials are skipped (no hard failure)
+- provider revenues are merged with confidence-weighted scoring + outlier rejection
+- manual revenue input (interactive mode) always overrides provider estimates
 
 ### Private company — explicit source selection (non-interactive)
 
@@ -245,7 +247,7 @@ LBO growth-equity thresholds (`growth_equity_ev_rev: 12.0`, `growth_equity_ev_eb
 | Source | Country | Revenue | Auth |
 |--------|---------|---------|------|
 | **yfinance** | Global | ✅ Verified (public) | None |
-| **SEC EDGAR** | 🇺🇸 | ✅ 10-K XBRL (ticker) | None |
+| **SEC EDGAR** | 🇺🇸 | ✅ 10-K XBRL (ticker + name lookup) | None |
 | **Pappers** | 🇫🇷 | ✅ RNCS verified | ~€30/mo |
 | **recherche-entreprises** | 🇫🇷 | ❌ Sector only | None |
 | **Companies House** | 🇬🇧 | ⚠️ Best-effort XBRL | Free key |
@@ -283,6 +285,13 @@ Data Source Selection — Doctolib
 Manual revenue entry overrides all provider data and is tagged `[verified — manual]`.
 
 For non-interactive runs, use `--sources`; providers without credentials are automatically skipped.
+
+### Private data accuracy guardrails
+
+- Revenue is merged deterministically from selected providers (`private_quality.py`), not chosen from one random source.
+- Low-quality outliers are automatically dropped before valuation.
+- If no provider has revenue, a deterministic triangulation fallback is used (multi-signal estimate, tagged confidence).
+- LLM no longer runs a standalone “guess revenue JSON” fallback step.
 
 ---
 
