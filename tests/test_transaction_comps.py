@@ -17,12 +17,13 @@ from goldroger.data.transaction_comps import (
 
 
 def _comp(target="Acme", acquirer="BigCo", sector="software", year=2023,
-          ev_m=200.0, ev_ebitda=18.0, ev_revenue=4.0) -> TransactionComp:
+          ev_m=200.0, ev_ebitda=18.0, ev_revenue=4.0,
+          source="Reuters — https://www.reuters.com/deal") -> TransactionComp:
     return TransactionComp(
         target=target, acquirer=acquirer, sector=sector, year=year,
         ev_m=ev_m, revenue_m=ev_m / ev_revenue if ev_revenue else None,
         ebitda_m=ev_m / ev_ebitda if ev_ebitda else None,
-        ev_ebitda=ev_ebitda, ev_revenue=ev_revenue, source="test",
+        ev_ebitda=ev_ebitda, ev_revenue=ev_revenue, source=source,
     )
 
 
@@ -45,8 +46,16 @@ def test_extreme_ev_revenue_rejected():
 
 
 def test_borderline_ev_ebitda_passes():
-    assert _validate(_comp(ev_ebitda=55.0)) is True
-    assert _validate(_comp(ev_ebitda=61.0)) is False
+    assert _validate(_comp(ev_ebitda=39.0)) is True
+    assert _validate(_comp(ev_ebitda=41.0)) is False
+
+
+def test_weak_source_rejected():
+    assert _validate(_comp(source="blog")) is False
+
+
+def test_stale_deal_rejected():
+    assert _validate(_comp(year=2010)) is False
 
 
 # ── Cache persistence ─────────────────────────────────────────────────────────
@@ -130,7 +139,7 @@ def test_parse_computes_multiples_when_missing():
     raw = json.dumps([{
         "target": "T", "acquirer": "A", "sector": "tech", "year": 2023,
         "ev_m": 200.0, "revenue_m": 40.0, "ebitda_m": 10.0,
-        "ev_ebitda": None, "ev_revenue": None, "source": "",
+        "ev_ebitda": None, "ev_revenue": None, "source": "https://example.com/deal",
     }])
     result = parse_agent_output(raw, "tech")
     assert len(result) == 1
@@ -162,7 +171,7 @@ def test_parse_dict_with_deals_key():
     raw = json.dumps({"deals": [
         {"target": "X", "acquirer": "Y", "sector": "tech", "year": 2022,
          "ev_m": 100.0, "revenue_m": 20.0, "ebitda_m": 8.0,
-         "ev_ebitda": 12.5, "ev_revenue": 5.0, "source": "FT"}
+         "ev_ebitda": 12.5, "ev_revenue": 5.0, "source": "https://www.ft.com/example"}
     ]})
     result = parse_agent_output(raw, "tech")
     assert len(result) == 1

@@ -12,6 +12,7 @@ Usage:
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -20,9 +21,11 @@ from typing import Optional
 _CACHE_PATH = os.path.join(os.path.dirname(__file__), "transaction_comps_cache.json")
 
 # Sanity bounds — same philosophy as peer comps
-_EV_EBITDA_MIN, _EV_EBITDA_MAX = 2.0, 60.0
-_EV_REV_MIN, _EV_REV_MAX = 0.1, 30.0
-_MIN_EV_M = 5.0          # ignore sub-$5M deals (noise)
+_EV_EBITDA_MIN, _EV_EBITDA_MAX = 2.0, 40.0
+_EV_REV_MIN, _EV_REV_MAX = 0.2, 20.0
+_MIN_EV_M = 20.0         # ignore sub-$20M deals (noise)
+_MAX_DEAL_AGE_YEARS = 7
+_MIN_SOURCE_QUALITY = 0.55
 
 
 @dataclass
@@ -74,8 +77,42 @@ def add_comps(new_comps: list[TransactionComp]) -> list[TransactionComp]:
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
+def _source_quality(source: str) -> float:
+    s = (source or "").strip().lower()
+    if not s:
+        return 0.0
+    trusted_hints = (
+        "reuters",
+        "bloomberg",
+        "wsj",
+        "ft.com",
+        "financial times",
+        "sec.gov",
+        "businesswire",
+        "prnewswire",
+        "globenewswire",
+        "investor",
+        "company release",
+        "press release",
+    )
+    if any(h in s for h in trusted_hints):
+        return 1.0
+    if s.startswith("http://") or s.startswith("https://"):
+        return 0.70
+    if len(s) >= 12:
+        return 0.55
+    return 0.35
+
+
 def _validate(c: TransactionComp) -> bool:
+    current_year = dt.date.today().year
+    if c.year < current_year - _MAX_DEAL_AGE_YEARS or c.year > current_year + 1:
+        return False
     if c.ev_m < _MIN_EV_M:
+        return False
+    if _source_quality(c.source) < _MIN_SOURCE_QUALITY:
+        return False
+    if c.ev_ebitda is None and c.ev_revenue is None:
         return False
     if c.ev_ebitda is not None and not (_EV_EBITDA_MIN <= c.ev_ebitda <= _EV_EBITDA_MAX):
         return False
