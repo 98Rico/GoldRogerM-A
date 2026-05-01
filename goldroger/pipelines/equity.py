@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re as _re
-import json as _json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -32,6 +31,7 @@ from goldroger.data.comparables import (
     resolve_peer_tickers,
 )
 from goldroger.data.fetcher import MarketData, fetch_market_data, resolve_ticker
+from goldroger.data.private_quality import merge_private_market_data
 from goldroger.utils.json_parser import normalise_revenue_string
 from goldroger.data.registry import DEFAULT_REGISTRY
 from goldroger.finance.core.scenarios import run_scenarios
@@ -140,6 +140,7 @@ def run_analysis(
     market_data: MarketData | None = None
     if company_type == "private":
         t0 = _step("Registry (EU filings)")
+        _provider_records: list[MarketData] = []
         if siren:
             console.print(f"  [dim]SIREN {siren} — direct lookup[/dim]")
             from goldroger.data.providers.pappers import PappersProvider
@@ -154,6 +155,8 @@ def run_analysis(
             _q = _ids.infogreffe_query or (_ids.variants[0] if _ids.variants else company)
             console.print(f"  [dim]Querying as: {_q}[/dim]")
             market_data = DEFAULT_REGISTRY.fetch_by_name(company)
+        if market_data:
+            _provider_records.append(market_data)
         if market_data and market_data.revenue_ttm:
             _conf_tag = " [verified]" if market_data.confidence == "verified" else " [estimated]"
             console.print(
@@ -234,16 +237,7 @@ def run_analysis(
             if not _prov_data:
                 continue
 
-            # Fill missing sector when available, even if no revenue.
-            if market_data is None:
-                market_data = _prov_data
-            else:
-                if not market_data.sector and _prov_data.sector:
-                    market_data.sector = _prov_data.sector
-                if not market_data.revenue_ttm and _prov_data.revenue_ttm:
-                    market_data.revenue_ttm = _prov_data.revenue_ttm
-                    market_data.data_source = _prov_data.data_source
-                    market_data.confidence = _prov_data.confidence
+            _provider_records.append(_prov_data)
 
             if _prov_data.revenue_ttm:
                 console.print(f"  [green]{_pname}[/green] Rev=${_prov_data.revenue_ttm:.0f}M")
@@ -254,6 +248,53 @@ def run_analysis(
             elif _prov_data.sector:
                 console.print(f"  [dim]{_pname}[/dim] sector={_prov_data.sector} (no revenue)")
                 sources.add("Sector", _prov_data.sector, _pname, _prov_data.confidence)
+
+        # Deterministic merge across all selected providers.
+        _merge = merge_private_market_data(market_data, _provider_records)
+        market_data = _merge.market_data
+        for _note in _merge.notes:
+            console.print(f"  [dim]{_note}[/dim]")
+
+        # If still no revenue from providers, triangulate as deterministic fallback.
+        if market_data and not market_data.revenue_ttm:
+            try:
+                from goldroger.data.private_triangulation import triangulate_revenue
+                crunchbase_data = None
+                try:
+                    from goldroger.data.providers.crunchbase import CrunchbaseProvider
+                    cb = CrunchbaseProvider()
+                    if cb.is_available():
+                        cb_md = (
+                            cb.fetch_by_name(company)
+                            if hasattr(cb, "fetch_by_name") else None
+                        )
+                        crunchbase_data = getattr(cb_md, "_raw", None) if cb_md else None
+                except Exception:
+                    pass
+
+                tri = triangulate_revenue(
+                    company_name=company,
+                    sector=market_data.sector or "",
+                    country=_country_hint_from_market_data(market_data),
+                    crunchbase_data=crunchbase_data,
+                )
+                if tri and tri.revenue_estimate_m > 0:
+                    market_data.revenue_ttm = tri.revenue_estimate_m
+                    market_data.confidence = tri.confidence
+                    market_data.data_source = "triangulation"
+                    console.print(
+                        f"  [cyan]Triangulation ({tri.confidence}) "
+                        f"Rev=${tri.revenue_estimate_m:.0f}M "
+                        f"from {len(tri.signals)} signal(s)[/cyan]"
+                    )
+                    sources.add(
+                        "Revenue TTM",
+                        f"${tri.revenue_estimate_m:.0f}M",
+                        "triangulation",
+                        tri.confidence,
+                    )
+            except Exception as _tri_e:
+                console.print(f"  [dim]Triangulation skipped: {_tri_e}[/dim]")
 
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
@@ -333,59 +374,6 @@ def run_analysis(
             )
             # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
             f.revenue_current = normalise_revenue_string(f.revenue_current)
-            if not f.revenue_current or f.revenue_current in ("0", "0.0", "null", "None"):
-                try:
-                    rev_prompt = (
-                        f'What is the most recent annual revenue of "{company}"? '
-                        "Return ONLY a JSON object: "
-                        '{"revenue_usd_m": <number>, "source": "<brief source>"}. '
-                        "Convert to USD millions. No markdown."
-                    )
-                    rev_resp = client.complete(
-                        messages=[{"role": "user", "content": rev_prompt}],
-                        model=client.resolve_model("large"),
-                        max_tokens=100,
-                    )
-                    raw = _re.sub(r"```[a-z]*\n?|\n?```", "", rev_resp.content.strip())
-                    rev_data = _json.loads(raw)
-                    rev_val = rev_data.get("revenue_usd_m")
-                    if rev_val and float(rev_val) > 0:
-                        f.revenue_current = str(float(rev_val))
-                        console.print(
-                            f"  [cyan]Revenue fallback: ${float(rev_val):.0f}M (estimated)[/cyan]"
-                        )
-                except Exception:
-                    pass
-            if company_type == "private" and (
-                not f.revenue_current or f.revenue_current in ("0", "0.0", "null", "None")
-            ):
-                try:
-                    from goldroger.data.private_triangulation import triangulate_revenue
-                    crunchbase_data = None
-                    try:
-                        from goldroger.data.providers.crunchbase import CrunchbaseProvider
-                        cb = CrunchbaseProvider()
-                        if cb.is_available():
-                            cb_md = (
-                                cb.fetch_by_name(company)
-                                if hasattr(cb, "fetch_by_name") else None
-                            )
-                            crunchbase_data = getattr(cb_md, "_raw", None) if cb_md else None
-                    except Exception:
-                        pass
-                    tri = triangulate_revenue(
-                        company, sector=fund.sector or "", country="",
-                        crunchbase_data=crunchbase_data,
-                    )
-                    if tri and tri.revenue_estimate_m > 0:
-                        f.revenue_current = str(tri.revenue_estimate_m)
-                        console.print(
-                            f"  [cyan]Triangulation ({tri.confidence}): "
-                            f"${tri.revenue_estimate_m:.0f}M "
-                            f"from {len(tri.signals)} signal(s)[/cyan]"
-                        )
-                except Exception:
-                    pass
         log.end_step("financials", _t)
         _done("Financials", _t)
         return f
