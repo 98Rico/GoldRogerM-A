@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from .data.source_selector import provider_table
 from .exporters import generate_excel, generate_pptx
 from .orchestrator import run_analysis, run_ma_analysis, run_pipeline
 
@@ -101,7 +102,7 @@ def print_result(result):
 
 def main():
     parser = argparse.ArgumentParser(description="Gold Roger — AI-powered equity analysis")
-    parser.add_argument("--company", "-c", required=True, help="Company name, ticker, or description")
+    parser.add_argument("--company", "-c", required=False, help="Company name, ticker, or description")
     parser.add_argument("--siren", help="French SIREN — bypasses name resolution, calls Pappers directly")
     parser.add_argument("--type", "-t", choices=["public", "private"], default="public",
                         help="public (listed) or private company")
@@ -118,8 +119,46 @@ def main():
     parser.add_argument("--quick", action="store_true", help="Skip web search in pipeline (faster, uses training knowledge)")
     parser.add_argument("--interactive", "-i", action="store_true",
                         help="Interactively select data sources before analysis (private companies)")
+    parser.add_argument(
+        "--sources",
+        default=None,
+        help=(
+            "Comma-separated data sources for private analysis "
+            "(e.g. infogreffe,pappers,sec_edgar,crunchbase | auto | all). "
+            "Unavailable sources (missing credentials) are skipped."
+        ),
+    )
+    parser.add_argument(
+        "--list-sources",
+        action="store_true",
+        help="List available data sources and credential status, then exit.",
+    )
     parser.add_argument("--llm", default=None, help="LLM provider: mistral (default), anthropic, openai")
     args = parser.parse_args()
+
+    if args.list_sources:
+        rows = provider_table()
+        t = Table(title="Data Sources", show_header=True, header_style="bold magenta")
+        t.add_column("Name")
+        t.add_column("Display")
+        t.add_column("Coverage")
+        t.add_column("Status")
+        for r in rows:
+            cov = ", ".join(r["coverage"])
+            t.add_row(r["name"], r["display"], cov, r["status"])
+        console.print(t)
+        return
+
+    if args.mode != "pipeline" and not args.company:
+        parser.error("--company is required unless --mode pipeline or --list-sources is used")
+    if args.mode == "pipeline" and not args.company:
+        args.company = "pipeline"
+
+    selected_sources: list[str] | None = None
+    if args.sources is not None:
+        selected_sources = [
+            s.strip().lower() for s in args.sources.split(",") if s.strip()
+        ]
 
     try:
         if args.mode == "pipeline":
@@ -153,7 +192,7 @@ def main():
             ))
         else:
             result = run_analysis(args.company, args.type, llm=args.llm, siren=args.siren,
-                                   interactive=args.interactive)
+                                   interactive=args.interactive, data_sources=selected_sources)
             print_result(result)
 
         if args.output:

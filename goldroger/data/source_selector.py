@@ -65,6 +65,9 @@ def _key_status(p: _ProviderDef) -> tuple[str, str]:
 
 def _relevant_providers(country_iso: Optional[str]) -> list[_ProviderDef]:
     """Return country-specific providers first, then globals."""
+    if not country_iso:
+        return list(_ALL_PROVIDERS)
+
     local: list[_ProviderDef] = []
     global_: list[_ProviderDef] = []
     for p in _ALL_PROVIDERS:
@@ -80,6 +83,82 @@ class SourceSelectionResult:
     selected_providers: list[str] = field(default_factory=list)  # provider names
     manual_revenue_usd_m: Optional[float] = None
     country_iso: Optional[str] = None
+    unknown_sources: list[str] = field(default_factory=list)
+    skipped_missing_credentials: list[str] = field(default_factory=list)
+    requested_sources: list[str] = field(default_factory=list)
+
+
+def provider_names() -> list[str]:
+    """Return all canonical provider names."""
+    return [p.name for p in _ALL_PROVIDERS]
+
+
+def provider_table(country_hint: str = "") -> list[dict]:
+    """Structured provider status for CLI/UI display."""
+    country_iso = _normalise_country(country_hint) if country_hint else None
+    providers = _relevant_providers(country_iso)
+    rows: list[dict] = []
+    for p in providers:
+        status, _ = _key_status(p)
+        rows.append(
+            {
+                "name": p.name,
+                "display": p.display,
+                "coverage": p.countries,
+                "status": status,
+                "requires_key": not p.free,
+                "env_var": p.env_var,
+            }
+        )
+    return rows
+
+
+def resolve_source_selection(
+    requested: Optional[list[str]] = None,
+    country_hint: str = "",
+) -> SourceSelectionResult:
+    """
+    Resolve source list for non-interactive usage.
+
+    Modes:
+      - requested None / [] / ["auto"]  -> relevant-by-country + global
+      - requested includes "all"        -> all sources
+      - requested explicit names         -> exact names
+    """
+    country_iso = _normalise_country(country_hint) if country_hint else None
+    relevant = _relevant_providers(country_iso)
+    all_by_name = {p.name: p for p in _ALL_PROVIDERS}
+
+    req = [r.strip().lower() for r in (requested or []) if r and r.strip()]
+    if not req or req == ["auto"]:
+        # "auto" intentionally excludes premium stubs unless explicitly requested.
+        candidates = [p.name for p in relevant if p.name not in {"bloomberg", "capitaliq"}]
+    elif "all" in req:
+        candidates = [p.name for p in _ALL_PROVIDERS]
+    else:
+        candidates = req
+
+    selected: list[str] = []
+    unknown: list[str] = []
+    skipped_no_key: list[str] = []
+
+    for name in candidates:
+        p = all_by_name.get(name)
+        if p is None:
+            unknown.append(name)
+            continue
+        if not p.free and not os.getenv(p.env_var, ""):
+            skipped_no_key.append(name)
+            continue
+        selected.append(name)
+
+    return SourceSelectionResult(
+        selected_providers=selected,
+        country_iso=country_iso,
+        unknown_sources=unknown,
+        skipped_missing_credentials=skipped_no_key,
+        requested_sources=candidates,
+    )
 
 
 def run_source_selection(
@@ -170,4 +249,5 @@ def run_source_selection(
         selected_providers=selected,
         manual_revenue_usd_m=manual_rev,
         country_iso=country_iso,
+        requested_sources=[p.name for p in providers],
     )

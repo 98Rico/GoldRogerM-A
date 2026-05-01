@@ -72,6 +72,20 @@ from .fill_gaps import fill_gaps
 load_dotenv()
 
 
+def _country_hint_from_market_data(market_data: MarketData | None) -> str:
+    """Best-effort country hint inferred from provider/source name."""
+    _src = (market_data.data_source or "").lower() if market_data else ""
+    return (
+        "FR" if "infogreffe" in _src or "pappers" in _src
+        else "GB" if "companies house" in _src
+        else "DE" if "handelsregister" in _src
+        else "NL" if "kvk" in _src
+        else "ES" if "registro" in _src
+        else "US" if "sec" in _src or "edgar" in _src
+        else ""
+    )
+
+
 def _fetch_provider(provider_name: str, company: str, siren: str | None = None):
     """Dynamically call a named data provider and return MarketData or None."""
     _map = {
@@ -79,7 +93,7 @@ def _fetch_provider(provider_name: str, company: str, siren: str | None = None):
         "pappers":           ("goldroger.data.providers.pappers",            "PappersProvider"),
         "companies_house":   ("goldroger.data.providers.companies_house",    "CompaniesHouseProvider"),
         "handelsregister":   ("goldroger.data.providers.handelsregister",    "HandelsregisterProvider"),
-        "kvk":               ("goldroger.data.providers.kvk",                "KvKProvider"),
+        "kvk":               ("goldroger.data.providers.kvk",                "KVKProvider"),
         "registro_mercantil":("goldroger.data.providers.registro_mercantil", "RegistroMercantilProvider"),
         "sec_edgar":         ("goldroger.data.providers.sec_edgar",          "SECEdgarProvider"),
         "crunchbase":        ("goldroger.data.providers.crunchbase",         "CrunchbaseProvider"),
@@ -105,6 +119,7 @@ def run_analysis(
     llm: str | None = None,
     siren: str | None = None,
     interactive: bool = False,
+    data_sources: list[str] | None = None,
 ) -> AnalysisResult:
     log = new_run(company, company_type)
     client = _client(llm)
@@ -158,64 +173,87 @@ def run_analysis(
             console.print("  [dim]No EU registry data found — revenue via web search fallback[/dim]")
         log.end_step("market_data", t0)
 
-        # ── Interactive data-source selector ─────────────────────────────
+        # ── Data-source selection (interactive or CLI) ───────────────────
+        from goldroger.data.source_selector import run_source_selection, resolve_source_selection
+        _country_hint = _country_hint_from_market_data(market_data)
         if interactive:
-            from goldroger.data.source_selector import run_source_selection
-            _src = (market_data.data_source or "").lower() if market_data else ""
-            _country_hint = (
-                "FR" if "infogreffe" in _src or "pappers" in _src
-                else "GB" if "companies house" in _src
-                else "DE" if "handelsregister" in _src
-                else "NL" if "kvk" in _src
-                else "ES" if "registro" in _src
-                else "US" if "sec" in _src or "edgar" in _src
-                else ""
-            )
             _sel = run_source_selection(company, country_hint=_country_hint, console=console)
+        else:
+            # By default for private companies, use "auto": relevant free/keyed sources.
+            _requested = data_sources if data_sources is not None else ["auto"]
+            _sel = resolve_source_selection(_requested, country_hint=_country_hint)
 
-            # Manual revenue override takes precedence over registry
-            if _sel.manual_revenue_usd_m:
-                from goldroger.data.fetcher import MarketData as _MD
-                if market_data is None:
-                    market_data = _MD(
-                        ticker="",
-                        company_name=company,
-                        sector="",
-                        revenue_ttm=_sel.manual_revenue_usd_m,
-                        data_source="manual (user input)",
-                        confidence="verified",
-                    )
-                else:
-                    market_data.revenue_ttm = _sel.manual_revenue_usd_m
-                    market_data.data_source = "manual (user input)"
-                    market_data.confidence = "verified"
+            if _sel.unknown_sources:
                 console.print(
-                    f"  [green]Manual revenue set:[/green] ${_sel.manual_revenue_usd_m:.0f}M"
+                    f"  [yellow]Unknown sources ignored:[/] {', '.join(_sel.unknown_sources)}"
                 )
-                sources.add(
-                    "Revenue TTM", f"${_sel.manual_revenue_usd_m:.0f}M",
-                    "manual (user input)", "verified",
+            if _sel.skipped_missing_credentials:
+                console.print(
+                    "  [yellow]Skipped (missing credentials):[/] "
+                    + ", ".join(_sel.skipped_missing_credentials)
+                )
+            if _sel.selected_providers:
+                console.print(
+                    "  [dim]Using additional sources:[/] " + ", ".join(_sel.selected_providers)
                 )
 
-            # Run selected providers until we have revenue
-            for _pname in _sel.selected_providers:
-                if _pname in ("infogreffe", "pappers") and siren:
-                    continue  # already ran above via SIREN
-                if market_data and market_data.revenue_ttm:
-                    break  # already have revenue, no need to query more
-                try:
-                    _prov_data = _fetch_provider(_pname, company, siren)
-                    if _prov_data and _prov_data.revenue_ttm:
-                        market_data = _prov_data
-                        console.print(
-                            f"  [green]{_pname}[/green] Rev=${_prov_data.revenue_ttm:.0f}M"
-                        )
-                        sources.add(
-                            "Revenue TTM", f"${_prov_data.revenue_ttm:.0f}M",
-                            _pname, _prov_data.confidence,
-                        )
-                except Exception as _e:
-                    console.print(f"  [yellow]{_pname} failed: {_e}[/yellow]")
+        # Manual revenue override takes precedence over registry
+        if _sel.manual_revenue_usd_m:
+            from goldroger.data.fetcher import MarketData as _MD
+            if market_data is None:
+                market_data = _MD(
+                    ticker="",
+                    company_name=company,
+                    sector="",
+                    revenue_ttm=_sel.manual_revenue_usd_m,
+                    data_source="manual (user input)",
+                    confidence="verified",
+                )
+            else:
+                market_data.revenue_ttm = _sel.manual_revenue_usd_m
+                market_data.data_source = "manual (user input)"
+                market_data.confidence = "verified"
+            console.print(
+                f"  [green]Manual revenue set:[/green] ${_sel.manual_revenue_usd_m:.0f}M"
+            )
+            sources.add(
+                "Revenue TTM", f"${_sel.manual_revenue_usd_m:.0f}M",
+                "manual (user input)", "verified",
+            )
+
+        # Query selected providers (skip unavailable automatically)
+        for _pname in _sel.selected_providers:
+            if _pname in ("infogreffe", "pappers") and siren:
+                continue  # already queried via direct SIREN path above
+            try:
+                _prov_data = _fetch_provider(_pname, company, siren)
+            except Exception as _e:
+                console.print(f"  [yellow]{_pname} failed: {_e}[/yellow]")
+                continue
+
+            if not _prov_data:
+                continue
+
+            # Fill missing sector when available, even if no revenue.
+            if market_data is None:
+                market_data = _prov_data
+            else:
+                if not market_data.sector and _prov_data.sector:
+                    market_data.sector = _prov_data.sector
+                if not market_data.revenue_ttm and _prov_data.revenue_ttm:
+                    market_data.revenue_ttm = _prov_data.revenue_ttm
+                    market_data.data_source = _prov_data.data_source
+                    market_data.confidence = _prov_data.confidence
+
+            if _prov_data.revenue_ttm:
+                console.print(f"  [green]{_pname}[/green] Rev=${_prov_data.revenue_ttm:.0f}M")
+                sources.add(
+                    "Revenue TTM", f"${_prov_data.revenue_ttm:.0f}M",
+                    _pname, _prov_data.confidence,
+                )
+            elif _prov_data.sector:
+                console.print(f"  [dim]{_pname}[/dim] sector={_prov_data.sector} (no revenue)")
+                sources.add("Sector", _prov_data.sector, _pname, _prov_data.confidence)
 
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
@@ -486,22 +524,15 @@ def run_analysis(
         _tx_medians = sector_medians(load_cache(), fund.sector or "")
 
     # ── 4. ASSUMPTIONS ────────────────────────────────────────────────────
-    t0 = _step("Assumptions")
-    assumptions = _parse_with_retry(
-        val_agent, company, company_type,
-        {
-            "sector": fund.sector or "",
-            "revenue_current": fin.revenue_current,
-            "ebitda_margin": fin.ebitda_margin,
-        },
-        ValuationAssumptions, ValuationAssumptions(),
-    )
-    log.end_step("assumptions", t0)
-    _done("Assumptions", t0)
+    # Policy: valuation assumptions used by the deterministic engine must be reproducible.
+    # We therefore avoid LLM-generated numeric assumptions by default (WACC/TG/weights).
+    # The LLM remains free to produce qualitative rationales in the thesis layer.
+    assumptions = ValuationAssumptions()
 
     # ── 5. VALUATION ENGINE ───────────────────────────────────────────────
     t0 = _step("Valuation Engine")
     assumptions_dict = assumptions.model_dump()
+    assumptions_dict["_assumption_source"] = "system"
     if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
         assumptions_dict["ev_ebitda_range"] = [
             peer_multiples.ev_ebitda_low,
@@ -512,14 +543,8 @@ def run_analysis(
             f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
         )
 
-    # Feed real transaction comp multiple into valuation if available
-    if _tx_medians.get("ev_ebitda_median"):
-        assumptions_dict["tx_multiple"] = _tx_medians["ev_ebitda_median"]
-        console.print(
-            f"  [cyan]Transaction comps: anchored tx_multiple to "
-            f"{_tx_medians['ev_ebitda_median']:.1f}x "
-            f"({_tx_medians.get('n_deals', '?')} real deals)[/cyan]"
-        )
+    # Policy: do not anchor valuation inputs to LLM-sourced transaction comps.
+    # Use sector benchmarks (deterministic) unless a verified deal database is integrated.
 
     result = svc.run_full_valuation(
         financials=fin.model_dump(),

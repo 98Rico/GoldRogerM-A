@@ -485,12 +485,15 @@ class ValuationService:
             )
             return wacc, "verified"
 
+        # Policy: do not take numeric WACC from LLM by default.
+        # Only accept a WACC override if the orchestrator explicitly marks it as user-provided.
+        # (LLM can still propose assumption ranges in narrative, but valuation remains reproducible.)
         raw = self._f(assumptions.get("wacc"), None)
-        if raw is not None:
+        if raw is not None and assumptions.get("_assumption_source") == "user":
             if raw > 1.0:
                 raw /= 100.0
             wacc = max(0.05, min(raw, 0.25))
-            notes.append(f"WACC {wacc:.1%} from LLM assumptions.")
+            notes.append(f"WACC {wacc:.1%} from user override.")
             return wacc, "estimated"
 
         wacc = sector_m.sector_wacc
@@ -499,10 +502,11 @@ class ValuationService:
 
     def _resolve_terminal_growth(self, assumptions, sector_m, wacc, notes):
         raw = self._f(assumptions.get("terminal_growth"), None)
-        if raw is not None:
+        if raw is not None and assumptions.get("_assumption_source") == "user":
             if raw > 1.0:
                 raw /= 100.0
             tg = max(0.0, min(raw, 0.04))
+            notes.append(f"Terminal growth {tg:.1%} from user override.")
         else:
             tg = sector_m.terminal_growth
         if tg >= wacc:
