@@ -15,7 +15,7 @@ Two modes:
 
 **Data strategy**: Free tier must produce excellent analysis. Architecture is pluggable — Bloomberg, CapIQ, Refinitiv can be connected per client without touching core logic.
 
-**UI**: CLI + `--interactive` mode for now. Web interface (Next.js + FastAPI) once data layer is solid.
+**UI**: CLI + `--interactive` + explicit CLI source selection (`--sources`, `--list-sources`) for now. Web interface (Next.js + FastAPI) once data layer is solid.
 
 ---
 
@@ -30,8 +30,10 @@ Two modes:
 | IC scoring — pure numeric, no sector imports | ✅ Done | Caller passes ev_rev_sector_mid/high |
 | LBO growth-equity detection | ✅ Done | EV/Revenue > 12x OR EV/EBITDA > 25x (config-driven) |
 | Interactive data source selector | ✅ Done | `--interactive` — Y/N per provider, manual revenue override |
+| Non-interactive source selector | ✅ Done | `--sources auto/all/name1,name2` + `--list-sources`; missing credentials auto-skip |
 | Private recommendation labels | ✅ Done | ATTRACTIVE ENTRY / CONDITIONAL GO / SELECTIVE BUY / FULL PRICE |
 | Scenario weights match engine weights | ✅ Done | `run_scenarios(weights=result.weights_used)` |
+| Deterministic assumption guardrail | ✅ Done | WACC / terminal growth no longer sourced from LLM by default |
 | Thread-safe rate limiter | ✅ Done | `threading.Lock` — no more 429 races |
 | JSON repair (Mistral free tier) | ✅ Done | Trailing commas, None literals, truncated output recovery |
 | Wikipedia revenue signal | ✅ Done | Signal 5 in private triangulation |
@@ -54,7 +56,7 @@ Two modes:
 | Transaction comps: sector average only | Multiples too broad | No real deal database — LLM M&A data is anecdotal |
 | PPT is text tables | Not presentable to fund clients | No charts in python-pptx |
 | Excel is DCF only | Missing BS + CF | Not a real 3-statement model |
-| SEC EDGAR name lookup missing | US private filers not reachable | `fetch_by_name()` not implemented |
+| SEC EDGAR name lookup partial | US private coverage still incomplete | `fetch_by_name()` exists but hit quality varies by filer naming quality |
 | IC auto-score floor ~54 for private | Requires agent data to reach BUY | Strategy/synergies neutral at 5.0 without agent intelligence |
 
 ---
@@ -63,16 +65,10 @@ Two modes:
 
 ### 🔴 PRIORITY 0 — Data quality (before anything else)
 
-#### 0.1 — SEC EDGAR `fetch_by_name()`
+#### 0.1 — SEC EDGAR `fetch_by_name()` quality hardening
 
-**Status**: `fetch(ticker)` works. Missing: name → CIK lookup for private US filers.
-
-```python
-# data/providers/sec_edgar.py
-def fetch_by_name(self, company_name: str) -> Optional[MarketData]:
-    # POST to efts.sec.gov/LATEST/search-index?q={name}
-    # Resolve name → CIK → call existing XBRL revenue logic
-```
+**Status**: implemented and active.  
+**Remaining work**: improve match precision + fallback aliases to raise hit-rate on private US filers.
 
 #### 0.2 — Crunchbase activation
 
@@ -256,5 +252,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 22 | Private recommendation labels — ATTRACTIVE ENTRY / CONDITIONAL GO / SELECTIVE BUY / FULL PRICE | ✅ |
 | 23 | Interactive data source selector — `--interactive`, country-filtered, credential-aware, manual revenue | ✅ |
 | 24 | Scenario weights propagation — `run_scenarios(weights=result.weights_used)`, display weights corrected | ✅ |
+| 25 | CLI source control (`--sources`, `--list-sources`) + auto-skip missing credentials + deterministic WACC/TG guardrail | ✅ |
 
 </details>

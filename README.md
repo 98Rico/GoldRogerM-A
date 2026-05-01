@@ -62,7 +62,7 @@ orchestrator.py  ←── single entry point
 | Sector Multiples | `data/sector_multiples.py` | 25 sectors — EV/EBITDA, EV/Rev, WACC, growth rates |
 | IC Scoring | `ma/scoring.py` | 6 dimensions, pure numeric (no sector imports) |
 | Private Triangulation | `data/private_triangulation.py` | 5-signal revenue estimator |
-| Source Selector | `data/source_selector.py` | Interactive terminal data source picker |
+| Source Selector | `data/source_selector.py` | Interactive + CLI source picker |
 | Excel Exporter | `exporters/excel.py` | DCF workbook |
 | PPT Exporter | `exporters/pptx.py` | 10-slide deck |
 
@@ -72,6 +72,11 @@ orchestrator.py  ←── single entry point
 > Source hierarchy for EV, WACC, multiples:
 > `Bloomberg/CapIQ > yfinance/SEC EDGAR > EU Registries > Crunchbase > Triangulation > LLM fallback`
 > Every source tagged `[verified]` / `[estimated]` / `[inferred]` in outputs.
+
+In addition:
+- Numeric **valuation assumptions** (e.g. WACC, terminal growth) are **not taken from LLM output** by default.
+- They come from verified market data when available, otherwise from `data/sector_multiples.py`.
+- If you want to override them, use `--interactive` (manual user override is explicitly tagged and then allowed).
 
 ### What the tool produces
 
@@ -101,6 +106,32 @@ uv run python -m goldroger.cli --company "NVIDIA" --excel --pptx
 
 ```bash
 uv run python -m goldroger.cli --company "Doctolib" --type private --excel --pptx
+```
+
+Default private behavior uses `--sources auto`:
+- country-relevant free sources + keyed sources if credentials are available
+- premium stubs (`bloomberg`, `capitaliq`) excluded from auto mode
+- missing credentials are skipped (no hard failure)
+
+### Private company — explicit source selection (non-interactive)
+
+```bash
+uv run python -m goldroger.cli \
+  --company "Doctolib" \
+  --type private \
+  --sources "infogreffe,pappers,sec_edgar,crunchbase" \
+  --excel --pptx
+```
+
+Source modes:
+- `--sources auto` (default for private)
+- `--sources all`
+- `--sources "name1,name2,..."`
+
+List all sources + current credential status:
+
+```bash
+uv run python -m goldroger.cli --list-sources
 ```
 
 ### Private company — interactive data source selection
@@ -250,6 +281,8 @@ Data Source Selection — Doctolib
 ```
 
 Manual revenue entry overrides all provider data and is tagged `[verified — manual]`.
+
+For non-interactive runs, use `--sources`; providers without credentials are automatically skipped.
 
 ---
 
