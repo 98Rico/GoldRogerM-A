@@ -29,13 +29,15 @@ class ICScoreConfig:
     buy_threshold: int = 60          # >= 60 → BUY
     watch_threshold: int = 45        # >= 45 → WATCH, else NO GO
     min_lbo_score: float = 2.0       # below this → hard NO GO regardless of total
+    growth_equity_ev_rev: float = 12.0    # EV/Revenue above this → LBO structurally N/A
+    growth_equity_ev_ebitda: float = 25.0 # EV/EBITDA above this → LBO structurally N/A
 
 
 @dataclass
 class AgentConfig:
-    min_call_gap_s: float = 1.0      # minimum seconds between LLM calls
+    min_call_gap_s: float = 3.0      # minimum seconds between LLM calls (Mistral free tier)
     max_tool_rounds: int = 3         # max web_search iterations per agent call
-    parallel_workers: int = 3        # ThreadPoolExecutor workers for parallel agents
+    parallel_workers: int = 2        # ThreadPoolExecutor workers (keep low for free-tier APIs)
 
 
 @dataclass

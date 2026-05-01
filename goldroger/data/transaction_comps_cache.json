@@ -1,0 +1,50 @@
+[
+  {
+    "target": "Nuance Communications",
+    "acquirer": "Microsoft",
+    "sector": "AI/Clinical Documentation",
+    "year": 2022,
+    "ev_m": 19700.0,
+    "revenue_m": 1360.0,
+    "ebitda_m": 375.0,
+    "ev_ebitda": 52.5,
+    "ev_revenue": 14.5,
+    "source": "https://www.microsoft.com/en-us/investor/events/fy-2022/acquisition-of-nuance-communications"
+  },
+  {
+    "target": "Cerner",
+    "acquirer": "Oracle",
+    "sector": "Electronic Health Records (EHR)",
+    "year": 2022,
+    "ev_m": 28300.0,
+    "revenue_m": 5100.0,
+    "ebitda_m": 1300.0,
+    "ev_ebitda": 21.8,
+    "ev_revenue": 5.5,
+    "source": "https://www.oracle.com/news/announcement/oracle-completes-acquisition-of-cerner-2022-06-08/"
+  },
+  {
+    "target": "One Medical",
+    "acquirer": "Amazon",
+    "sector": "Primary Care/Telehealth",
+    "year": 2023,
+    "ev_m": 3900.0,
+    "revenue_m": 623.0,
+    "ebitda_m": -73.0,
+    "ev_ebitda": null,
+    "ev_revenue": 6.3,
+    "source": "https://ir.onemedical.com/news-releases/news-release-details/amazon-and-1life-healthcare-announce-completion-amazons"
+  },
+  {
+    "target": "BioTelemetry",
+    "acquirer": "Philips",
+    "sector": "Remote Cardiac Diagnostics",
+    "year": 2021,
+    "ev_m": 2800.0,
+    "revenue_m": 439.0,
+    "ebitda_m": 105.0,
+    "ev_ebitda": 26.7,
+    "ev_revenue": 6.4,
+    "source": "https://www.philips.com/a-w/about/news/archive/standard/news/press/2021/20210310-philips-completes-acquisition-of-biotelemetry.html"
+  }
+]

@@ -63,6 +63,16 @@ _MULTIPLES: dict[str, SectorMultiples] = {
         sector_beta=0.80,
         sector_wacc=0.085,
     ),
+    "healthtech": SectorMultiples(
+        # Digital health SaaS platforms: appointment scheduling, EHR, telemedicine.
+        # Benchmarks: Veeva (30-50x EBITDA), Doximity (35-55x), Health Catalyst (15-25x).
+        # EV/Revenue: 6-18x for growth-stage, 3-8x for mature. WACC elevated vs legacy healthcare.
+        ev_ebitda=(20.0, 32.0, 55.0),
+        ev_revenue=(6.0, 12.0, 20.0),
+        terminal_growth=0.030,
+        sector_beta=1.25,
+        sector_wacc=0.115,
+    ),
     "biotechnology": SectorMultiples(
         ev_ebitda=(18.0, 25.0, 40.0),
         ev_revenue=(5.0, 9.0, 18.0),
@@ -233,6 +243,13 @@ _ALIASES: dict[str, str] = {
     "pharma": "pharmaceuticals",
     "biotech": "biotechnology",
     "life sciences": "biotechnology",
+    "healthtech": "healthtech",
+    "health tech": "healthtech",
+    "healthcare technology": "healthtech",
+    "digital health": "healthtech",
+    "medtech": "healthtech",
+    "health information technology": "healthtech",
+    "health it": "healthtech",
     "medical": "healthcare",
     "hospital": "healthcare",
     "health": "healthcare",
@@ -327,6 +344,7 @@ _SECTOR_EBITDA_MARGINS: dict[str, float] = {
     "technology": 0.20,
     "software": 0.25,
     "semiconductors": 0.30,
+    "healthtech": 0.15,   # growth-stage digital health: investing heavily, lower margin than mature SaaS
     "healthcare": 0.18,
     "biotechnology": -0.05,
     "pharmaceuticals": 0.22,
@@ -354,6 +372,7 @@ _SECTOR_REV_GROWTH: dict[str, float] = {
     "technology": 0.12,
     "software": 0.18,
     "semiconductors": 0.12,
+    "healthtech": 0.22,   # digital health platforms growing 20-30% at scale (Doctolib, Epic etc.)
     "healthcare": 0.08,
     "biotechnology": 0.20,
     "pharmaceuticals": 0.06,

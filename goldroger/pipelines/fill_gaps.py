@@ -65,6 +65,10 @@ def _fill_fundamentals(result: AnalysisResult, sector: str) -> None:
 def _fill_financials(result: AnalysisResult, sector: str) -> None:
     fin = result.financials
 
+    # Revenue — show human-readable placeholder when zero/missing (never display "0.0")
+    if _blank(fin.revenue_current):
+        fin.revenue_current = "Not available [no verified source]"
+
     # EBITDA margin — sector average fallback
     if _blank(fin.ebitda_margin):
         m = get_sector_ebitda_margin(sector)

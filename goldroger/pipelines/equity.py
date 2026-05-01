@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 
+from goldroger.config import DEFAULT_CONFIG as _cfg
+
 from goldroger.agents.specialists import (
     DataCollectorAgent,
     FinancialModelerAgent,
@@ -30,6 +32,7 @@ from goldroger.data.comparables import (
     resolve_peer_tickers,
 )
 from goldroger.data.fetcher import MarketData, fetch_market_data, resolve_ticker
+from goldroger.utils.json_parser import normalise_revenue_string
 from goldroger.data.registry import DEFAULT_REGISTRY
 from goldroger.finance.core.scenarios import run_scenarios
 from goldroger.finance.core.valuation_service import ValuationService
@@ -69,11 +72,39 @@ from .fill_gaps import fill_gaps
 load_dotenv()
 
 
+def _fetch_provider(provider_name: str, company: str, siren: str | None = None):
+    """Dynamically call a named data provider and return MarketData or None."""
+    _map = {
+        "infogreffe":        ("goldroger.data.providers.infogreffe",        "InfogreffeProvider"),
+        "pappers":           ("goldroger.data.providers.pappers",            "PappersProvider"),
+        "companies_house":   ("goldroger.data.providers.companies_house",    "CompaniesHouseProvider"),
+        "handelsregister":   ("goldroger.data.providers.handelsregister",    "HandelsregisterProvider"),
+        "kvk":               ("goldroger.data.providers.kvk",                "KvKProvider"),
+        "registro_mercantil":("goldroger.data.providers.registro_mercantil", "RegistroMercantilProvider"),
+        "sec_edgar":         ("goldroger.data.providers.sec_edgar",          "SECEdgarProvider"),
+        "crunchbase":        ("goldroger.data.providers.crunchbase",         "CrunchbaseProvider"),
+        "bloomberg":         ("goldroger.data.providers.bloomberg",          "BloombergProvider"),
+        "capitaliq":         ("goldroger.data.providers.capitaliq",          "CapitalIQProvider"),
+    }
+    if provider_name not in _map:
+        return None
+    mod_path, cls_name = _map[provider_name]
+    import importlib
+    mod = importlib.import_module(mod_path)
+    provider = getattr(mod, cls_name)()
+    if not provider.is_available():
+        return None
+    if siren and hasattr(provider, "fetch_by_siren"):
+        return provider.fetch_by_siren(siren, company)
+    return provider.fetch_by_name(company)
+
+
 def run_analysis(
     company: str,
     company_type: str = "public",
     llm: str | None = None,
     siren: str | None = None,
+    interactive: bool = False,
 ) -> AnalysisResult:
     log = new_run(company, company_type)
     client = _client(llm)
@@ -126,6 +157,65 @@ def run_analysis(
         else:
             console.print("  [dim]No EU registry data found — revenue via web search fallback[/dim]")
         log.end_step("market_data", t0)
+
+        # ── Interactive data-source selector ─────────────────────────────
+        if interactive:
+            from goldroger.data.source_selector import run_source_selection
+            _src = (market_data.data_source or "").lower() if market_data else ""
+            _country_hint = (
+                "FR" if "infogreffe" in _src or "pappers" in _src
+                else "GB" if "companies house" in _src
+                else "DE" if "handelsregister" in _src
+                else "NL" if "kvk" in _src
+                else "ES" if "registro" in _src
+                else "US" if "sec" in _src or "edgar" in _src
+                else ""
+            )
+            _sel = run_source_selection(company, country_hint=_country_hint, console=console)
+
+            # Manual revenue override takes precedence over registry
+            if _sel.manual_revenue_usd_m:
+                from goldroger.data.fetcher import MarketData as _MD
+                if market_data is None:
+                    market_data = _MD(
+                        ticker="",
+                        company_name=company,
+                        sector="",
+                        revenue_ttm=_sel.manual_revenue_usd_m,
+                        data_source="manual (user input)",
+                        confidence="verified",
+                    )
+                else:
+                    market_data.revenue_ttm = _sel.manual_revenue_usd_m
+                    market_data.data_source = "manual (user input)"
+                    market_data.confidence = "verified"
+                console.print(
+                    f"  [green]Manual revenue set:[/green] ${_sel.manual_revenue_usd_m:.0f}M"
+                )
+                sources.add(
+                    "Revenue TTM", f"${_sel.manual_revenue_usd_m:.0f}M",
+                    "manual (user input)", "verified",
+                )
+
+            # Run selected providers until we have revenue
+            for _pname in _sel.selected_providers:
+                if _pname in ("infogreffe", "pappers") and siren:
+                    continue  # already ran above via SIREN
+                if market_data and market_data.revenue_ttm:
+                    break  # already have revenue, no need to query more
+                try:
+                    _prov_data = _fetch_provider(_pname, company, siren)
+                    if _prov_data and _prov_data.revenue_ttm:
+                        market_data = _prov_data
+                        console.print(
+                            f"  [green]{_pname}[/green] Rev=${_prov_data.revenue_ttm:.0f}M"
+                        )
+                        sources.add(
+                            "Revenue TTM", f"${_prov_data.revenue_ttm:.0f}M",
+                            _pname, _prov_data.confidence,
+                        )
+                except Exception as _e:
+                    console.print(f"  [yellow]{_pname} failed: {_e}[/yellow]")
 
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
@@ -191,15 +281,20 @@ def run_analysis(
 
     def _do_financials():
         _t = _step("Financials")
-        if market_data:
+        if market_data and market_data.revenue_ttm:
             f = _fin_from_market(market_data)
-            console.print("  [green]Using verified yfinance financials[/green]")
+            console.print(
+                f"  [green]Using {market_data.data_source} financials "
+                f"(Rev=${market_data.revenue_ttm:.0f}M)[/green]"
+            )
         else:
             f = _parse_with_retry(
                 fin_agent, company, company_type,
                 {"sector": fund.sector or "", "description": fund.description},
                 Financials, _fin_fallback(),
             )
+            # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
+            f.revenue_current = normalise_revenue_string(f.revenue_current)
             if not f.revenue_current or f.revenue_current in ("0", "0.0", "null", "None"):
                 try:
                     rev_prompt = (
@@ -271,7 +366,7 @@ def run_analysis(
         _done("Transaction Comps", _t)
         return result
 
-    with ThreadPoolExecutor(max_workers=4) as _pool:
+    with ThreadPoolExecutor(max_workers=_cfg.agent.parallel_workers) as _pool:
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
@@ -431,6 +526,7 @@ def run_analysis(
         assumptions=assumptions_dict,
         market_data=market_data,
         sector=fund.sector or "",
+        company_type=company_type,
     )
     blended_ev = result.blended.blended if result.blended else None
     rec = result.recommendation
@@ -441,18 +537,23 @@ def run_analysis(
             "Peer multiples shown for reference only.[/yellow]"
         )
 
+    _w = result.weights_used
+    _w_dcf  = round(_w.get("dcf", 0.5) * 100)
+    _w_comp = round(_w.get("comps", 0.3) * 100)
+    _w_tx   = round(_w.get("transactions", 0.2) * 100)
+
     _methods: list = []
     if result.has_revenue and result.dcf:
-        _methods.append(
-            ValuationMethod(name="DCF", mid=str(round(result.dcf.enterprise_value, 1)), weight=50)
-        )
+        _methods.append(ValuationMethod(
+            name="DCF", mid=str(round(result.dcf.enterprise_value, 1)), weight=_w_dcf
+        ))
     if result.has_revenue and result.comps:
         _methods.append(ValuationMethod(
             name=f"Trading Comps ({result.valuation_path.upper()})",
             low=str(round(result.comps.low, 1)),
             mid=str(round(result.comps.mid, 1)),
             high=str(round(result.comps.high, 1)),
-            weight=30,
+            weight=_w_comp,
         ))
     if result.has_revenue and result.transactions:
         tx_label = "Transaction Comps"
@@ -462,7 +563,7 @@ def run_analysis(
         _methods.append(ValuationMethod(
             name=tx_label,
             mid=str(round(result.transactions.implied_value, 1)),
-            weight=20,
+            weight=_w_tx,
         ))
 
     # ── 5a. SOTP (conglomerates / multi-segment) ──────────────────────────
@@ -508,13 +609,37 @@ def run_analysis(
         except Exception as _sotp_err:
             console.print(f"  [dim]SOTP skipped: {_sotp_err}[/dim]")
 
+    # Pre-resolve sector multiples and revenue float — used by recommendation + IC scoring
+    from goldroger.data.sector_multiples import get_sector_multiples as _get_sm
+    _sm = _get_sm(fund.sector or "")
+    _, _ev_rev_mid, _ev_rev_high = _sm.ev_revenue
+    _rev_float = (
+        float(fin.revenue_current)
+        if fin.revenue_current and fin.revenue_current.replace(".", "").isdigit()
+        else None
+    )
+    _ebitda_margin = svc._resolve_ebitda_margin(
+        fin.model_dump(), market_data, [], sector=fund.sector or ""
+    )[0]
+
     _ev_str = _fmt_ev_human(blended_ev) if blended_ev else "N/A"
     _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
-    _rec = (
-        {"BUY": "ATTRACTIVE", "HOLD": "NEUTRAL", "SELL": "EXPENSIVE"}.get(_raw_rec, "NEUTRAL")
-        if company_type == "private" and result.has_revenue else _raw_rec
-    )
+    if company_type == "private" and result.has_revenue and blended_ev and _rev_float and _rev_float > 0:
+        _entry_ev_rev = blended_ev / _rev_float
+        _, _sm_mid, _sm_high = _sm.ev_revenue
+        if _entry_ev_rev <= _sm_mid * 0.80:
+            _rec = "ATTRACTIVE ENTRY"
+        elif _entry_ev_rev <= _sm_mid * 1.25:
+            _rec = "CONDITIONAL GO"
+        elif _entry_ev_rev <= _sm_high * 0.90:
+            _rec = "SELECTIVE BUY"
+        else:
+            _rec = "FULL PRICE"
+    elif company_type == "private" and result.has_revenue:
+        _rec = "NEUTRAL"
+    else:
+        _rec = _raw_rec
 
     sources.add("WACC", f"{result.wacc_used:.2%}", "capm_model", "inferred")
     sources.add("Terminal growth", f"{result.terminal_growth_used:.2%}", "sector_default", "inferred")
@@ -555,10 +680,11 @@ def run_analysis(
     football_field: FootballField | None = None
     ic_summary: ICScoreSummary | None = None
     try:
-        revenue_series, _ = svc._build_revenue_series(fin.model_dump(), market_data, [])
+        revenue_series, _ = svc._build_revenue_series(
+            fin.model_dump(), market_data, [], sector=fund.sector or ""
+        )
         if not revenue_series or not result.has_revenue:
             raise ValueError("No revenue — skipping football field")
-        _ebitda_margin = svc._resolve_ebitda_margin(fin.model_dump(), market_data, [])[0]
         _last_ebitda = (revenue_series[-1] * _ebitda_margin) if revenue_series else 1.0
         if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
             _comps_low = peer_multiples.ev_ebitda_low
@@ -600,6 +726,7 @@ def run_analysis(
             da_pct=svc._resolve_da_pct(
                 market_data, revenue_series[-1] if revenue_series else None
             ),
+            weights=result.weights_used,
             y0_revenue=_y0_rev,
         )
 
@@ -659,6 +786,11 @@ def run_analysis(
             upside_pct=rec.upside_pct,
             sector=fund.sector or "",
             company=company,
+            blended_ev=blended_ev,
+            revenue=_rev_float,
+            ebitda_margin=_ebitda_margin,
+            ev_rev_sector_mid=_ev_rev_mid,
+            ev_rev_sector_high=_ev_rev_high,
         )
         ic_summary = ICScoreSummary(
             ic_score=f"{ic_result.ic_score:.0f}/100",

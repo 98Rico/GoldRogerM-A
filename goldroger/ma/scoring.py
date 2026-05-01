@@ -67,9 +67,10 @@ _WEIGHTS: dict[str, float] = {
 }
 
 _GATES = {
-    "lbo": 2.0,       # minimum LBO score (below = hard NO GO)
-    "risk": 2.0,      # minimum risk score
-    "financial": 2.0, # minimum financial score
+    # LBO removed: high-multiple growth companies are structurally not LBO candidates.
+    # Infeasible LBO reduces the lbo dimension score but must not veto strategy/financial/risk.
+    "risk": 2.0,      # minimum risk score (e.g. sanctions exposure, regulatory death-risk)
+    "financial": 2.0, # minimum financial score (e.g. deeply distressed balance sheet)
 }
 
 
@@ -246,51 +247,42 @@ def score_from_analysis(
 
 
 def auto_score_from_valuation(
-    lbo_output,          # LBOOutput or None
+    lbo_output,
     upside_pct: Optional[float] = None,
     sector: str = "",
     company: str = "",
+    blended_ev: Optional[float] = None,
+    revenue: Optional[float] = None,
+    ebitda_margin: Optional[float] = None,
+    ev_rev_sector_mid: Optional[float] = None,
+    ev_rev_sector_high: Optional[float] = None,
 ) -> ICScoreOutput:
     """
-    Auto-derive financial and LBO sub-scores from engine outputs.
-    Remaining dimensions default to 5/10 (neutral) — should be overridden
-    with LLM-derived strategic scores.
+    Derive IC sub-scores from quantitative valuation outputs.
+
+    Callers should resolve sector multiples externally and pass
+    ev_rev_sector_mid / ev_rev_sector_high as plain floats so this
+    module stays free of sector-data imports.
+
+    financial score:
+      - public: driven by equity upside vs current price
+      - private: driven by EV/Revenue vs sector mid/high passed by caller
+    lbo score: IRR-based; neutral (5.0) for growth-equity structures
+    all other dimensions: neutral 5.0 (caller can use score_from_analysis for richer input)
     """
-    # Financial score from equity upside
-    if upside_pct is not None:
-        if upside_pct > 0.30:
-            financial = 9.0
-        elif upside_pct > 0.15:
-            financial = 7.5
-        elif upside_pct > 0.0:
-            financial = 6.0
-        elif upside_pct > -0.15:
-            financial = 4.5
-        else:
-            financial = 2.5
-    else:
-        financial = 5.0
-
-    # LBO score from IRR
-    lbo_score = 5.0
-    irr = None
-    feasible = None
-    if lbo_output is not None:
-        irr = lbo_output.irr
-        feasible = lbo_output.is_feasible
-        if not feasible:
-            lbo_score = 1.0
-        elif irr >= 0.25:
-            lbo_score = 10.0
-        elif irr >= 0.20:
-            lbo_score = 8.0
-        elif irr >= 0.15:
-            lbo_score = 6.0
-        elif irr >= 0.10:
-            lbo_score = 4.0
-        else:
-            lbo_score = 2.0
-
+    financial = _financial_score(
+        upside_pct=upside_pct,
+        blended_ev=blended_ev,
+        revenue=revenue,
+        ev_rev_sector_mid=ev_rev_sector_mid,
+        ev_rev_sector_high=ev_rev_sector_high,
+    )
+    lbo_score, irr, feasible = _lbo_score(
+        lbo_output=lbo_output,
+        blended_ev=blended_ev,
+        revenue=revenue,
+        ebitda_margin=ebitda_margin,
+    )
     return compute_ic_score(ICScoreInput(
         strategy=5.0,
         synergies=5.0,
@@ -304,6 +296,68 @@ def auto_score_from_valuation(
         upside_pct=upside_pct,
         lbo_feasible=feasible,
     ))
+
+
+def _financial_score(
+    upside_pct: Optional[float],
+    blended_ev: Optional[float],
+    revenue: Optional[float],
+    ev_rev_sector_mid: Optional[float],
+    ev_rev_sector_high: Optional[float],
+) -> float:
+    """Map valuation attractiveness to a 0–10 financial dimension score."""
+    if upside_pct is not None:
+        if upside_pct > 0.30:   return 9.0
+        if upside_pct > 0.15:   return 7.5
+        if upside_pct > 0.0:    return 6.0
+        if upside_pct > -0.15:  return 4.5
+        return 2.5
+
+    if blended_ev is not None and revenue and revenue > 0 and ev_rev_sector_mid:
+        ev_rev = blended_ev / revenue
+        mid = ev_rev_sector_mid
+        high = ev_rev_sector_high or mid * 2.0
+        if ev_rev <= mid * 0.50:   return 9.0
+        if ev_rev <= mid * 0.75:   return 8.0
+        if ev_rev <= mid:          return 7.0
+        if ev_rev <= mid * 1.25:   return 6.0
+        if ev_rev <= high:         return 5.0
+        if ev_rev <= high * 1.5:   return 3.5
+        return 2.0
+
+    return 5.0  # no data — neutral
+
+
+def _lbo_score(
+    lbo_output,
+    blended_ev: Optional[float],
+    revenue: Optional[float],
+    ebitda_margin: Optional[float],
+) -> tuple:
+    """Return (lbo_score, irr, feasible). Neutral 5.0 for growth-equity structures."""
+    if lbo_output is None:
+        return 5.0, None, None
+
+    irr = lbo_output.irr
+    feasible = lbo_output.is_feasible
+    _ebitda = (revenue * ebitda_margin
+               if revenue and ebitda_margin and revenue > 0 else None)
+    _ev_rev = blended_ev / revenue if blended_ev and revenue and revenue > 0 else 0.0
+    _ev_ebitda = blended_ev / _ebitda if _ebitda and _ebitda > 0 else 0.0
+
+    growth_equity = (
+        _ev_rev > _cfg.ic_score.growth_equity_ev_rev
+        or _ev_ebitda > _cfg.ic_score.growth_equity_ev_ebitda
+    )
+    if growth_equity and not feasible:
+        return 5.0, irr, feasible  # LBO inapplicable by structure — neutral
+    if not feasible:
+        return 2.0, irr, feasible  # genuinely infeasible for a buyout-range company
+    if irr >= 0.25:   return 10.0, irr, feasible
+    if irr >= 0.20:   return 8.0, irr, feasible
+    if irr >= 0.15:   return 6.0, irr, feasible
+    if irr >= 0.10:   return 4.0, irr, feasible
+    return 2.0, irr, feasible
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────

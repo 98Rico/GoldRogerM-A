@@ -10,6 +10,7 @@ Switch providers via LLM_PROVIDER env var or --llm CLI flag:
 from __future__ import annotations
 
 import re
+import threading
 import time
 
 import httpx
@@ -20,17 +21,19 @@ from .llm_client import LLMProvider, build_llm_provider
 
 load_dotenv()
 
-# Global rate limiter: enforce minimum gap between Mistral API calls (free tier safe)
+# Global rate limiter: enforce minimum gap between LLM API calls (thread-safe)
 _last_api_call: float = 0.0
 _MIN_CALL_GAP: float = _cfg.agent.min_call_gap_s
+_rate_lock = threading.Lock()
 
 
 def _rate_limit_wait() -> None:
     global _last_api_call
-    elapsed = time.monotonic() - _last_api_call
-    if elapsed < _MIN_CALL_GAP:
-        time.sleep(_MIN_CALL_GAP - elapsed)
-    _last_api_call = time.monotonic()
+    with _rate_lock:
+        elapsed = time.monotonic() - _last_api_call
+        if elapsed < _MIN_CALL_GAP:
+            time.sleep(_MIN_CALL_GAP - elapsed)
+        _last_api_call = time.monotonic()
 
 WEB_SEARCH_TOOL = {
     "type": "function",

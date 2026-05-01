@@ -234,6 +234,10 @@ class ReportWriterAgent(BaseAgent):
         ebitda_margin = context.get("ebitda_margin", "")
         rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated"
         margin_line = f"  EBITDA Margin: {ebitda_margin}\n" if ebitda_margin else ""
+        has_revenue = (
+            verified_revenue
+            and verified_revenue not in ("unknown", "0", "0.0", "null", "", "Not available [no verified source]")
+        )
         revenue_lock = (
             f"\n⚠ VERIFIED FACTS — do NOT contradict or invent alternatives to these:\n"
             f"  Revenue: ${verified_revenue}M (USD) [{rev_conf_label}]\n"
@@ -243,7 +247,14 @@ class ReportWriterAgent(BaseAgent):
             "CRITICAL: Do NOT state any specific revenue, EV, margin, or price figures beyond "
             "those listed above — all financial figures are computed by the valuation engine "
             "and will be inserted separately. Reference trends and context only."
-        ) if verified_revenue and verified_revenue not in ("unknown", "0", "0.0", "null") else ""
+        ) if has_revenue else (
+            "\n⚠ CRITICAL — NO REVENUE DATA: No verified or estimated revenue figure exists "
+            "for this company in any source accessed during this analysis. "
+            "You MUST NOT state any specific revenue, ARR, GMV, growth rate, or EV figures. "
+            "Do NOT invent numbers. Discuss the company's business model, market position, "
+            "competitive dynamics, and qualitative drivers only. "
+            "Acknowledge explicitly that financial data is not publicly available."
+        )
         return f"""Write a complete investment thesis for "{company}".
 Recommendation context: {rec} with {upside} upside/downside.{revenue_lock}
 
@@ -625,12 +636,18 @@ Context:
 - Company type: {company_type}
 - Scale: {scale_note}
 
-Instructions:
-- MOST IMPORTANT: match business model similarity first, then revenue scale
+CRITICAL TICKER RULES — violations cause the entire peer set to be discarded:
+1. Use web_search to VERIFY each ticker exists before including it.
+   Search: "<company name> stock ticker NYSE NASDAQ" — confirm the exact symbol.
+2. Only include tickers that trade on NYSE, NASDAQ, or major European exchanges (LSE, Euronext Paris, Xetra).
+3. NEVER invent or guess a ticker. If you cannot verify a ticker via search, omit that company entirely.
+4. Prefer US-listed companies where possible — their tickers are most reliably resolved.
+5. Do NOT include the target company itself or its subsidiaries.
+
+Other instructions:
+- Match business model similarity first, then revenue scale
 - {scale_note}
-- Avoid selecting industry giants as peers for small/mid-size targets — it inflates multiples
-- Prefer listed peers with public financials (avoid OTC/micro-caps with illiquid data)
-- Use web_search if needed to verify current listings
+- Avoid mega-caps as peers for small/mid-size targets
 
 Return ONLY this JSON:
 {{

@@ -1,332 +1,293 @@
-# Gold Roger — Moteur de Valorisation Institutionnel
+# Gold Roger — Institutional Valuation Engine
 
 ## Architecture
 
-### Vue d'ensemble
+### Overview
 
 ```
 CLI / FastAPI
      │
      ▼
-orchestrator.py  ←── point d'entrée unique
+orchestrator.py  ←── single entry point
      │
      ├── 1. DATA LAYER
-     │       ├── yfinance (public: prix, beta, marges, EV, forward estimates)
-     │       ├── Pappers  (🇫🇷 privé: CA, bilans — PAPPERS_API_KEY ~€30/mois)
-     │       ├── recherche-entreprises.api.gouv.fr (🇫🇷 gratuit: SIREN, NAF)
-     │       ├── Companies House (🇬🇧 gratuit avec clé: SIC, revenue XBRL)
-     │       ├── Bundesanzeiger (🇩🇪 gratuit: revenue best-effort HTML)
-     │       ├── BORME (🇪🇸 gratuit: existence seulement)
-     │       ├── KVK (🇳🇱 gratuit avec clé: SBI/secteur)
-     │       ├── SEC EDGAR (🇺🇸 gratuit: revenus 10-K — stub)
-     │       ├── Crunchbase (freemium: funding, headcount — stub)
-     │       └── Bloomberg / Capital IQ / Refinitiv (premium — stubs)
+     │       ├── yfinance (public: price, beta, margins, EV, forward estimates)
+     │       ├── Pappers  (🇫🇷 private: revenue, filings — PAPPERS_API_KEY ~€30/mo)
+     │       ├── recherche-entreprises.api.gouv.fr (🇫🇷 free: SIREN, NAF sector)
+     │       ├── Companies House (🇬🇧 free with key: SIC, XBRL revenue)
+     │       ├── Handelsregister (🇩🇪 free: revenue best-effort HTML)
+     │       ├── Registro Mercantil / BORME (🇪🇸 free: existence only)
+     │       ├── KVK (🇳🇱 free with key: SBI/sector)
+     │       ├── SEC EDGAR (🇺🇸 free: annual revenue 10-K — ticker only)
+     │       ├── Private Triangulation (Wikipedia NLP + DuckDuckGo + headcount signals)
+     │       ├── Crunchbase (freemium: funding, headcount — key required)
+     │       └── Bloomberg / Capital IQ / Refinitiv (premium — stubs ready)
      │
-     ├── 2. LLM LAYER  (qualitatif uniquement — jamais de chiffres de valorisation)
-     │       ├── Step 1 [séquentiel]: Fundamentals
-     │       ├── Steps 2+3+4 [parallèle — ThreadPoolExecutor]:
+     ├── 2. LLM LAYER  (qualitative only — never produces valuation numbers)
+     │       ├── Step 1 [sequential]: Fundamentals
+     │       ├── Steps 2+3+4 [parallel — ThreadPoolExecutor]:
      │       │       Market Analysis · Peer Finder · Financial Modeler
-     │       ├── Step 5 [séquentiel]: Valuation Assumptions
-     │       └── Step 6 [séquentiel]: Thesis / Narrative
+     │       ├── Step 4b [parallel]: Transaction Comps
+     │       ├── Step 5 [sequential]: Valuation Assumptions
+     │       └── Step 6 [sequential]: Thesis / Narrative
      │
-     ├── 3. VALUATION ENGINE  (Python pur, déterministe)
-     │       ├── Path A Standard  → DCF + EV/EBITDA comps + EV/Revenue tx
-     │       ├── Path B Financial → P/E + P/B  (banques, assureurs, asset mgrs)
-     │       └── Path C SOTP      → segments × multiple sectoriel
-     │           Inputs: CAPM WACC, forward estimates, peer multiples réels
+     ├── 3. VALUATION ENGINE  (pure Python, deterministic)
+     │       ├── Path A Standard  → DCF + EV/EBITDA comps + EV/Revenue tx comps
+     │       ├── Path B Financial → P/E + P/B  (banks, insurers, asset managers)
+     │       └── Path C SOTP      → segments × sector multiple
+     │           Weights: sector-aware (private high-growth: DCF 20% / Comps 35% / Tx 45%)
+     │           Inputs: CAPM WACC, forward estimates, real peer multiples
      │           Outputs: Bear/Base/Bull × {DCF, comps, blended} + sensitivity 5×5
      │
      └── 4. EXPORT LAYER
              ├── PowerPoint 10 slides (Title, Overview, Market, Financials,
              │   Valuation, Football Field, Peer Comps, IC Score, Thesis, Risks)
              ├── Excel (Dashboard, DCF, Sensitivity, Comparables, Financials)
-             └── Markdown sources.md  (data room — traçabilité complète)
+             └── Markdown sources.md  (data room — full traceability)
 ```
 
-### Modules principaux
+### Key Modules
 
-| Module | Fichier | Rôle | Lignes |
-|--------|---------|------|--------|
-| Orchestrateur | `orchestrator.py` | Coordination complète 3 modes | 976 ⚠️ |
-| Agents LLM | `agents/specialists.py` | 12 agents spécialisés | 584 |
-| Moteur valorisation | `finance/core/valuation_service.py` | DCF + comps + LBO | 613 |
-| DCF engine | `finance/valuation/dcf.py` | FCFF + terminal value | 105 |
-| LBO engine | `finance/valuation/lbo.py` | IRR + MOIC | 184 |
-| Scenarios | `finance/core/scenarios.py` | Bear/Base/Bull | 232 |
-| Fetcher marché | `data/fetcher.py` | yfinance + cache | 350 |
-| Comparables | `data/comparables.py` | Peer multiples réels | 157 |
-| IC Scoring | `ma/scoring.py` | 6 dimensions | 386 |
-| Excel exporter | `exporters/excel.py` | Classeur DCF | 632 |
-| PPT exporter | `exporters/pptx.py` | Deck 10 slides | 692 |
-| Modèles Pydantic | `models/__init__.py` | Tous les types de sortie | 296 |
+| Module | File | Role |
+|--------|------|------|
+| Orchestrator | `orchestrator.py` | 3-mode coordination |
+| LLM Agents | `agents/specialists.py` | 12 specialized agents |
+| Valuation Engine | `finance/core/valuation_service.py` | DCF + comps + LBO + weight routing |
+| Weight Router | `finance/core/valuation_service.py` | `compute_valuation_weights()` — sector/type-aware |
+| DCF engine | `finance/valuation/dcf.py` | FCFF + terminal value |
+| LBO engine | `finance/valuation/lbo.py` | IRR + MOIC |
+| Scenarios | `finance/core/scenarios.py` | Bear/Base/Bull (uses engine weights) |
+| Market Fetcher | `data/fetcher.py` | yfinance + 1h cache |
+| Peer Comparables | `data/comparables.py` | Real peer multiples via yfinance |
+| Sector Multiples | `data/sector_multiples.py` | 25 sectors — EV/EBITDA, EV/Rev, WACC, growth rates |
+| IC Scoring | `ma/scoring.py` | 6 dimensions, pure numeric (no sector imports) |
+| Private Triangulation | `data/private_triangulation.py` | 5-signal revenue estimator |
+| Source Selector | `data/source_selector.py` | Interactive terminal data source picker |
+| Excel Exporter | `exporters/excel.py` | DCF workbook |
+| PPT Exporter | `exporters/pptx.py` | 10-slide deck |
 
-### Règle fondamentale
+### Core Rule
 
-> **Le LLM ne produit jamais les chiffres de valorisation.**
-> Hiérarchie des sources pour EV, WACC, multiples :
+> **The LLM never produces valuation numbers.**
+> Source hierarchy for EV, WACC, multiples:
 > `Bloomberg/CapIQ > yfinance/SEC EDGAR > EU Registries > Crunchbase > Triangulation > LLM fallback`
-> Chaque source est taguée `[verified]` / `[estimated]` / `[inferred]` dans les outputs.
+> Every source tagged `[verified]` / `[estimated]` / `[inferred]` in outputs.
 
-### Ce que l'outil produit aujourd'hui
+### What the tool produces
 
-| Mode | Commande | Outputs |
+| Mode | Command | Outputs |
 |------|---------|---------|
-| **Equity** (public) | `--company NVIDIA` | EV implicite, target price, BUY/HOLD/SELL, football field, PPT+Excel |
-| **Equity** (privé) | `--company Sézane --type private` | EV estimée, ATTRACTIVE/NEUTRAL/EXPENSIVE, PPT+Excel |
-| **Equity** (SIREN) | `--siren 804398073 --type private` | Même chose + revenue vérifié depuis Pappers/Infogreffe |
+| **Equity** (public) | `--company NVIDIA` | Implied EV, target price, BUY/HOLD/SELL, football field, PPT+Excel |
+| **Equity** (private) | `--company Doctolib --type private` | EV range, CONDITIONAL GO / SELECTIVE BUY / FULL PRICE, PPT+Excel |
+| **Equity** (interactive) | `--company Doctolib --type private --interactive` | Same + terminal prompt to choose data sources + manual revenue override |
+| **Equity** (SIREN) | `--siren 804398073 --type private` | Same + verified revenue from Pappers/Infogreffe |
 | **M&A** | `--mode ma --company Target --acquirer Buyer` | Deal sourcing, strategic fit, DD red flags, LBO, IC score |
-| **Pipeline** | `--mode pipeline --buyer LVMH --focus "skincare DTC"` | Liste cibles qualifiées + IC score par cible |
-
-### Limites actuelles connues
-
-- `orchestrator.py` est une god function (976 lignes, `run_analysis()` fait 575 lignes) → voir [RefactoringSteps.md](RefactoringSteps.md)
-- SEC EDGAR et Crunchbase sont des stubs (retournent None) — données manquantes pour sociétés US
-- Graphiques PPT sont des tableaux texte, pas de vrais charts python-pptx
-- Aucun test pour agents, exporters, providers, orchestration — uniquement les engines finance
+| **Pipeline** | `--mode pipeline --buyer LVMH --focus "skincare DTC"` | Screened target list with IC score per target |
 
 ---
 
-## Ce qui fonctionne (Phases 1–15)
+## Commands
 
-### Données & Sources
-
-| Source | Disponibilité | Données |
-|--------|--------------|---------|
-| **yfinance** | Toujours (gratuit) | Prix, beta, marges, EV, forward estimates |
-| **SEC EDGAR** | Toujours (gratuit) | Revenus annuels US (10-K) |
-| **Pappers** | Si `PAPPERS_API_KEY` (🇫🇷, ~€30/mois) | CA, résultat net, bilans — **revenus vérifiés sociétés françaises** |
-| **recherche-entreprises.api.gouv.fr** | Toujours (gratuit, 🇫🇷) | SIREN, NAF/secteur — fallback si pas de clé Pappers |
-| **Bundesanzeiger** | Toujours (gratuit, 🇩🇪) | Revenue best-effort HTML |
-| **Registro Mercantil / BORME** | Toujours (gratuit, 🇪🇸) | Existence société — pas de revenus |
-| **Companies House** | Si `COMPANIES_HOUSE_API_KEY` (🇬🇧, gratuit) | SIC/secteur + revenue XBRL best-effort |
-| **KVK** | Si `KVK_API_KEY` (🇳🇱, gratuit) | SBI/secteur — pas de revenus |
-| **Crunchbase** | Si `CRUNCHBASE_API_KEY` (freemium) | Revenus estimés, funding, headcount |
-| **Web Search** | Toujours (DuckDuckGo) | Données privées, presse, rapports |
-| **Bloomberg BLP** | Si `BLOOMBERG_API_KEY` | Tout (temps réel, privé, M&A comps) |
-| **Capital IQ** | Si `CAPITALIQ_USERNAME` + `CAPITALIQ_PASSWORD` | M&A comps, transactions, private |
-| **Refinitiv** | Si `REFINITIV_APP_KEY` | Équivalent Capital IQ |
-
-Pour activer Bloomberg/CapIQ/Crunchbase : ajouter les variables dans `.env`.
-
-> **Note** : Les taux de change EUR/GBP/CHF/CAD sont récupérés **live via yfinance** (`EURUSD=X`, etc.) avec fallback hardcoded si yfinance indisponible.
-
-### Data Provider Registry
-
-```python
-from goldroger.data.registry import DEFAULT_REGISTRY
-
-# Voir quelles sources sont actives
-print(DEFAULT_REGISTRY.available_providers())  # ['yfinance', 'crunchbase', 'sec_edgar']
-
-# Fetch avec fallback automatique
-data = DEFAULT_REGISTRY.fetch("AAPL")  # essaie Bloomberg → CapIQ → yfinance → Crunchbase → EDGAR
-```
-
-### Peer Comparables (Phase 5)
-
-Pour toute société (publique ou privée), le système identifie automatiquement 4–6 sociétés cotées comparables via LLM, puis récupère leurs vrais multiples de marché via yfinance.
-
-- **Privées** : les multiples sectoriels codés en dur sont remplacés par de vrais comparables
-- **Publiques** : les comps sont ancrées aux multiples réels du secteur live
-- Les multiples peers (médiane P25/P75) alimentent directement le DCF et le football field
-
-### Scénarios Bear / Base / Bull (Phase 5)
-
-Chaque analyse produit 3 DCF complets avec des hypothèses indépendantes :
-
-| Driver | Bear | Base | Bull |
-|--------|------|------|------|
-| Revenue growth delta | −5pp | 0 | +5pp |
-| EBITDA margin delta | −200bps | 0 | +200bps |
-| WACC delta | +150bps | 0 | −100bps |
-| Terminal growth delta | −50bps | 0 | +50bps |
-| Exit multiple factor | 0.80× | 1.0× | 1.20× |
-
-Output : football field EV par méthode (DCF / Comps / Blended) × scénario.
-
-### IC Scoring enrichi (Phase 5)
-
-Les 6 dimensions sont maintenant dérivées des outputs agents, pas neutres à 5.0/10 :
-
-| Dimension | Source |
-|-----------|--------|
-| Strategy | `strategic_fit.fit_score` (High=8.5, Med=6.5, Low=3.0) |
-| Synergies | `strategic_fit.key_synergies` count + impact quality |
-| Integration | `strategic_fit.integration_complexity` (inverse) |
-| Risk | `due_diligence.red_flags` severity count |
-| Financial | `upside_pct` from valuation engine |
-| LBO | `lbo_output.irr` from deterministic engine |
-
-### Private Company Handling
-
-Pour une société privée :
-1. **yfinance** → None (pas de ticker)
-2. **Crunchbase** → revenue range estimé si `CRUNCHBASE_API_KEY` set
-3. **Name Resolver** → `data/name_resolver.py` — résout le nom commercial vers l'identifiant correct par source (LLM one-shot + normalisation accents/suffixes légaux)
-4. **EU Registries** → recherche-entreprises.api.gouv.fr 🇫🇷, Companies House 🇬🇧, Handelsregister 🇩🇪 — chaque provider teste toutes les variantes du nom
-5. **FinancialModelerAgent** → web search pour revenus/marges, taggé `estimated`
-   - Si `revenue_current` toujours null après 2 tentatives → **revenue fallback** : appel LLM ciblé pour débloquer le football field
-5. **PeerFinderAgent** → trouve 4–6 comparables cotés → multiples réels
-6. **Valuation** :
-   - Si revenus trouvés → DCF + comps peers réels + bear/base/bull
-   - Si aucune donnée revenue → DCF/comps **omis** (affiché `N/A`), peer multiples de référence uniquement
-   - **Jamais de valeurs placeholder** — `N/A` honnête plutôt que chiffres fabriqués
-7. **Pas de BUY/HOLD/SELL** (pas de prix coté) → IC scoring M&A uniquement
-
-### Opportunity Screening (M&A Pipeline)
-
-Quand un client cherche des opportunités dans un secteur ou veut trouver des cibles comparables à une société de référence :
-
-```bash
-# Pipeline par secteur
-uv run python -m goldroger.cli --mode pipeline --buyer "LVMH" --focus "Premium beauty brands Europe"
-
-# Cibles comparables à une société de référence
-uv run python -m goldroger.cli --mode pipeline --buyer "Salesforce" --focus "CRM middleware SaaS Series B Europe"
-```
-
-Le `SourcingAgent` identifie des cibles, puis `run_pipeline()` fait tourner une analyse M&A complète sur chaque cible avec IC scoring et football field.
-
-### PowerPoint Output (10 slides)
-
-1. **Title** — Nom, secteur, recommandation, implied value, upside
-2. **Company Overview** — Business model, avantages compétitifs
-3. **Market & Competition** — TAM, CAGR, concurrents, trends
-4. **Financial Snapshot** — KPIs + projections
-5. **Valuation Summary** — DCF / Comps / Transactions (table + conclusion)
-6. **Football Field** — Bear/Base/Bull × méthode, ranges
-7. **Peer Comparables** — Table des comparables réels avec médiane
-8. **IC Score Breakdown** — 6 dimensions + rationale + next steps
-9. **Investment Thesis** — Thesis + Bull/Base/Bear narrative
-10. **Catalysts & Risks** — Catalysts + risques clés
-
----
-
-## Commandes
-
-Tous les exports (PPT + Excel) sont automatiquement sauvegardés dans un sous-dossier horodaté :
+All exports (PPT + Excel) auto-save to a timestamped subfolder:
 `outputs/<Company>_<YYYYMMDD_HHMMSS>/`
 
-### 1. Equity publique — NVIDIA
+### Public company
 
 ```bash
 uv run python -m goldroger.cli --company "NVIDIA" --excel --pptx
 ```
 
-Output : `outputs/NVIDIA_20260427_143022/NVIDIA_analysis.xlsx` + `NVIDIA_analysis.pptx`
-
-### 2. Société privée — Longchamp
+### Private company — standard
 
 ```bash
-uv run python -m goldroger.cli --company "Longchamp" --type private --excel --pptx
+uv run python -m goldroger.cli --company "Doctolib" --type private --excel --pptx
 ```
 
-Output : `outputs/Longchamp_20260427_143022/Longchamp_analysis.xlsx` + `Longchamp_analysis.pptx`
-
-### 2b. Société privée française — lookup par SIREN (Phase 14)
+### Private company — interactive data source selection
 
 ```bash
-# SIREN court-circuite la résolution de nom — appel direct Pappers/Infogreffe
+uv run python -m goldroger.cli --company "Doctolib" --type private --interactive
+```
+
+Prompts Y/N for each applicable registry (country-filtered) and global data sources.
+Allows manual revenue entry as a final override. Useful when:
+- Automated registry returns no revenue (French SAS confidentiality)
+- You have a reliable internal revenue estimate
+- You want to compare Bloomberg vs. triangulation results
+
+### Private company — direct SIREN lookup
+
+```bash
 uv run python -m goldroger.cli --company "Sézane" --siren 804398073 --type private --excel --pptx
 ```
 
-Output inclut `sources.md` — data room avec chaque métrique tracée (source, confiance, URL).
+SIREN bypasses name resolution — calls Pappers/Infogreffe directly.
+Output includes `sources.md` — data room with every metric traced.
 
-### 3. Pipeline sourcing — Carlyle / B2B SaaS Europe
+### Pipeline sourcing
 
 ```bash
-# Standard (avec web search, ~5 min)
+# Standard (with web search, ~5 min)
 uv run python -m goldroger.cli \
   --mode pipeline \
-  --company "sourcing" \
   --buyer "Carlyle Group" \
   --focus "European B2B SaaS, ARR €5M–€50M, founder-led" \
   --pptx
 
-# Rapide pour démo (sans web search, ~1 min)
+# Fast for demos (no web search, ~1 min)
 uv run python -m goldroger.cli \
   --mode pipeline \
-  --company "sourcing" \
   --buyer "Carlyle Group" \
   --focus "European B2B SaaS, ARR €5M–€50M, founder-led" \
   --pptx --quick
 ```
 
-Output : `outputs/sourcing_20260427_143022/pipeline_deck.pptx`
-Retourne 3 cibles avec IC scoring, football field, et rationale de valorisation.
-
-### Autres exemples
+### Other examples
 
 ```bash
-# Banque (path P/E + P/B automatique)
+# Bank (P/E + P/B path, automatic)
 uv run python -m goldroger.cli --company "JPM" --excel --pptx
 
-# M&A (acquéreur → cible spécifique)
+# M&A (specific acquirer → target)
 uv run python -m goldroger.cli --company "Figma" --mode ma --acquirer "Adobe" --pptx
 ```
 
 ---
 
-## Vision — Remplacer l'analyste M&A
+## Valuation Logic
 
-L'objectif est de produire une analyse meilleure qu'un analyste M&A humain sur toutes les tâches courantes : sourcing, valorisation, due diligence, memo IC, PPT, Excel.
+### Sector-aware blend weights
 
-**Ce que l'outil bat déjà un analyste sur** : vitesse, cohérence, couverture systématique, zéro biais d'ancrage, disponibilité 24/7.
+Weights are computed by `compute_valuation_weights()` — not hardcoded:
 
-**Les trois gaps restants** (voir NextSteps) :
-1. **Private company data depth** — triangulation depuis 6–8 signaux (headcount, funding, web traffic, press, transaction comps) — moteur construit, à enrichir
-2. **Transaction comps sans CapIQ** — scraping de press releases M&A pour ancrer les valorisations sur de vraies transactions
-3. **Output polish** — vrais graphiques PPT (bar chart, courbe DCF), Excel 3-statement, executive summary 1-pager
+| Company type | Sector growth | DCF | Trading Comps | Tx Comps | Rationale |
+|---|---|---|---|---|---|
+| Public | Any | 50% | 30% | 20% | Market price anchors DCF; transactions secondary |
+| Private | < 12% CAGR | 50% | 30% | 20% | Standard; DCF reliable for stable businesses |
+| Private | > 12% CAGR | 20% | 35% | 45% | No public beta → WACC estimated; precedent M&A most informative |
+| Financial | Any | 0% | 60% | 40% | P/E + P/B path; DCF not applicable |
+| Mega-cap (>$500B) | Any | 60% | 40% | 0% | No acquirer at this scale; transactions excluded |
 
-## Connectivité Data Dynamique
+High-growth private sectors (sector rev CAGR > 12%): SaaS, HealthTech, Biotech, e-commerce.
 
-Le registre `DataRegistry` est conçu pour que n'importe quelle source soit connectable en 30 minutes sans toucher au moteur de valorisation. Priorité d'exécution : Bloomberg → CapIQ → Refinitiv → yfinance → Crunchbase → Companies House → Infogreffe → Handelsregister → EDGAR.
+### Sector-calibrated fallbacks
 
-**Name Resolver** : pour les sociétés privées, `data/name_resolver.py` traduit automatiquement le nom commercial vers l'identifiant correct par source (raison sociale Infogreffe, registered name Companies House, slug Crunchbase, etc.) via LLM one-shot + normalisation accents/suffixes légaux.
+When live data is unavailable, fallbacks use sector benchmarks from `sector_multiples.py`, not global constants:
 
-**Europe-first, global-ready** : Companies House 🇬🇧, Infogreffe 🇫🇷, Handelsregister 🇩🇪, KVK 🇳🇱, Registro Mercantil 🇪🇸 intégrés. Architecture identique pour OpenCorporates (140+ pays).
+| Field | Old fallback | New fallback |
+|---|---|---|
+| Revenue growth | 8% (hardcoded) | `get_sector_rev_growth(sector)` — e.g. 22% for HealthTech |
+| EBITDA margin | 20% (hardcoded) | `get_sector_ebitda_margin(sector)` — e.g. 15% for HealthTech |
 
-Sources premium (stubs prêts) : PitchBook, Mergermarket, Dealogic, Preqin.
+### Private company recommendation labels
 
-## LLM-Agnostique
+Based on blended EV/Revenue vs sector benchmark — no live price needed:
 
-L'outil tourne sur **Mistral (gratuit)** par défaut — aucune carte bancaire requise. Changer de modèle en une commande, sans toucher au code :
+| EV/Revenue vs sector | Label |
+|---|---|
+| ≤ sector_mid × 0.80 | **ATTRACTIVE ENTRY** |
+| ≤ sector_mid × 1.25 | **CONDITIONAL GO** |
+| ≤ sector_high × 0.90 | **SELECTIVE BUY** |
+| > sector_high × 0.90 | **FULL PRICE** |
 
-| Provider | Coût | Modèles utilisés | Commande d'install |
-|----------|------|------------------|--------------------|
-| **Mistral** (défaut) | Gratuit | mistral-small / mistral-large | _(déjà installé)_ |
-| **Anthropic** | Payant | claude-haiku / claude-sonnet | `uv add --group anthropic anthropic` |
-| **OpenAI** | Payant | gpt-4o-mini / gpt-4o | `uv add --group openai openai` |
+### IC Scoring architecture
 
-```bash
-# Via .env (persistant)
-LLM_PROVIDER=mistral      # gratuit, défaut
-LLM_PROVIDER=anthropic    # Claude — meilleure qualité thesis/DD
-LLM_PROVIDER=openai       # GPT-4o
+`scoring.py` is pure numeric — it accepts pre-resolved inputs, imports no sector data:
 
-# Via CLI (override pour un run uniquement)
-uv run python -m goldroger.cli --company "NVIDIA" --llm claude
-uv run python -m goldroger.cli --company "NVIDIA" --llm mistral
+```python
+auto_score_from_valuation(
+    lbo_output=result.lbo,
+    blended_ev=2400.0,
+    revenue=380.0,
+    ebitda_margin=0.20,
+    ev_rev_sector_mid=12.0,   # resolved by equity.py, passed in
+    ev_rev_sector_high=20.0,  # resolved by equity.py, passed in
+)
 ```
 
-Si un provider n'est pas installé, le message d'erreur indique la commande exacte à lancer. Chaque provider utilise un modèle "small" pour les agents rapides et "large" pour les analyses longues (thesis, DD) — sans configuration supplémentaire.
-
-## Règle Absolue
-
-**Le LLM ne produit JAMAIS de chiffres financiers finaux.**
-
-Hiérarchie des sources (dans l'ordre, toujours) :
-1. **Providers premium** (Bloomberg, CapIQ) — si credentials
-2. **yfinance / SEC EDGAR** — gratuit, sociétés cotées
-3. **Crunchbase** — revenus estimés, startups/privées (freemium)
-4. **Estimations LLM** (web search) — fallback sociétés privées, taggé `estimated`
-5. **Defaults sectoriels** — dernier recours, taggé `inferred`
+LBO growth-equity thresholds (`growth_equity_ev_rev: 12.0`, `growth_equity_ev_ebitda: 25.0`) live in `config.py`.
 
 ---
 
-## Ajouter une source de données
+## Data Sources
 
-Implémenter `DataProvider` :
+| Source | Country | Revenue | Auth |
+|--------|---------|---------|------|
+| **yfinance** | Global | ✅ Verified (public) | None |
+| **SEC EDGAR** | 🇺🇸 | ✅ 10-K XBRL (ticker) | None |
+| **Pappers** | 🇫🇷 | ✅ RNCS verified | ~€30/mo |
+| **recherche-entreprises** | 🇫🇷 | ❌ Sector only | None |
+| **Companies House** | 🇬🇧 | ⚠️ Best-effort XBRL | Free key |
+| **Handelsregister** | 🇩🇪 | ⚠️ Best-effort HTML | None |
+| **BORME** | 🇪🇸 | ❌ Existence only | None |
+| **KVK** | 🇳🇱 | ❌ Sector only | Free key |
+| **Crunchbase** | Global | ⚠️ Range estimate | Enterprise key |
+| **Private Triangulation** | Any | ⚠️ Multi-signal estimate | None |
+| **Bloomberg** | Global | ✅ Everything | License — stub ready |
+| **Capital IQ** | Global | ✅ Everything + deals | License — stub ready |
+
+**FX rates**: EUR/GBP/CHF/CAD fetched live via yfinance (`EURUSD=X` etc.) with hardcoded fallback.
+
+### Interactive source selector (`--interactive`)
+
+When running a private company analysis with `--interactive`, the CLI prompts:
+
+```
+Data Source Selection — Doctolib
+  Detected country: FR — showing relevant registries first
+
+  #   Provider                Coverage   Status
+  1   Infogreffe (FR gov)     FR         free
+  2   Pappers                 FR         key set ✓
+  3   Companies House (UK)    GB         free
+  4   Crunchbase              GLOBAL     no key — will skip
+  5   Bloomberg Terminal      GLOBAL     no key — will skip
+
+  Use Infogreffe (FR gov) (default Y)? [Y/n]
+  Use Pappers (key available)? [Y/n]
+  ...
+  Enter revenue manually in USD millions (leave blank to skip):
+```
+
+Manual revenue entry overrides all provider data and is tagged `[verified — manual]`.
+
+---
+
+## LLM Providers
+
+Runs on **Mistral (free)** by default — no credit card required. Switch with one flag:
+
+| Provider | Cost | Command |
+|----------|------|---------|
+| **Mistral** (default) | Free | _(default)_ |
+| **Anthropic** | Paid | `uv add --group anthropic anthropic` then `--llm claude` |
+| **OpenAI** | Paid | `uv add --group openai openai` then `--llm openai` |
+
+```bash
+# Via .env (persistent)
+LLM_PROVIDER=mistral
+
+# Via CLI (one run)
+uv run python -m goldroger.cli --company "NVIDIA" --llm claude
+```
+
+Rate limiting: 3s minimum gap between LLM calls (Mistral free tier). Thread-safe lock prevents race conditions under parallel execution.
+
+---
+
+## Tests
+
+```bash
+uv run python -m pytest tests/ -v
+```
+
+Covers: WACC CAPM, DCF forward projections, LBO IRR/MOIC/feasibility, Bear/Base/Bull scenarios, IC scoring gates and thresholds, sector multiple resolution, JSON repair.
+
+---
+
+## Adding a Data Provider
+
+Implement `DataProvider`:
 
 ```python
 from goldroger.data.providers.base import DataProvider
@@ -334,16 +295,16 @@ from goldroger.data.fetcher import MarketData
 
 class MyProvider(DataProvider):
     name = "my_source"
-    requires_credentials = True
 
-    def is_available(self):
+    def is_available(self) -> bool:
         return bool(os.getenv("MY_API_KEY"))
 
-    def fetch(self, ticker: str) -> MarketData | None:
-        # ... fetch and return MarketData
+    def fetch_by_name(self, company_name: str) -> MarketData | None:
         ...
+```
 
-# Enregistrer en tête de liste
+Register at the top of the priority stack:
+```python
 from goldroger.data.registry import DEFAULT_REGISTRY
 DEFAULT_REGISTRY.register(MyProvider())
 ```
@@ -352,66 +313,68 @@ DEFAULT_REGISTRY.register(MyProvider())
 
 ## Performance
 
-Temps typiques par run (après optimisations v8) :
+Typical run times (after parallelisation):
 
-| Scénario | Durée estimée |
-|----------|--------------|
-| Equity publique (NVIDIA) | ~5–10 min |
-| Société privée (Sézane) | ~1–2 min |
+| Scenario | Estimated time |
+|----------|---------------|
+| Public equity (NVIDIA) | ~5–10 min |
+| Private company (Sézane) | ~1–2 min |
 | Pipeline sourcing `--quick` | ~1–2 min |
 | Pipeline sourcing standard | ~4–6 min |
 
-Agents qui font des recherches web (cap 3 rounds) : Fundamentals, Market Analysis, FinancialModeler (privées), PeerFinder.
-Agents sans web search (réponse directe) : ValuationAssumptions, ReportWriter, LBO, DealExecution.
-
-## Tests
-
-```bash
-uv run python -m pytest tests/ -v
-```
-
-20 tests couvrant : WACC CAPM, DCF projections forward, LBO IRR/MOIC/feasibility, scénarios Bear/Base/Bull.
+Agents with web search (capped at 3 rounds): Fundamentals, Market Analysis, FinancialModeler (private), PeerFinder, TransactionComps.
+Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 
 ---
 
-## Definition of Done — V1.0
+## Definition of Done
 
-✔ 0 crash CLI  
-✔ Données financières vérifiées (yfinance) pour toute société publique  
-✔ WACC CAPM sur données réelles  
-✔ DCF + LBO stables et défendables  
-✔ Bear/Base/Bull football field  
-✔ Peer comparables réels (pas de sector table hardcodé)  
-✔ IC scoring dérivé des agents (pas 5.0/10 neutral)  
-✔ BUY/HOLD/SELL fiable vs market cap  
-✔ M&A pipeline complet (sourcing → IC scoring)  
-✔ PPT 10 slides institutionnel  
-✔ Exports fiables Excel + PPT  
-✔ Cache + logging en production  
-✔ Architecture data pluggable (Bloomberg/CapIQ prêts à brancher)  
-✔ Crunchbase intégré (freemium, privées)  
-✔ 20 tests unitaires valuation engine  
-✔ LLM-agnostique (Mistral défaut gratuit, Anthropic/OpenAI en option)  
-✔ EU registries pour sociétés privées (Infogreffe, Companies House, Handelsregister)  
-✔ Name Resolver — identifiants légaux corrects par source  
-✔ No placeholder values — N/A honnête plutôt que données fabriquées  
-✔ Football field fonctionnel pour sociétés privées (revenue fallback)  
-✔ KVK 🇳🇱 + Registro Mercantil 🇪🇸 intégrés  
-✔ Fuzzy name matching (difflib) dans Infogreffe + Companies House  
-✔ SOTP auto-detect pour conglomérats (segments → compute_sotp)  
-✔ Scenario narratives Bear/Base/Bull  
-✔ Live FX rates via yfinance  
-✔ Target price (per-share) séparé de l'Implied EV — zéro ambiguïté unités  
-✔ Mega-cap : tx comps exclus (poids 0) pour MCap >$500B  
-✔ Private companies : recommandation ATTRACTIVE / NEUTRAL / EXPENSIVE  
-✔ Revenue lock dans thesis agent — zéro contradiction inter-sections  
-✔ DCF NWC year-1 correct — `base_revenue` ancre le delta NWC au revenu réel année 0  
-✔ LBO revenue corrigé — `entry_ebitda / ebitda_margin` (plus d'erreur d'arrondi via exit multiple)  
-✔ Scenarios correctement ancrés — les 3 scénarios partagent le même y0 réel, seul le taux de croissance est affecté  
-✔ Aggregator robuste — poids auto-normalisés à 1.0, `blended = mid` (estimateur central sans biais)  
-✔ Sector multiples word-boundary regex — fintech → technology (plus de mismatch "financials")  
-✔ 20 tests unitaires passent — LBO test avec inputs cohérents avec la formule corrigée  
-✔ Infogreffe migré — `opendata.infogreffe.fr` mort (2025) → `recherche-entreprises.api.gouv.fr` (govt FR officiel, gratuit, toujours up)  
-✔ Pappers intégré — revenus vérifiés (RNCS/INPI) pour sociétés françaises privées (`PAPPERS_API_KEY`, ~€30/mois)  
-✔ Peer scale constraint — PeerFinderAgent contraint par revenue bracket ×0.25–×4, évite les mega-caps comme comparables de PME  
-✔ Confidence tagging — `[verified]` / `[estimated]` visible en CLI, propagé au thesis agent  
+✔ 0 CLI crashes
+✔ Verified financial data (yfinance) for all public companies
+✔ CAPM WACC on real data
+✔ DCF + LBO stable and defensible
+✔ Bear/Base/Bull football field
+✔ Real peer comparables (not hardcoded sector table)
+✔ IC scoring derived from agents (not neutral 5.0/10)
+✔ BUY/HOLD/SELL reliable vs market cap
+✔ M&A pipeline complete (sourcing → IC scoring)
+✔ PPT 10 slides institutional
+✔ Excel + PPT exports reliable
+✔ Cache + production logging
+✔ Pluggable data architecture (Bloomberg/CapIQ stubs ready)
+✔ Crunchbase integrated (freemium, private companies)
+✔ 20+ unit tests on valuation engine
+✔ LLM-agnostic (Mistral free default, Anthropic/OpenAI optional)
+✔ EU registries for private companies (FR, UK, DE, ES, NL)
+✔ Name Resolver — correct legal identifiers per source
+✔ No placeholder values — honest N/A over fabricated data
+✔ Football field for private companies (revenue fallback chain)
+✔ SOTP auto-detect for conglomerates
+✔ Scenario narratives Bear/Base/Bull
+✔ Live FX rates via yfinance
+✔ Target price (per-share) separate from Implied EV
+✔ Mega-cap: tx comps excluded (weight 0) for MCap >$500B
+✔ Revenue lock in thesis agent — no cross-section contradictions
+✔ DCF NWC year-1 correct — `base_revenue` anchors NWC delta to actual year-0 revenue
+✔ LBO revenue corrected — `entry_ebitda / ebitda_margin`
+✔ Scenarios correctly anchored — all 3 scenarios share same y0, only growth rate differs
+✔ Aggregator robust — weights auto-normalised, `blended = mid`
+✔ Sector multiples word-boundary regex — no sector mismatch
+✔ Infogreffe migrated — `recherche-entreprises.api.gouv.fr` (official FR gov, always up)
+✔ Pappers integrated — RNCS-verified revenue for French private companies
+✔ Peer scale constraint — revenue bracket ×0.25–×4, no mega-cap as SME comparable
+✔ Confidence tagging — `[verified]` / `[estimated]` visible in CLI and exported
+✔ HealthTech sector — dedicated multiples (EV/Rev 6–20x, WACC 11.5%, growth 22%)
+✔ Sector-calibrated revenue growth fallback (22% HealthTech, not generic 8%)
+✔ Sector-calibrated EBITDA margin fallback (sector benchmark, not generic 20%)
+✔ Private high-growth weights — DCF 20% / Comps 35% / Tx 45% (sectors with rev CAGR > 12%)
+✔ Scenario engine uses actual blend weights — not hardcoded 50/30/20
+✔ ValuationMethod display weights reflect actual engine weights
+✔ IC scoring decoupled from sector data — `ev_rev_sector_mid/high` passed from caller
+✔ LBO growth-equity detection — EV/EBITDA > 25x check (config-driven)
+✔ Private recommendation labels — ATTRACTIVE ENTRY / CONDITIONAL GO / SELECTIVE BUY / FULL PRICE
+✔ Interactive data source selector (`--interactive`) — country-filtered, credential-aware, manual override
+✔ Thread-safe rate limiter — `threading.Lock` prevents 429s under parallel execution
+✔ JSON repair for Mistral free tier — trailing commas, None literals, truncated output recovery
+✔ Wikipedia revenue signal — NLP signal 5 in private triangulation
+✔ Hallucination firewall — no-revenue path in ReportWriterAgent blocks any financial figure generation

@@ -57,20 +57,39 @@ def test_watch_for_low_irr():
 
 
 def test_no_go_when_gate_fails():
-    """Any dimension below gate threshold triggers NO GO regardless of total."""
-    out = compute_ic_score(_neutral_input(lbo=1.5))  # lbo gate = 2.0
+    """A dimension below its gate threshold triggers NO GO and zeroes the score."""
+    out = compute_ic_score(_neutral_input(financial=1.5))  # financial gate = 2.0
     assert out.recommendation == "NO GO"
     assert out.ic_score == 0.0
     assert len(out.gates_failed) > 0
 
 
-def test_no_go_infeasible_lbo():
+def test_no_go_infeasible_lbo_low_multiple():
+    """Infeasible LBO on a buyout-range company (low EV/Rev) scores 2.0 → reduces total."""
     class _FakeLBO:
         irr = 0.05
         is_feasible = False
+        leverage_at_entry = 4.5
 
-    out = auto_score_from_valuation(_FakeLBO(), upside_pct=-0.20)
-    assert out.recommendation == "NO GO"
+    # Low EV/Rev (3x) → buyout-range → lbo_score = 2.0 (penalised but not gated)
+    out = auto_score_from_valuation(
+        _FakeLBO(), upside_pct=-0.20, blended_ev=300.0, revenue=100.0
+    )
+    assert out.dimension_scores["lbo"] == 2.0
+
+
+def test_infeasible_lbo_high_multiple_is_neutral():
+    """Infeasible LBO on a high-multiple growth company is structurally expected → neutral 5.0."""
+    class _FakeLBO:
+        irr = 0.08
+        is_feasible = False
+        leverage_at_entry = 4.5
+
+    # EV/Rev = 15x → growth equity territory → lbo_score neutral 5.0
+    out = auto_score_from_valuation(
+        _FakeLBO(), upside_pct=None, blended_ev=1500.0, revenue=100.0
+    )
+    assert out.dimension_scores["lbo"] == 5.0
 
 
 def test_score_clamped_0_to_100():

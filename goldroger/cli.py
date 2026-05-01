@@ -116,6 +116,8 @@ def main():
     parser.add_argument("--pptx", action="store_true", help="Generate PowerPoint deck")
     parser.add_argument("--outdir", default="outputs", help="Output directory for files")
     parser.add_argument("--quick", action="store_true", help="Skip web search in pipeline (faster, uses training knowledge)")
+    parser.add_argument("--interactive", "-i", action="store_true",
+                        help="Interactively select data sources before analysis (private companies)")
     parser.add_argument("--llm", default=None, help="LLM provider: mistral (default), anthropic, openai")
     args = parser.parse_args()
 
@@ -150,7 +152,8 @@ def main():
                 border_style="cyan",
             ))
         else:
-            result = run_analysis(args.company, args.type, llm=args.llm, siren=args.siren)
+            result = run_analysis(args.company, args.type, llm=args.llm, siren=args.siren,
+                                   interactive=args.interactive)
             print_result(result)
 
         if args.output:

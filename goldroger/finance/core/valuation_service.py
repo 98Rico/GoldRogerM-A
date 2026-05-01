@@ -79,7 +79,38 @@ class FullValuationOutput:
     sector: str
     valuation_path: str            # "ev_ebitda" or "pe_pb"
     has_revenue: bool = True       # False → all quantitative methods skipped
+    weights_used: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+
+
+# ── Weight resolution ─────────────────────────────────────────────────────────
+
+def compute_valuation_weights(
+    sector: str,
+    company_type: str = "public",
+    market_data=None,
+) -> dict:
+    """
+    Return blended valuation weights calibrated to sector and company type.
+
+    Private high-growth (SaaS, HealthTech, Biotech, e-commerce — sector rev CAGR > 12%):
+      DCF 20% / Trading comps 35% / Transaction comps 45%
+      Rationale: no public beta → WACC estimated; DCF entirely dependent on
+      estimated growth; precedent M&A transactions are the strongest pricing signal.
+
+    Public / private mature: DCF 50% / Trading comps 30% / Tx comps 20%
+    Financial sector:        DCF 0%  / Trading comps 60% / Tx comps 40%
+    Mega-caps (>$500B):      DCF 60% / Trading comps 40% / Tx comps 0%
+    """
+    from goldroger.data.sector_multiples import get_sector_rev_growth
+    _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+    if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
+        return {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
+    if is_financial_sector(sector):
+        return {"dcf": 0.0, "comps": 0.6, "transactions": 0.4}
+    if company_type == "private" and get_sector_rev_growth(sector) > 0.12:
+        return {"dcf": 0.20, "comps": 0.35, "transactions": 0.45}
+    return {"dcf": 0.50, "comps": 0.30, "transactions": 0.20}
 
 
 # ── ValuationService ──────────────────────────────────────────────────────────
@@ -93,6 +124,7 @@ class ValuationService:
         assumptions: dict,
         market_data=None,
         sector: str = "",
+        company_type: str = "public",
     ) -> FullValuationOutput:
 
         sector_m = get_sector_multiples(sector)
@@ -101,7 +133,7 @@ class ValuationService:
 
         # ── 1. Core inputs ────────────────────────────────────────────────
         revenue_series, _ = self._build_revenue_series(
-            financials, market_data, notes
+            financials, market_data, notes, sector=sector
         )
 
         if revenue_series is None:
@@ -110,6 +142,7 @@ class ValuationService:
             rec = self._compute_recommendation(
                 ValuationResult(low=0, mid=0, high=0, blended=0), market_data, notes
             )
+            _w0 = compute_valuation_weights(sector, company_type, market_data)
             return FullValuationOutput(
                 dcf=None, comps=None, transactions=None,
                 blended=None, lbo=None,
@@ -120,6 +153,7 @@ class ValuationService:
                 sector=sector or "Unknown",
                 valuation_path="ev_ebitda",
                 has_revenue=False,
+                weights_used=_w0,
                 notes=notes,
             )
 
@@ -134,7 +168,7 @@ class ValuationService:
         else:
             base_revenue_y0 = self._f(financials.get("revenue_current"), None)
 
-        ebitda_margin, _ = self._resolve_ebitda_margin(financials, market_data, notes)
+        ebitda_margin, _ = self._resolve_ebitda_margin(financials, market_data, notes, sector=sector)
         tax_rate = self._resolve_tax_rate(financials, market_data)
         capex_pct = self._resolve_capex_pct(financials, market_data, revenue_current)
         nwc_pct = self._f(financials.get("nwc_pct"), 0.02)
@@ -181,16 +215,11 @@ class ValuationService:
             valuation_path = "ev_ebitda"
 
         # ── 5. Blended EV ─────────────────────────────────────────────────
-        if use_financial_path:
-            weights = assumptions.get("weights") or {
-                "dcf": 0.0, "comps": 0.6, "transactions": 0.4
-            }
-        else:
-            weights = assumptions.get("weights") or {
-                "dcf": 0.5, "comps": 0.3, "transactions": 0.2
-            }
-        # Mega-caps (>$500B): precedent transactions are not applicable —
-        # no acquirer can buy Apple or Microsoft. Reweight to DCF 60% / Comps 40%.
+        weights = assumptions.get("weights") or compute_valuation_weights(
+            sector=sector,
+            company_type=company_type,
+            market_data=market_data,
+        )
         _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
         if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
             weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
@@ -198,6 +227,8 @@ class ValuationService:
                 f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap): "
                 "tx comps excluded — weights DCF 60% / Comps 40%."
             )
+        w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
+        notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)
 
         # ── 6. LBO (always run, may be infeasible; skipped for mega-caps) ──
@@ -232,6 +263,7 @@ class ValuationService:
             data_confidence=data_confidence,
             sector=sector or "Unknown",
             valuation_path=valuation_path,
+            weights_used=weights,
             notes=notes,
         )
 
@@ -253,11 +285,19 @@ class ValuationService:
         comps = compute_comps(
             CompsInput(metric_value=ebitda, multiple_range=(ev_ebitda_low, ev_ebitda_high))
         )
-        tx = compute_transaction(
-            TransactionInput(
-                revenue=revenue,
-                multiple=self._f(assumptions.get("tx_multiple"), sector_m.ev_revenue[1]),
+        # Cap tx_multiple to 1.5× the sector's high-end EV/Revenue bound.
+        # LLM-sourced M&A data can return outlier multiples (e.g. 22x for a single
+        # blockbuster deal) that would dominate the blended valuation at 20% weight.
+        _, ev_rev_mid, ev_rev_high = sector_m.ev_revenue
+        raw_tx = self._f(assumptions.get("tx_multiple"), ev_rev_mid)
+        tx_multiple = min(raw_tx, ev_rev_high * 1.5)
+        if raw_tx > tx_multiple:
+            notes.append(
+                f"tx_multiple capped at {tx_multiple:.1f}x "
+                f"(LLM proposed {raw_tx:.1f}x, sector high = {ev_rev_high:.1f}x)."
             )
+        tx = compute_transaction(
+            TransactionInput(revenue=revenue, multiple=tx_multiple)
         )
         return comps, tx
 
@@ -306,7 +346,7 @@ class ValuationService:
 
     # ── Revenue & assumption helpers ──────────────────────────────────────────
 
-    def _build_revenue_series(self, financials, market_data, notes):
+    def _build_revenue_series(self, financials, market_data, notes, sector: str = ""):
         # Priority 1: verified yfinance — project FORWARD from most recent year
         if market_data and market_data.revenue_history and len(market_data.revenue_history) >= 2:
             hist = market_data.revenue_history
@@ -356,9 +396,16 @@ class ValuationService:
             base = self._f(financials.get("revenue_current"), None)
 
         if base and base > 0:
-            raw_growth = (
-                market_data.forward_revenue_growth if market_data else None
-            ) or self._f(financials.get("revenue_growth"), 0.08)
+            _fwd = market_data.forward_revenue_growth if market_data else None
+            _llm = self._f(financials.get("revenue_growth"), None)
+            if _fwd is not None:
+                raw_growth = _fwd
+            elif _llm is not None:
+                raw_growth = _llm
+            else:
+                from goldroger.data.sector_multiples import get_sector_rev_growth
+                raw_growth = get_sector_rev_growth(sector)
+                notes.append(f"Revenue growth from sector benchmark ({raw_growth:.0%}) — no verified data.")
             growth = max(-0.10, min(float(raw_growth), 0.35))
             series = [base * (1 + growth) ** i for i in range(1, self.PROJECTION_YEARS + 1)]
             notes.append(f"Revenue at {growth:.1%} p.a. (single-point base).")
@@ -367,7 +414,7 @@ class ValuationService:
         notes.append("REVENUE_MISSING: No revenue data — DCF and comps omitted.")
         return None, "missing"
 
-    def _resolve_ebitda_margin(self, financials, market_data, notes):
+    def _resolve_ebitda_margin(self, financials, market_data, notes, sector: str = ""):
         if market_data and market_data.ebitda_margin is not None:
             m = market_data.ebitda_margin
             notes.append(f"EBITDA margin {m:.1%} from live market data.")
@@ -377,8 +424,10 @@ class ValuationService:
             if raw > 1.0:
                 raw /= 100.0
             return max(-0.50, min(raw, 0.80)), "estimated"
-        notes.append("EBITDA margin not found — using sector default 20%.")
-        return 0.20, "inferred"
+        from goldroger.data.sector_multiples import get_sector_ebitda_margin
+        margin = get_sector_ebitda_margin(sector) if sector else 0.18
+        notes.append(f"EBITDA margin not found — using sector default {margin:.0%}.")
+        return margin, "inferred"
 
     def _resolve_tax_rate(self, financials, market_data):
         if market_data and market_data.effective_tax_rate is not None:

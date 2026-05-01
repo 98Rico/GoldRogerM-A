@@ -111,7 +111,13 @@ def triangulate_revenue(
                 signals.append(TriangulationSignal(fund_rev, 0.40, "funding_arr_proxy"))
                 notes.append(f"Funding ARR proxy: ${fund_rev:.1f}M")
 
-    # ── Signal 5: Press/web NLP ───────────────────────────────────────────────
+    # ── Signal 5: Wikipedia revenue mention ──────────────────────────────────
+    wiki_rev = _signal_wikipedia(company_name)
+    if wiki_rev:
+        signals.append(TriangulationSignal(wiki_rev, 0.60, "wikipedia"))
+        notes.append(f"Wikipedia revenue mention: ${wiki_rev:.1f}M")
+
+    # ── Signal 6: Press/web NLP ───────────────────────────────────────────────
     press_rev = _signal_press_nlp(company_name)
     if press_rev:
         signals.append(TriangulationSignal(press_rev, 0.55, "press_nlp"))
@@ -255,6 +261,36 @@ def _signal_funding_arr(cb_data: dict) -> Optional[float]:
         return None
     total_m = float(total_usd) / 1_000_000
     return round(total_m * _SAAS_ARR_CAPITAL_RATIO, 1)
+
+
+def _signal_wikipedia(company_name: str) -> Optional[float]:
+    """Search Wikipedia for the company article and extract revenue from article text."""
+    try:
+        search_resp = httpx.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query", "list": "search",
+                "srsearch": company_name, "srlimit": 3, "format": "json",
+            },
+            timeout=8,
+        )
+        if search_resp.status_code != 200:
+            return None
+        results = search_resp.json().get("query", {}).get("search", [])
+        if not results:
+            return None
+        title = results[0]["title"]
+        extract_resp = httpx.get(
+            "https://en.wikipedia.org/api/rest_v1/page/summary/"
+            + title.replace(" ", "_"),
+            timeout=8,
+        )
+        if extract_resp.status_code != 200:
+            return None
+        text = extract_resp.json().get("extract", "")
+        return _extract_revenue_from_text(text)
+    except Exception:
+        return None
 
 
 def _signal_press_nlp(company_name: str) -> Optional[float]:
