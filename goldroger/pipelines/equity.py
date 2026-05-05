@@ -4,6 +4,7 @@ from __future__ import annotations
 import re as _re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import date
 
 from dotenv import load_dotenv
@@ -73,6 +74,7 @@ from ._shared import (
 from .fill_gaps import fill_gaps
 
 load_dotenv()
+_MAX_AGENT_SECONDS = 60
 
 def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
     score = 0.0
@@ -580,14 +582,21 @@ def run_analysis(
 
     def _do_market():
         _t = _step("Market Analysis")
-        result = _parse_with_retry(
-            market_agent, company, company_type,
-            {"sector": fund.sector or "", "description": fund.description, "run_date": date.today().isoformat()},
-            MarketAnalysis, MarketAnalysis(),
-        )
+        try:
+            result = _parse_with_retry(
+                market_agent, company, company_type,
+                {"sector": fund.sector or "", "description": fund.description, "run_date": date.today().isoformat()},
+                MarketAnalysis, MarketAnalysis(),
+                fatal_on_fail=True,
+            )
+            status = "ok"
+        except Exception as e:
+            console.print(f"  [red]Market analysis failed: {e}[/red]")
+            result = MarketAnalysis()
+            status = "failed"
         log.end_step("market_analysis", _t)
         _done("Market Analysis", _t)
-        return result
+        return result, status
 
     def _do_peers():
         _t = _step("Peer Comparables")
@@ -637,16 +646,34 @@ def run_analysis(
         _done("Transaction Comps", _t)
         return result
 
+    market_analysis_failed = False
+    peer_timeout_or_fail = False
     with ThreadPoolExecutor(max_workers=_cfg.agent.parallel_workers) as _pool:
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
         _fut_tx = None if _skip_tx_comps else _pool.submit(_do_tx_comps)
-        mkt = _fut_mkt.result()
-        _peers_raw, _peers_err = _fut_peers.result()
+        try:
+            mkt, _mkt_status = _fut_mkt.result(timeout=_MAX_AGENT_SECONDS)
+            market_analysis_failed = (_mkt_status != "ok")
+        except FutureTimeoutError:
+            market_analysis_failed = True
+            mkt = MarketAnalysis()
+            console.print(f"  [red]Market analysis failed: timeout > {_MAX_AGENT_SECONDS}s[/red]")
+        try:
+            _peers_raw, _peers_err = _fut_peers.result(timeout=_MAX_AGENT_SECONDS)
+            peer_timeout_or_fail = bool(_peers_err)
+        except FutureTimeoutError:
+            _peers_raw, _peers_err = None, TimeoutError("peer timeout")
+            peer_timeout_or_fail = True
+            console.print(f"  [red]Peer comparables failed: timeout > {_MAX_AGENT_SECONDS}s[/red]")
         fin = _fut_fin.result()
         if _fut_tx is not None:
-            _tx_raw, _tx_err = _fut_tx.result()
+            try:
+                _tx_raw, _tx_err = _fut_tx.result(timeout=_MAX_AGENT_SECONDS)
+            except FutureTimeoutError:
+                _tx_raw, _tx_err = None, TimeoutError("tx comps timeout")
+                console.print(f"  [yellow]Transaction comps timeout > {_MAX_AGENT_SECONDS}s — skipped.[/yellow]")
         else:
             _tx_raw, _tx_err = None, None
             console.rule("[bold cyan]Transaction Comps")
@@ -876,6 +903,8 @@ def run_analysis(
             and market_data.forward_revenue_growth is not None
             and market_data.forward_revenue_1y is None
         ),
+        peer_count=(peer_multiples.n_peers if peer_multiples else 0),
+        market_analysis_failed=market_analysis_failed,
     )
     _is_mega_cap_quality = bool(
         company_type == "public"
@@ -954,7 +983,7 @@ def run_analysis(
             console.print("  [yellow]⚠ Peer set expanded beyond core comparables; valuation confidence reduced.[/yellow]")
     elif assumptions_dict.get("insufficient_comps"):
         console.print(
-            "  [yellow]Comps disabled: insufficient real peers for mega-cap policy (need >=3).[/yellow]"
+            "  [yellow]Comps unavailable: no validated peers after expansion.[/yellow]"
         )
     elif _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5:
         console.print(
@@ -973,6 +1002,13 @@ def run_analysis(
     )
     blended_ev = result.blended.blended if result.blended else None
     rec = result.recommendation
+    _dcf_sanity_fail = any("DCF likely miscalibrated" in str(n) for n in (result.notes or []))
+    if _peer_count == 0 and _dcf_sanity_fail:
+        console.print("  [red]❌ Valuation failed: peer comps unavailable and DCF sanity check failed.[/red]")
+        rec.recommendation = "INCONCLUSIVE"
+        rec.intrinsic_price = None
+        rec.upside_pct = None
+        result.notes.append("Valuation status: FAILED — no peers + DCF sanity failure.")
 
     if not result.has_revenue:
         console.print(
@@ -1262,15 +1298,16 @@ def run_analysis(
             if (_w_dcf == 100 and _w_comp == 0 and _w_tx == 0)
             else "Blended Valuation"
         )
-        val.methods.append(
-            ValuationMethod(
-                name=_blend_name,
-                low=str(round(scenarios_out.bear.blended_ev, 1)),
-                mid=str(round(blended_ev, 1)) if blended_ev else str(round(scenarios_out.base.blended_ev, 1)),
-                high=str(round(scenarios_out.bull.blended_ev, 1)),
-                weight=100,
+        if not (_w_dcf == 100 and _w_comp == 0 and _w_tx == 0):
+            val.methods.append(
+                ValuationMethod(
+                    name=_blend_name,
+                    low=str(round(scenarios_out.bear.blended_ev, 1)),
+                    mid=str(round(blended_ev, 1)) if blended_ev else str(round(scenarios_out.base.blended_ev, 1)),
+                    high=str(round(scenarios_out.bull.blended_ev, 1)),
+                    weight=100,
+                )
             )
-        )
         # Ensure base scenario reconciles with current method outputs and blend.
         if football_field.base:
             if result.dcf:
@@ -1302,10 +1339,15 @@ def run_analysis(
             f"/ Base {football_field.base.blended_ev if football_field.base else 'N/A'} "
             f"/ Bull {football_field.bull.blended_ev if football_field.bull else 'N/A'}"
         )
-        console.print(
-            "  [dim]Interpretation: DCF anchors downside, comps anchor upside; "
-            "wide spread implies higher model uncertainty.[/dim]"
-        )
+        if _w_comp > 0 and result.comps and result.comps.mid > 0:
+            console.print(
+                "  [dim]Interpretation: DCF anchors downside, comps anchor upside; "
+                "wide spread implies higher model uncertainty.[/dim]"
+            )
+        else:
+            console.print(
+                "  [dim]Interpretation: comps unavailable/low-weight; valuation confidence is reduced.[/dim]"
+            )
     except Exception as e:
         console.print(f"  [yellow]Scenarios skipped: {e}[/yellow]")
 

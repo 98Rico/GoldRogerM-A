@@ -510,3 +510,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Graceful comps degradation — public mega-cap runs now keep partial comps weights (10% / 25% / 40%) instead of hard disabling when peer count is low
 ✔ DCF sanity guardrail — >40% implied downside with stable margins is flagged as likely DCF miscalibration
 ✔ Limitation banner for expanded peers — runs with non-core expanded peer sets now surface a reduced-confidence warning
+✔ Fail-fast agent guardrails — critical parallel agents now timeout at 60s to prevent 20+ minute hangs
+✔ Fatal JSON mode for critical analysis — market-analysis JSON double-failure now raises hard failure instead of silently degrading
+✔ Explicit failed valuation state — when peers are unavailable and DCF sanity fails, recommendation is forced to `INCONCLUSIVE`
+✔ No silent contradiction messaging — comps-upside interpretation is suppressed when comps are unavailable/zero-weight
+✔ Data-quality reliability penalties — public quality scoring now penalizes missing/weak peers and market-analysis failures

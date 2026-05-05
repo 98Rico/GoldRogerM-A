@@ -25,6 +25,8 @@ def assess_data_quality(
     financials: dict,
     market_analysis: Optional[dict] = None,
     proxy_growth_used: bool = False,
+    peer_count: int = 0,
+    market_analysis_failed: bool = False,
 ) -> DataQualityReport:
     score = 100
     blockers: list[str] = []
@@ -81,6 +83,26 @@ def assess_data_quality(
         warnings.append("Forward growth uses proxy signal (not analyst revenue estimate)")
     elif market_data and market_data.forward_revenue_growth is not None:
         checks["forward_growth_source"] = "analyst_estimate"
+
+    if company_type == "public":
+        if peer_count <= 0:
+            score -= 20
+            warnings.append("No validated peer comps")
+            checks["peer_set"] = "missing"
+        elif peer_count < 3:
+            score -= 12
+            warnings.append("Weak peer comps set (<3)")
+            checks["peer_set"] = "weak"
+        elif peer_count < 5:
+            score -= 8
+            warnings.append("Expanded peer set (<5) with reduced confidence")
+            checks["peer_set"] = "expanded"
+        else:
+            checks["peer_set"] = "ok"
+    if market_analysis_failed:
+        score -= 15
+        warnings.append("Market analysis failed")
+        checks["market_analysis"] = "failed"
 
     score = max(0, min(100, score))
     # Credibility cap: estimates present => max 90. Perfect 100 reserved for fully verified sets.
