@@ -912,6 +912,19 @@ def run_analysis(
             and market_data.forward_revenue_1y is None
         ),
     )
+    _is_mega_cap_quality = bool(
+        company_type == "public"
+        and market_data
+        and market_data.market_cap
+        and market_data.market_cap > _mega_cap_usd_m
+    )
+    if _is_mega_cap_quality and (not peer_multiples or peer_multiples.n_peers < 3):
+        if quality.score > 75:
+            quality.score = 75
+            quality.tier = "B"
+        quality.warnings.append(
+            "Public mega-cap without usable comps (minimum 3) — quality score capped."
+        )
     console.print(
         f"  [bold]Data quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
         + (" [yellow]limited-confidence mode[/yellow]" if quality.is_blocked else "")
@@ -937,7 +950,7 @@ def run_analysis(
         and market_data.market_cap > _mega_cap_usd_m
     )
     assumptions_dict["insufficient_comps"] = bool(
-        _is_mega_cap and (not peer_multiples or peer_multiples.n_peers < 5)
+        _is_mega_cap and (not peer_multiples or peer_multiples.n_peers < 3)
     )
     if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
         assumptions_dict["ev_ebitda_range"] = [
@@ -952,7 +965,11 @@ def run_analysis(
         )
     elif assumptions_dict.get("insufficient_comps"):
         console.print(
-            "  [yellow]Comps disabled: insufficient real peers for mega-cap policy (need >=5).[/yellow]"
+            "  [yellow]Comps disabled: insufficient real peers for mega-cap policy (need >=3).[/yellow]"
+        )
+    elif _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5:
+        console.print(
+            f"  [yellow]Low-confidence comps: {peer_multiples.n_peers} validated peers (target 5–7).[/yellow]"
         )
 
     # Policy: do not anchor valuation inputs to LLM-sourced transaction comps.
@@ -1064,6 +1081,8 @@ def run_analysis(
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
     _low_conviction = any("dispersion" in str(n).lower() for n in (result.notes or []))
     if peer_multiples and peer_multiples.n_peers < 3:
+        _low_conviction = True
+    if _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5:
         _low_conviction = True
     if company_type == "private" and result.has_revenue and blended_ev and _rev_float and _rev_float > 0:
         _entry_ev_rev = blended_ev / _rev_float
@@ -1249,9 +1268,14 @@ def run_analysis(
             elif _m.name.startswith("Trading Comps"):
                 _m.low = str(round(scenarios_out.bear.comps_ev_mid, 1))
                 _m.high = str(round(scenarios_out.bull.comps_ev_mid, 1))
+        _blend_name = (
+            "DCF-only Valuation"
+            if (_w_dcf == 100 and _w_comp == 0 and _w_tx == 0)
+            else "Blended Valuation"
+        )
         val.methods.append(
             ValuationMethod(
-                name="Blended Valuation",
+                name=_blend_name,
                 low=str(round(scenarios_out.bear.blended_ev, 1)),
                 mid=str(round(blended_ev, 1)) if blended_ev else str(round(scenarios_out.base.blended_ev, 1)),
                 high=str(round(scenarios_out.bull.blended_ev, 1)),
@@ -1278,7 +1302,7 @@ def run_analysis(
             _px_high = (scenarios_out.bull.blended_ev - _nd) / market_data.shares_outstanding
             _lo = min(_px_low, _px_high, rec.intrinsic_price)
             _hi = max(_px_low, _px_high, rec.intrinsic_price)
-            sources.add_once(
+            sources.add(
                 "Fair Value Range",
                 f"${_lo:.2f}–${_hi:.2f}",
                 "scenario_blended",

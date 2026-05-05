@@ -494,3 +494,9 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Range integrity — fair value range is scenario-based and always includes point estimate
 ✔ Peer transparency — per-peer EV/EBITDA and similarity hints are surfaced in runtime output
 ✔ Uncertainty signaling — DCF vs comps dispersion >2x is explicitly flagged as high-dispersion / low-confidence
+✔ JSON reliability hardening — strict JSON retry path now logs invalid raw snippets and always injects strict-json hints
+✔ Agent strict-json compatibility — retry no longer crashes on agents without `_strict_json` kwargs support
+✔ Mega-cap comps minimum policy — target 5–7 peers, minimum 3 peers allowed with explicit low-confidence signaling
+✔ No mega-cap sector-multiple fallback — rejected/missing peer ranges no longer silently degrade to sector-table comps
+✔ Valuation mode naming integrity — 100% DCF runs are labeled `DCF-only Valuation` (not blended)
+✔ Public mega-cap quality cap with missing comps — quality score capped at 75 when usable trading comps are unavailable

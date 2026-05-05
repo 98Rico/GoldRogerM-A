@@ -255,9 +255,9 @@ class ValuationService:
             comps_output = CompsOutput(low=0.0, mid=0.0, high=0.0)
             tx_output = TransactionOutput(implied_value=0.0)
             comps_field_sources = {
-                "EV/EBITDA (peer range)": ("insufficient peers", "validated_peers", "inferred"),
+                "EV/EBITDA (peer range)": ("insufficient peers (<3)", "validated_peers", "inferred"),
             }
-            notes.append("Comps disabled: insufficient validated peer set for mega-cap policy.")
+            notes.append("Comps disabled: insufficient validated peer set (<3 peers).")
             valuation_path = "ev_ebitda"
         else:
             comps_output, tx_output, comps_field_sources = self._standard_comps(
@@ -277,8 +277,8 @@ class ValuationService:
             if insufficient_comps:
                 weights = {"dcf": 1.0, "comps": 0.0, "transactions": 0.0}
                 notes.append(
-                    f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap) with insufficient peers: "
-                    "comps/tx excluded — weights DCF 100%."
+                    f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap) with insufficient peers (<3): "
+                    "DCF-only valuation mode (low reliability)."
                 )
             else:
                 weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
@@ -467,6 +467,10 @@ class ValuationService:
         comps_field_sources: dict = {}
         comps_range = assumptions.get("ev_ebitda_range")
         peer_median = self._f(assumptions.get("ev_ebitda_median"), None)
+        is_mega_cap = bool(
+            market_data and market_data.market_cap
+            and market_data.market_cap > (_cfg.lbo.mega_cap_skip_usd_bn * 1000)
+        )
 
         if comps_range and len(comps_range) == 2:
             ev_ebitda_low, ev_ebitda_high = sorted((float(comps_range[0]), float(comps_range[1])))
@@ -476,10 +480,24 @@ class ValuationService:
             # reject low-multiple peer bands (e.g. 8x–12x) that are not credible
             # for Apple/Microsoft/NVIDIA-scale companies.
             if self._reject_peer_range_for_mega_cap_tech(ev_ebitda_low, ev_ebitda_high, market_data, sector):
-                # deterministic fallback band around sector mid if peer set is clearly bad
+                if is_mega_cap:
+                    notes.append(
+                        "Peer range rejected by mega-cap tech gate and no sector fallback allowed; "
+                        "marking comps insufficient."
+                    )
+                    comps_field_sources["EV/EBITDA (peer range)"] = (
+                        "rejected peer range (insufficient comps)",
+                        "peer_quality_gate",
+                        "inferred",
+                    )
+                    comps = CompsOutput(low=0.0, mid=0.0, high=0.0)
+                    tx = compute_transaction(
+                        TransactionInput(revenue=revenue, multiple=0.0)
+                    )
+                    return comps, tx, comps_field_sources
                 ev_ebitda_low, ev_ebitda_mid, ev_ebitda_high = sector_m.ev_ebitda
                 notes.append(
-                    "Peer range rejected by mega-cap tech gate; using sector-table peer fallback "
+                    "Peer range rejected by quality gate; using sector-table fallback "
                     f"{ev_ebitda_low:.1f}x/{ev_ebitda_mid:.1f}x/{ev_ebitda_high:.1f}x."
                 )
                 comps_field_sources["EV/EBITDA (peer range)"] = (
@@ -509,6 +527,18 @@ class ValuationService:
                     f"Median {ev_ebitda_mid:.1f}x / P75 {ev_ebitda_high:.1f}x EV/EBITDA."
                 )
         else:
+            if is_mega_cap:
+                notes.append("No validated peer range for mega-cap; comps marked insufficient.")
+                comps_field_sources["EV/EBITDA (peer range)"] = (
+                    "missing validated peer range",
+                    "validated_peers",
+                    "inferred",
+                )
+                comps = CompsOutput(low=0.0, mid=0.0, high=0.0)
+                tx = compute_transaction(
+                    TransactionInput(revenue=revenue, multiple=0.0)
+                )
+                return comps, tx, comps_field_sources
             # last-resort deterministic sector table
             ev_ebitda_low, ev_ebitda_mid, ev_ebitda_high = sector_m.ev_ebitda
             comps_field_sources["EV/EBITDA (peer range)"] = (

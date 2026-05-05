@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from pydantic import BaseModel
 from rich.console import Console
@@ -133,10 +134,25 @@ def _fmt_ev_human(v_m: float) -> str:
 # ── Agent runner with retry ────────────────────────────────────────────────
 def _parse_with_retry(agent, company, company_type, context, model_class, fallback):
     """Run agent, parse JSON output; retry once with strict hint on failure."""
+    def _log_bad_json(raw_text: Any, stage: str) -> None:
+        try:
+            _raw = str(raw_text or "")
+            _snippet = _raw.replace("\n", "\\n")[:800]
+            console.print(f"  [dim]Invalid JSON ({stage}) raw snippet:[/] {_snippet}")
+        except Exception:
+            pass
+
     raw = agent.run(company, company_type, context)
     result = parse_model(raw, model_class, fallback)
     if did_fallback(result):
+        _log_bad_json(raw, "first pass")
         console.print("  [yellow]JSON parse failed — retrying with strict prompt[/yellow]")
-        raw2 = agent.run(company, company_type, context, _strict_json=True)
+        strict_ctx = {**context, "__strict_json_hint": True}
+        try:
+            raw2 = agent.run(company, company_type, strict_ctx, _strict_json=True)
+        except TypeError:
+            raw2 = agent.run(company, company_type, strict_ctx)
         result = parse_model(raw2, model_class, fallback, _retry=True)
+        if did_fallback(result):
+            _log_bad_json(raw2, "strict retry")
     return result

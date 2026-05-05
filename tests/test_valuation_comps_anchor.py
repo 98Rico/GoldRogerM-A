@@ -84,7 +84,9 @@ def test_mega_cap_tech_rejects_low_peer_range():
         sector="Technology",
     )
     assert out.field_sources["EV/EBITDA (peer range)"][1] == "peer_quality_gate"
-    assert "fallback" in out.field_sources["EV/EBITDA (peer range)"][0]
+    assert "rejected" in out.field_sources["EV/EBITDA (peer range)"][0]
+    assert out.comps is not None
+    assert out.comps.mid == 0.0
 
 
 def test_forward_growth_source_and_mega_cap_normalisation_note():
