@@ -535,6 +535,21 @@ def run_analysis(
 
     # Override LLM-derived financials with registry-verified values when available
     fin = _reconcile_financials(fin, market_data, console)
+    # Strict provenance policy for confirmed low-data private entities:
+    # do not surface unsourced LLM financial metrics as factual numbers.
+    _strict_registry_mode = bool(
+        company_type == "private"
+        and company_identifier
+        and market_data
+        and market_data.data_source == "companies_house"
+        and not market_data.revenue_ttm
+    )
+    if _strict_registry_mode:
+        fin.revenue_growth = "Not available [no verified source]"
+        fin.gross_margin = "Not available [no verified source]"
+        fin.ebitda_margin = "Not available [no verified source]"
+        fin.free_cash_flow = "Not available [no verified source]"
+        fin.net_margin = "Not available [no verified source]"
 
     _parallel_elapsed = time.time() - _parallel_t0
     console.print(
