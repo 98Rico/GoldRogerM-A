@@ -416,6 +416,27 @@ def run_analysis(
                 "companies_house",
                 "verified",
             )
+        _soc = _meta.get("statement_of_capital") or {}
+        if _soc.get("share_class"):
+            sources.add_once("Share Class (GB)", str(_soc.get("share_class")), "companies_house", "verified")
+        if _soc.get("total_shares") is not None:
+            sources.add_once("Total Shares (GB)", f"{int(_soc.get('total_shares'))}", "companies_house", "verified")
+        if _soc.get("aggregate_nominal_value") is not None:
+            _cur = _soc.get("share_capital_currency") or "GBP"
+            sources.add_once(
+                "Aggregate Nominal Value (GB)",
+                f"{_cur} {float(_soc.get('aggregate_nominal_value')):,.0f}",
+                "companies_house",
+                "verified",
+            )
+        if _soc.get("aggregate_unpaid") is not None:
+            _cur = _soc.get("share_capital_currency") or "GBP"
+            sources.add_once(
+                "Aggregate Unpaid Capital (GB)",
+                f"{_cur} {float(_soc.get('aggregate_unpaid')):,.0f}",
+                "companies_house",
+                "verified",
+            )
     # Identity guardrail: if we only have registry identity (no verified business description),
     # avoid hallucinated business models from similarly named entities.
     if (

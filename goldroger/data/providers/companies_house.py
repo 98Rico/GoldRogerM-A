@@ -12,9 +12,12 @@ Set COMPANIES_HOUSE_API_KEY in .env to activate authenticated access.
 from __future__ import annotations
 
 import os
+import re
+from io import BytesIO
 from typing import Optional
 
 import httpx
+from pypdf import PdfReader
 
 from goldroger.data.fetcher import MarketData
 from .base import DataProvider
@@ -161,6 +164,62 @@ class CompaniesHouseProvider(DataProvider):
             "filing_notes": notes,
         }
 
+    def _extract_statement_of_capital_from_incorporation(self, filing_items: list[dict]) -> dict:
+        """
+        Parse incorporation document PDF text to extract statement-of-capital fields.
+        Best effort only; returns empty dict if unavailable.
+        """
+        inc = next((x for x in filing_items if (x.get("type") or "").upper() in {"NEWINC", "IN01"}), None)
+        if not inc:
+            return {}
+        meta_url = inc.get("links", {}).get("document_metadata", "")
+        if not meta_url:
+            return {}
+        try:
+            mr = httpx.get(meta_url, auth=self._auth(), timeout=12, headers={"Accept": "application/json"})
+            if mr.status_code != 200:
+                return {}
+            doc_url = (mr.json().get("links", {}) or {}).get("document", "")
+            if not doc_url:
+                return {}
+            dr = httpx.get(doc_url, auth=self._auth(), timeout=20, follow_redirects=True)
+            if dr.status_code != 200 or not dr.content:
+                return {}
+            reader = PdfReader(BytesIO(dr.content))
+            text = "\n".join((p.extract_text() or "") for p in reader.pages[:30])
+            if not text.strip():
+                return {}
+            out: dict = {}
+            up = text.upper()
+            if "ORDINARY" in up:
+                out["share_class"] = "ORDINARY"
+            m_num = re.search(r"NUMBER\s+ALLOTTED\s+([0-9][0-9,]*)", up)
+            if m_num:
+                out["shares_allotted"] = int(m_num.group(1).replace(",", ""))
+            m_nom = re.search(r"AGGREGATE\s+NOMINAL\s+VALUE[:\s]*([A-Z]{3})?\s*([0-9][0-9,]*(?:\.[0-9]+)?)", up)
+            if m_nom:
+                if m_nom.group(1):
+                    out["share_capital_currency"] = m_nom.group(1)
+                out["aggregate_nominal_value"] = float(m_nom.group(2).replace(",", ""))
+            m_total_shares = re.search(r"TOTAL\s+NUMBER\s+OF\s+SHARES[:\s]*([0-9][0-9,]*)", up)
+            if m_total_shares:
+                out["total_shares"] = int(m_total_shares.group(1).replace(",", ""))
+            m_unpaid = re.search(r"TOTAL\s+AGGREGATE\s+UNPAID[:\s]*([0-9][0-9,]*(?:\.[0-9]+)?)", up)
+            if m_unpaid:
+                out["aggregate_unpaid"] = float(m_unpaid.group(1).replace(",", ""))
+            m_cur = re.search(r"CURRENCY[:\s]*([A-Z]{3})", up)
+            if m_cur and "share_capital_currency" not in out:
+                out["share_capital_currency"] = m_cur.group(1)
+            rights_line = ""
+            m_rights = re.search(r"PRESCRIBED\s+PARTICULARS(.{0,220})", up, re.DOTALL)
+            if m_rights:
+                rights_line = " ".join(m_rights.group(1).split())
+            if rights_line:
+                out["share_rights_summary"] = rights_line[:180]
+            return out
+        except Exception:
+            return {}
+
     def fetch(self, ticker: str) -> Optional[MarketData]:
         return None  # Companies House uses company names, not tickers
 
@@ -214,6 +273,7 @@ class CompaniesHouseProvider(DataProvider):
 
         filing_items = self._fetch_all_filings(company_number)
         filing_summary = self._summarise_filing_documents(filing_items)
+        capital_summary = self._extract_statement_of_capital_from_incorporation(filing_items)
         recent_filings = filing_summary.get("filing_history_recent", []) or []
 
         # Try to get revenue from most recent filed accounts (best-effort)
@@ -241,6 +301,7 @@ class CompaniesHouseProvider(DataProvider):
             "has_confirmation_statement": filing_summary.get("has_confirmation_statement", False),
             "has_director_changes": filing_summary.get("has_director_changes", False),
             "filing_notes": filing_summary.get("filing_notes", []),
+            "statement_of_capital": capital_summary,
         }
 
         return MarketData(

@@ -296,6 +296,7 @@ For non-pipeline workflows, both UI and CLI now enforce an explicit company conf
 - Confirmed company identifiers (e.g., Companies House company number) now flow into pipeline context to reduce same-name confusion in downstream narrative agents
 - For GB entities, Companies House metadata enrichment now includes SIC details, active director/officer counts, incorporation date, and recent filing-history summaries to ground fundamentals and thesis text
 - GB provider now paginates through filing history (bounded), indexes document metadata/resources across filings, and surfaces filing/document coverage counts in `sources.md`
+- GB incorporation PDFs are now parsed (best effort) for statement-of-capital fields (share class, total shares, nominal value, unpaid capital, rights summary), and these are logged in provenance
 
 API guardrail:
 - `POST /analyze` rejects non-pipeline requests unless `confirmed_company=true`
