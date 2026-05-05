@@ -97,6 +97,9 @@ class CompaniesHouseProvider(DataProvider):
         if not company_number:
             return None
 
+        return self.fetch_by_company_number(company_number, fallback_name=company_name)
+
+    def fetch_by_company_number(self, company_number: str, fallback_name: str = "") -> Optional[MarketData]:
         profile = self._get(f"/company/{company_number}")
         if not profile:
             return None
@@ -118,8 +121,8 @@ class CompaniesHouseProvider(DataProvider):
         revenue = self._fetch_revenue(company_number)
 
         return MarketData(
-            ticker=company_name.upper()[:6],
-            company_name=profile.get("company_name", company_name),
+            ticker=(profile.get("company_name", fallback_name) or fallback_name or company_number).upper()[:6],
+            company_name=profile.get("company_name", fallback_name or company_number),
             sector=sector,
             revenue_ttm=revenue,
             confidence="verified" if revenue else "inferred",

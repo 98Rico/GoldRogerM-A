@@ -232,6 +232,7 @@ class ReportWriterAgent(BaseAgent):
         verified_revenue = context.get("verified_revenue", "")
         rev_confidence = context.get("revenue_confidence", "estimated")
         ebitda_margin = context.get("ebitda_margin", "")
+        identity_note = context.get("identity_note", "")
         rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated"
         margin_line = f"  EBITDA Margin: {ebitda_margin}\n" if ebitda_margin else ""
         has_revenue = (
@@ -257,6 +258,12 @@ class ReportWriterAgent(BaseAgent):
         )
         return f"""Write a complete investment thesis for "{company}".
 Recommendation context: {rec} with {upside} upside/downside.{revenue_lock}
+Identity context: {identity_note}
+
+CRITICAL IDENTITY RULE:
+- Do NOT confuse this company with similarly named companies.
+- If verified sources do not provide product/business specifics, explicitly say details are not publicly disclosed.
+- Never invent product claims (e.g., robotics, hardware, SaaS) unless directly supported by verified context above.
 
 Return ONLY this JSON:
 {{

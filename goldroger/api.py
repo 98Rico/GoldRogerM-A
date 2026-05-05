@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
@@ -27,6 +28,10 @@ class AnalyzeRequest(BaseModel):
     export_excel: bool = False
     export_pptx: bool = False
     output_dir: str = "outputs"
+    confirmed_company: bool = False
+    none_of_the_suggested_companies: bool = False
+    selected_symbol: str | None = None
+    selected_company_name: str | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -49,6 +54,57 @@ class CredentialUpdateResponse(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/resolve-company")
+def resolve_company(query: str, company_type: Literal["public", "private"] = "public") -> dict:
+    q = (query or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Query is required")
+
+    suggestions: list[dict] = []
+    try:
+        with httpx.Client(timeout=12, follow_redirects=True) as client:
+            resp = client.get(
+                "https://query1.finance.yahoo.com/v1/finance/search",
+                params={"q": q, "quotesCount": 7, "newsCount": 0},
+            )
+            quotes = resp.json().get("quotes", [])
+            for item in quotes:
+                symbol = item.get("symbol")
+                name = item.get("longname") or item.get("shortname") or item.get("name") or q
+                qtype = item.get("quoteType") or ""
+                exch = item.get("exchDisp") or item.get("exchange") or ""
+                region = item.get("region") or ""
+                if not symbol and not name:
+                    continue
+                if company_type == "public" and qtype not in ("EQUITY", "ETF"):
+                    continue
+                suggestions.append(
+                    {
+                        "display_name": name,
+                        "symbol": symbol or "",
+                        "quote_type": qtype,
+                        "exchange": exch,
+                        "region": region,
+                    }
+                )
+    except Exception:
+        suggestions = []
+
+    # Ensure we always return at least one suggestion row for explicit confirmation.
+    if not suggestions:
+        suggestions = [
+            {
+                "display_name": q,
+                "symbol": "",
+                "quote_type": "UNKNOWN",
+                "exchange": "",
+                "region": "",
+            }
+        ]
+
+    return {"query": q, "company_type": company_type, "suggestions": suggestions[:7]}
 
 
 @app.get("/data-sources")
@@ -220,6 +276,13 @@ def ui() -> str:
   </div>
 
   <div style="margin-top: 16px;" class="card">
+    <div id="company_confirm" style="display:none; margin-bottom: 12px; padding:12px; border:1px solid #d1d5db; border-radius:12px; background:#fafafa;">
+      <div style="font-weight:600; margin-bottom:8px;">Confirm Company</div>
+      <div class="muted" style="margin-bottom:8px;">Please confirm the company before we run analysis.</div>
+      <div id="company_options"></div>
+      <div class="muted" id="company_confirm_status" style="margin-top:8px;"></div>
+    </div>
+
     <div style="margin-bottom: 8px;">
       <span class="pill" id="status">idle</span>
       <span class="muted" id="hint"></span>
@@ -232,6 +295,16 @@ def ui() -> str:
     const el = (id) => document.getElementById(id);
     const status = (t) => { el("status").textContent = t; };
     const hint = (t) => { el("hint").textContent = t || ""; };
+    let confirmedSelection = null;
+    let confirmationQuery = "";
+
+    const resetConfirmation = () => {
+      confirmedSelection = null;
+      confirmationQuery = "";
+      el("company_confirm").style.display = "none";
+      el("company_options").innerHTML = "";
+      el("company_confirm_status").textContent = "";
+    };
 
     const setModeUI = () => {
       const m = el("mode").value;
@@ -248,6 +321,7 @@ def ui() -> str:
       if (isPipeline) {
         el("company").value = "pipeline";
         el("company_type").value = "private";
+        resetConfirmation();
       } else {
         el("company").disabled = false;
         el("company_type").disabled = false;
@@ -270,7 +344,50 @@ def ui() -> str:
     };
 
     el("mode").addEventListener("change", setModeUI);
+    el("company").addEventListener("input", resetConfirmation);
+    el("company_type").addEventListener("change", resetConfirmation);
     setModeUI();
+
+    const fetchCompanySuggestions = async () => {
+      const query = el("company").value.trim();
+      const companyType = el("company_type").value;
+      const resp = await fetch(`/resolve-company?query=${encodeURIComponent(query)}&company_type=${encodeURIComponent(companyType)}`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "Company resolution failed");
+      confirmationQuery = query;
+      const rows = data.suggestions || [];
+      const html = rows.map((s, idx) => `
+        <label style="display:block; border:1px solid #e5e7eb; border-radius:10px; padding:8px; margin-bottom:8px;">
+          <input type="radio" name="company_candidate" value="${idx}" />
+          <b>${s.display_name || query}</b>
+          <span class="muted"> ${s.symbol ? `(${s.symbol})` : ""} ${s.exchange || ""} ${s.region || ""}</span>
+        </label>
+      `).join("");
+      el("company_options").innerHTML = html + `
+        <label style="display:block; border:1px solid #f1c1c1; border-radius:10px; padding:8px; margin-bottom:8px;">
+          <input type="radio" name="company_candidate" value="none" />
+          <b>None of these companies</b>
+        </label>
+      `;
+      el("company_confirm").style.display = "block";
+      el("company_confirm_status").textContent = "Select one option, then click Run again.";
+      confirmedSelection = { suggestions: rows, selected: null, none: false };
+      document.querySelectorAll('input[name=\"company_candidate\"]').forEach(n => {
+        n.addEventListener('change', () => {
+          const v = n.value;
+          if (v === "none") {
+            confirmedSelection.selected = null;
+            confirmedSelection.none = true;
+            el("company_confirm_status").textContent = "You selected 'None of these companies'. Refine the name and run again.";
+          } else if (n.checked) {
+            const i = Number(v);
+            confirmedSelection.selected = confirmedSelection.suggestions[i];
+            confirmedSelection.none = false;
+            el("company_confirm_status").textContent = `Confirmed: ${confirmedSelection.selected.display_name}${confirmedSelection.selected.symbol ? ` (${confirmedSelection.selected.symbol})` : ""}`;
+          }
+        });
+      });
+    };
 
     const loadProviders = async () => {
       try {
@@ -342,7 +459,44 @@ def ui() -> str:
         export_excel: el("export_excel").checked,
         export_pptx: el("export_pptx").checked,
         output_dir: el("output_dir").value.trim() || "outputs",
+        confirmed_company: false,
+        none_of_the_suggested_companies: false,
+        selected_symbol: null,
+        selected_company_name: null,
       };
+
+      // Mandatory confirmation for non-pipeline workflows.
+      if (payload.mode !== "pipeline") {
+        const companyNow = el("company").value.trim() || "";
+        if (!confirmedSelection || confirmationQuery !== companyNow) {
+          try {
+            await fetchCompanySuggestions();
+            status("awaiting_confirmation");
+            hint("Please confirm the company selection.");
+          } catch (e) {
+            status("error");
+            hint(String(e));
+          } finally {
+            el("runBtn").disabled = false;
+          }
+          return;
+        }
+        if (confirmedSelection.none) {
+          status("awaiting_confirmation");
+          hint("Please refine company name; current selection is 'None of these companies'.");
+          el("runBtn").disabled = false;
+          return;
+        }
+        if (!confirmedSelection.selected) {
+          status("awaiting_confirmation");
+          hint("Please select one suggested company or choose 'None of these companies'.");
+          el("runBtn").disabled = false;
+          return;
+        }
+        payload.confirmed_company = true;
+        payload.selected_symbol = confirmedSelection.selected.symbol || null;
+        payload.selected_company_name = confirmedSelection.selected.display_name || payload.company;
+      }
 
       try {
         const resp = await fetch("/analyze", {
@@ -397,6 +551,18 @@ def files(path: str) -> FileResponse:
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     try:
+        if req.mode != "pipeline":
+            if req.none_of_the_suggested_companies:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No company selected. Please refine the name and confirm the correct company.",
+                )
+            if not req.confirmed_company:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Company confirmation is required before analysis.",
+                )
+
         if req.mode == "pipeline":
             buyer = req.buyer or "Global consumer goods group"
             focus = req.focus or (
@@ -405,17 +571,21 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             )
             result = run_pipeline(buyer=buyer, focus=focus)
         elif req.mode == "ma":
+            company_input = req.selected_symbol or req.selected_company_name or req.company
             result = run_ma_analysis(
-                req.company,
+                company_input,
                 req.company_type,
                 acquirer=req.acquirer,
                 objective=req.objective,
             )
         else:
-            result = run_analysis(req.company, req.company_type)
+            company_input = req.selected_symbol or req.selected_company_name or req.company
+            result = run_analysis(company_input, req.company_type)
     except KeyError as exc:
         # typically missing env var like MISTRAL_API_KEY
         raise HTTPException(status_code=500, detail=f"Missing configuration: {exc}") from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

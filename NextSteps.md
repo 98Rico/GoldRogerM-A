@@ -27,6 +27,10 @@ Two modes:
 | EV/EBITDA comps anchor determinism | ✅ Done | `ValuationService` now locks comps mid to live `market_data.ev_ebitda_market`; peer ranges only affect spread (capped ±25%) |
 | Data quality gate (public + private) | ✅ Done | Deterministic `data_quality` score/tier with blockers/warnings now returned in analysis output and logged to `sources.md` |
 | UI credential setup for missing sources | ✅ Done | API + UI now expose keyed providers and allow runtime key entry with optional `.env` persistence |
+| Mandatory company confirmation flow | ✅ Done | UI and CLI now require explicit company confirmation before non-pipeline runs, with a “None of these companies” option, country-hint support, and GB Companies House candidate listing when key is set |
+| CLI env/key loading parity | ✅ Done | CLI now loads `.env` at startup, and Companies House is correctly marked as key-required in source status |
+| GB confirmation fallback when CH API auth fails | ✅ Done | CLI now falls back to public Companies House search HTML and still shows candidate company numbers |
+| Entity identity guardrail in pipeline/thesis | ✅ Done | Confirmed company identifier now flows into analysis, GB private lookups can resolve by company number, and thesis is constrained against similarly named-company hallucinations |
 | Public company valuation (DCF + Comps + LBO) | ✅ Solid | yfinance, CAPM WACC, sector multiples |
 | Private company valuation — high-growth | ✅ Improved | DCF 20% / Comps 35% / Tx 45% weights |
 | Sector-calibrated growth + margin fallbacks | ✅ Done | `get_sector_rev_growth` / `get_sector_ebitda_margin` |
@@ -64,6 +68,7 @@ Two modes:
 | PPT is text tables | Not presentable to fund clients | No charts in python-pptx |
 | Excel is DCF only | Missing BS + CF | Not a real 3-statement model |
 | SEC EDGAR match quality variable | US private coverage uneven | `fetch_by_name()` depends on filing-name quality and aliases |
+| Company identity ambiguity from free-text names | Can fetch wrong ticker/company | Name-based resolution can return near-match symbols without user confirmation |
 | IC auto-score floor ~54 for private | Requires agent data to reach BUY | Strategy/synergies neutral at 5.0 without agent intelligence |
 
 ---
@@ -112,6 +117,18 @@ Two modes:
 - `POST /settings/credentials` accepts provider env vars and values, applies at runtime
 - Optional persistence to `.env` (`persist_to_env_file=true`)
 - `/ui` now includes a credentials panel to enter/update keys directly
+
+#### 0.6 — Mandatory company confirmation before analysis  ← **COMPLETED**
+
+**Status**: ✅ completed.
+
+**Implemented**:
+- New endpoint: `GET /resolve-company?query=...&company_type=...` (returns suggested matches)
+- Non-pipeline analysis now requires explicit confirmation (`confirmed_company=true`)
+- UI always shows a confirmation step before run
+- CLI now prompts confirmation before non-pipeline run
+- CLI private confirmation now prompts for country hint and shows source/context columns
+- UI and CLI include explicit **“None of these companies”** option to stop and refine safely
 
 #### 0.2 — Crunchbase activation
 

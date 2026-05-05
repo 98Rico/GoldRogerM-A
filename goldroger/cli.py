@@ -8,21 +8,261 @@ Usage:
     uv run python -m goldroger.cli --company "NVIDIA"
 """
 import argparse
+import html
 import json
+import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
+import httpx
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from .data.registry import DEFAULT_REGISTRY
 from .data.source_selector import provider_table
 from .exporters import generate_excel, generate_pptx
 from .orchestrator import run_analysis, run_ma_analysis, run_pipeline
 
 console = Console()
+load_dotenv()
+
+
+def _prompt_country_hint(current: str = "") -> str:
+    allowed = {"FR", "GB", "DE", "NL", "ES", "US", ""}
+    if current and current.upper() in allowed:
+        return current.upper()
+    console.print("\n[bold]Country hint[/bold] (helps choose the right registry/provider)")
+    console.print("  Options: FR, GB, DE, NL, ES, US, or leave blank for unknown")
+    raw = console.input("Enter country hint: ").strip().upper()
+    return raw if raw in allowed else ""
+
+
+def _fetch_company_suggestions(query: str, company_type: str, country_hint: str = "") -> list[dict]:
+    q = (query or "").strip()
+    if not q:
+        return []
+    try:
+        with httpx.Client(timeout=12, follow_redirects=True) as client:
+            resp = client.get(
+                "https://query1.finance.yahoo.com/v1/finance/search",
+                params={"q": q, "quotesCount": 7, "newsCount": 0},
+            )
+            quotes = resp.json().get("quotes", [])
+            out: list[dict] = []
+            for item in quotes:
+                symbol = item.get("symbol") or ""
+                name = item.get("longname") or item.get("shortname") or item.get("name") or q
+                qtype = item.get("quoteType") or ""
+                exchange = item.get("exchDisp") or item.get("exchange") or ""
+                region = item.get("region") or ""
+                if company_type == "public" and qtype not in ("EQUITY", "ETF"):
+                    continue
+                out.append(
+                    {
+                        "display_name": name,
+                        "symbol": symbol,
+                        "quote_type": qtype,
+                        "exchange": exchange,
+                        "region": region,
+                        "source": "yahoo_search",
+                        "country_hint": country_hint or "",
+                    }
+                )
+            if out:
+                return out[:7]
+    except Exception:
+        pass
+    out = [{
+        "display_name": q,
+        "symbol": "",
+        "quote_type": "UNKNOWN",
+        "exchange": "",
+        "region": "",
+        "source": "name_input",
+        "country_hint": country_hint or "",
+        "identifier": "",
+    }]
+    # Country-specific private registry candidates.
+    if company_type == "private" and (country_hint or "").upper() == "GB":
+        def _public_ch_search_rows(name_query: str) -> list[dict]:
+            try:
+                with httpx.Client(timeout=12, follow_redirects=True) as client:
+                    page = client.get(
+                        "https://find-and-update.company-information.service.gov.uk/search/companies",
+                        params={"q": name_query},
+                    )
+                    if page.status_code != 200:
+                        return []
+                    # Extract links like /company/16655420 and their visible titles.
+                    rows: list[dict] = []
+                    for m in re.finditer(
+                        r'href="/company/([A-Z0-9]+)".{0,300}?>([^<]+)</a>',
+                        page.text,
+                        re.IGNORECASE | re.DOTALL,
+                    ):
+                        company_number = (m.group(1) or "").strip()
+                        title = html.unescape((m.group(2) or "").strip())
+                        if not company_number or not title:
+                            continue
+                        rows.append({
+                            "display_name": title,
+                            "symbol": "",
+                            "quote_type": "PRIVATE",
+                            "exchange": "",
+                            "region": "GB",
+                            "source": "companies_house_public_search",
+                            "country_hint": "GB",
+                            "identifier": company_number,
+                        })
+                        if len(rows) >= 5:
+                            break
+                    return rows
+            except Exception:
+                return []
+
+        ch_key = os.getenv("COMPANIES_HOUSE_API_KEY", "")
+        if ch_key:
+            try:
+                with httpx.Client(timeout=12, follow_redirects=True, auth=(ch_key, "")) as client:
+                    resp = client.get(
+                        "https://api.company-information.service.gov.uk/search/companies",
+                        params={"q": q, "items_per_page": 5},
+                        headers={"Accept": "application/json"},
+                    )
+                    if resp.status_code == 200:
+                        items = resp.json().get("items", []) or []
+                        ch_rows = []
+                        for it in items:
+                            ch_rows.append({
+                                "display_name": it.get("title") or q,
+                                "symbol": "",
+                                "quote_type": "PRIVATE",
+                                "exchange": "",
+                                "region": "GB",
+                                "source": "companies_house_search",
+                                "country_hint": "GB",
+                                "identifier": it.get("company_number") or "",
+                            })
+                        if ch_rows:
+                            return ch_rows + out
+                    elif resp.status_code == 401:
+                        # Key is present but rejected; fallback to public website search.
+                        pub_rows = _public_ch_search_rows(q)
+                        if pub_rows:
+                            pub_rows.insert(0, {
+                                "display_name": "Companies House API key rejected (401); showing public-site matches",
+                                "symbol": "",
+                                "quote_type": "INFO",
+                                "exchange": "",
+                                "region": "GB",
+                                "source": "companies_house",
+                                "country_hint": "GB",
+                                "identifier": "",
+                            })
+                            return pub_rows + out
+            except Exception:
+                pass
+            pub_rows = _public_ch_search_rows(q)
+            if pub_rows:
+                return pub_rows + out
+        else:
+            pub_rows = _public_ch_search_rows(q)
+            if pub_rows:
+                pub_rows.insert(0, {
+                    "display_name": "Companies House API key missing; showing public-site matches",
+                    "symbol": "",
+                    "quote_type": "INFO",
+                    "exchange": "",
+                    "region": "GB",
+                    "source": "companies_house",
+                    "country_hint": "GB",
+                    "identifier": "",
+                })
+                return pub_rows + out
+            out.insert(0, {
+                "display_name": "Companies House candidates unavailable (missing COMPANIES_HOUSE_API_KEY)",
+                "symbol": "",
+                "quote_type": "INFO",
+                "exchange": "",
+                "region": "GB",
+                "source": "companies_house",
+                "country_hint": "GB",
+                "identifier": "",
+            })
+    if company_type == "private":
+        try:
+            md = DEFAULT_REGISTRY.fetch_by_name(q, country_hint=country_hint or "")
+            if md:
+                out.insert(0, {
+                    "display_name": md.company_name or q,
+                    "symbol": "",
+                    "quote_type": "PRIVATE",
+                    "exchange": "",
+                    "region": country_hint or "",
+                    "source": md.data_source or "registry",
+                    "country_hint": country_hint or "",
+                    "identifier": "",
+                })
+        except Exception:
+            pass
+    return out
+
+
+def _confirm_company_or_abort(company: str, company_type: str, country_hint: str = "") -> tuple[str, str, str]:
+    ch = country_hint or ""
+    if company_type == "private":
+        ch = _prompt_country_hint(country_hint)
+    suggestions = _fetch_company_suggestions(company, company_type, ch)
+    console.print()
+    console.rule("[bold cyan]Confirm Company[/]")
+    console.print("Select the correct company before analysis:\n")
+    t = Table(show_header=True, header_style="bold magenta")
+    t.add_column("#", width=3)
+    t.add_column("Name")
+    t.add_column("Symbol")
+    t.add_column("Type")
+    t.add_column("Identifier")
+    t.add_column("Country/Region")
+    t.add_column("Source")
+    for idx, s in enumerate(suggestions, start=1):
+        t.add_row(
+            str(idx),
+            s.get("display_name") or company,
+            s.get("symbol") or "—",
+            s.get("quote_type") or "—",
+            s.get("identifier") or "—",
+            s.get("region") or s.get("country_hint") or "unknown",
+            s.get("source") or "—",
+        )
+    t.add_row(str(len(suggestions) + 1), "None of these companies", "—", "—", "—", "—", "manual")
+    console.print(t)
+    if company_type == "private" and not ch:
+        console.print("[yellow]Country is unknown. Confirmation quality is lower until country is specified.[/yellow]")
+
+    while True:
+        choice = console.input("\nEnter number to confirm: ").strip()
+        if not choice.isdigit():
+            console.print("[yellow]Please enter a valid number.[/]")
+            continue
+        n = int(choice)
+        if n == len(suggestions) + 1:
+            raise ValueError("No company confirmed. Please refine the name and run again.")
+        if 1 <= n <= len(suggestions):
+            selected = suggestions[n - 1]
+            _sym = selected.get("symbol", "").strip()
+            if company_type == "public" and _sym:
+                console.print(f"[green]Confirmed:[/] {selected['display_name']} ({_sym})")
+                return _sym, ch, ""
+            console.print(
+                f"[green]Confirmed:[/] {selected['display_name']} "
+                f"[dim](country: {ch or 'unknown'})[/dim]"
+            )
+            return selected["display_name"], ch, (selected.get("identifier") or "")
+        console.print("[yellow]Selection out of range. Try again.[/]")
 
 
 def print_result(result):
@@ -134,6 +374,7 @@ def main():
         help="List available data sources and credential status, then exit.",
     )
     parser.add_argument("--llm", default=None, help="LLM provider: mistral (default), anthropic, openai")
+    parser.add_argument("--country-hint", default="", help="Optional ISO-2 country hint for private company resolution (FR/GB/DE/NL/ES/US)")
     args = parser.parse_args()
 
     if args.list_sources:
@@ -161,6 +402,14 @@ def main():
         ]
 
     try:
+        confirmed_company = args.company
+        country_hint = args.country_hint.strip().upper() if args.country_hint else ""
+        company_identifier = ""
+        if args.mode != "pipeline":
+            confirmed_company, country_hint, company_identifier = _confirm_company_or_abort(
+                args.company, args.type, country_hint
+            )
+
         if args.mode == "pipeline":
             buyer = args.buyer or "Global consumer goods group"
             focus = args.focus or (
@@ -175,7 +424,7 @@ def main():
             ))
         elif args.mode == "ma":
             result = run_ma_analysis(
-                args.company,
+                confirmed_company,
                 args.type,
                 acquirer=args.acquirer,
                 objective=args.objective,
@@ -191,8 +440,9 @@ def main():
                 border_style="cyan",
             ))
         else:
-            result = run_analysis(args.company, args.type, llm=args.llm, siren=args.siren,
-                                   interactive=args.interactive, data_sources=selected_sources)
+            result = run_analysis(confirmed_company, args.type, llm=args.llm, siren=args.siren,
+                                   interactive=args.interactive, data_sources=selected_sources,
+                                   country_hint=country_hint, company_identifier=company_identifier)
             print_result(result)
 
         if args.output:

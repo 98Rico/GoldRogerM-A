@@ -281,6 +281,23 @@ The API/UI now support entering missing provider keys directly:
 
 The `/ui` page includes a **Data Source Credentials** panel for this workflow.
 
+CLI note:
+- CLI now loads `.env` at startup, so provider keys in `.env` are available during confirmation and sourcing checks.
+
+### Company Confirmation (Always-On)
+
+For non-pipeline workflows, both UI and CLI now enforce an explicit company confirmation step:
+- `GET /resolve-company?query=...&company_type=...` returns suggested matches
+- User must confirm one suggestion before analysis runs
+- User can choose **None of these companies** to stop and refine input
+- CLI private flow asks for optional country hint (FR/GB/DE/NL/ES/US) and shows source/context in the confirmation table
+- For `GB` private confirmation, CLI now lists Companies House search candidates (with company number) when `COMPANIES_HOUSE_API_KEY` is configured
+- If the Companies House API key is rejected or missing, CLI falls back to public Companies House search and still shows candidate company numbers for confirmation
+- Confirmed company identifiers (e.g., Companies House company number) now flow into pipeline context to reduce same-name confusion in downstream narrative agents
+
+API guardrail:
+- `POST /analyze` rejects non-pipeline requests unless `confirmed_company=true`
+
 **FX rates**: EUR/GBP/CHF/CAD fetched live via yfinance (`EURUSD=X` etc.) with hardcoded fallback.
 
 ### Interactive source selector (`--interactive`)
@@ -446,3 +463,4 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ EV/EBITDA comps anchor determinism — live market EV/EBITDA locks comps mid; peer ranges only adjust spread (±25% cap), with provenance in `sources.md`
 ✔ Data quality gate — deterministic score/tier/blockers before valuation, included in result payload and `sources.md`
 ✔ UI/API credential management — keyed providers can be configured from UI and persisted to `.env`
+✔ Mandatory company confirmation — explicit pre-run company selection with a “None of these companies” path

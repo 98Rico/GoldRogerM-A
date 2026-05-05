@@ -29,7 +29,7 @@ class _ProviderDef:
 _ALL_PROVIDERS: list[_ProviderDef] = [
     _ProviderDef("infogreffe",       "Infogreffe (FR gov)",    ["FR"],      True),
     _ProviderDef("pappers",          "Pappers",                ["FR"],      False, "PAPPERS_API_KEY"),
-    _ProviderDef("companies_house",  "Companies House (UK)",   ["GB"],      True),
+    _ProviderDef("companies_house",  "Companies House (UK)",   ["GB"],      False, "COMPANIES_HOUSE_API_KEY"),
     _ProviderDef("handelsregister",  "Handelsregister (DE)",   ["DE"],      True),
     _ProviderDef("kvk",              "KvK (NL)",               ["NL"],      False, "KVK_API_KEY"),
     _ProviderDef("registro_mercantil","Registro Mercantil (ES)",["ES"],     True),

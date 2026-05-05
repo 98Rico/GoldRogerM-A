@@ -121,6 +121,8 @@ def run_analysis(
     siren: str | None = None,
     interactive: bool = False,
     data_sources: list[str] | None = None,
+    country_hint: str = "",
+    company_identifier: str = "",
 ) -> AnalysisResult:
     log = new_run(company, company_type)
     client = _client(llm)
@@ -151,11 +153,29 @@ def run_analysis(
             if not market_data:
                 market_data = InfogreffeProvider().fetch_by_siren(siren, company)
         else:
+            if country_hint.upper() == "GB" and company_identifier:
+                try:
+                    from goldroger.data.providers.companies_house import CompaniesHouseProvider
+                    ch = CompaniesHouseProvider()
+                    _by_id = ch.fetch_by_company_number(company_identifier, fallback_name=company)
+                    if _by_id:
+                        market_data = _by_id
+                        console.print(
+                            f"  [green]Registry[/green] (companies_house)"
+                            f" [dim]company_number={company_identifier}[/dim]"
+                        )
+                except Exception:
+                    pass
             from goldroger.data.name_resolver import resolve as resolve_company_name
-            _ids = resolve_company_name(company, llm_provider=client)
+            _ids = resolve_company_name(
+                company,
+                country_hint=country_hint or "",
+                llm_provider=client,
+            )
             _q = _ids.infogreffe_query or (_ids.variants[0] if _ids.variants else company)
             console.print(f"  [dim]Querying as: {_q}[/dim]")
-            market_data = DEFAULT_REGISTRY.fetch_by_name(company)
+            if market_data is None:
+                market_data = DEFAULT_REGISTRY.fetch_by_name(company, country_hint=country_hint or "")
         if market_data:
             _provider_records.append(market_data)
         if market_data and market_data.revenue_ttm:
@@ -179,7 +199,7 @@ def run_analysis(
 
         # ── Data-source selection (interactive or CLI) ───────────────────
         from goldroger.data.source_selector import run_source_selection, resolve_source_selection
-        _country_hint = _country_hint_from_market_data(market_data)
+        _country_hint = (country_hint or _country_hint_from_market_data(market_data)).upper()
         if interactive:
             _sel = run_source_selection(company, country_hint=_country_hint, console=console)
         else:
@@ -342,6 +362,23 @@ def run_analysis(
             fund.ticker = market_data.ticker
         if not fund.sector:
             fund.sector = market_data.sector
+    # Identity guardrail: if we only have registry identity (no verified business description),
+    # avoid hallucinated business models from similarly named entities.
+    if (
+        company_type == "private"
+        and company_identifier
+        and market_data
+        and market_data.data_source == "companies_house"
+        and not market_data.revenue_ttm
+    ):
+        fund.company_name = market_data.company_name or fund.company_name
+        fund.description = (
+            f"UK registered private company (Companies House #{company_identifier}). "
+            "Verified filings provide limited public business detail."
+        )
+        fund.business_model = (
+            "Not publicly disclosed in verified filings; additional primary-source diligence required."
+        )
     log.end_step("fundamentals", t0)
     _done("Fundamentals", t0)
 
@@ -899,6 +936,13 @@ def run_analysis(
                 f"{market_data.ebitda_margin:.1%}"
                 if market_data and market_data.ebitda_margin is not None
                 else fin.ebitda_margin or ""
+            ),
+            "company_identifier": company_identifier,
+            "country_hint": country_hint or "",
+            "identity_note": (
+                f"Confirmed legal entity: {fund.company_name} "
+                f"(Companies House #{company_identifier}, {country_hint or 'unknown country'})"
+                if company_identifier else f"Confirmed legal entity: {fund.company_name}"
             ),
         },
         InvestmentThesis,
