@@ -114,8 +114,8 @@ def test_fewer_than_min_peers_returns_sector_fallback():
         side_effect=only_two + [None] * 10,
     ):
         result = build_peer_multiples(["A", "B", "MISS1", "MISS2"], target_sector="SaaS")
-    assert result.n_peers == 0
-    assert result.source == "sector_fallback"
+    assert result.n_peers == 2
+    assert result.source == "yfinance_peers_low_confidence"
 
 
 def test_no_sector_hint_skips_sector_validation():

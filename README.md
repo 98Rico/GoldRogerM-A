@@ -505,3 +505,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Mega-cap terminal-growth guardrail — terminal growth is constrained to a realistic 3.0–3.5% band with rationale notes
 ✔ Peer-policy transparency — output now logs peer selection policy and per-peer similarity scores
 ✔ Weak-peer scoring penalty — mega-cap analyses with weak but usable peer sets are downgraded to lower-confidence quality tiers
+✔ Dynamic peer discovery — staged search flow (industry → sector+size → adjacent industries → global similar models), no hardcoded ticker fallback list
+✔ Similarity-driven peer ranking — peer selection now uses explicit weighted economic similarity (industry/sector/model/size/margin/growth)
+✔ Graceful comps degradation — public mega-cap runs now keep partial comps weights (10% / 25% / 40%) instead of hard disabling when peer count is low
+✔ DCF sanity guardrail — >40% implied downside with stable margins is flagged as likely DCF miscalibration
+✔ Limitation banner for expanded peers — runs with non-core expanded peer sets now surface a reduced-confidence warning

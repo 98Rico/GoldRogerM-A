@@ -246,6 +246,7 @@ class ValuationService:
 
         comps_field_sources: dict = {}
         insufficient_comps = bool(assumptions.get("insufficient_comps"))
+        peer_count = int(assumptions.get("peer_count") or 0)
         if use_financial_path:
             comps_output, tx_output = self._financial_comps(
                 market_data, sector_m, notes
@@ -255,9 +256,9 @@ class ValuationService:
             comps_output = CompsOutput(low=0.0, mid=0.0, high=0.0)
             tx_output = TransactionOutput(implied_value=0.0)
             comps_field_sources = {
-                "EV/EBITDA (peer range)": ("insufficient peers (<3)", "validated_peers", "inferred"),
+                "EV/EBITDA (peer range)": ("insufficient peers (<1)", "validated_peers", "inferred"),
             }
-            notes.append("Comps disabled: insufficient validated peer set (<3 peers).")
+            notes.append("Comps unavailable: no validated peers; confidence reduced.")
             valuation_path = "ev_ebitda"
         else:
             comps_output, tx_output, comps_field_sources = self._standard_comps(
@@ -277,9 +278,15 @@ class ValuationService:
             if insufficient_comps:
                 weights = {"dcf": 1.0, "comps": 0.0, "transactions": 0.0}
                 notes.append(
-                    f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap) with insufficient peers (<3): "
+                    f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap) with zero peers: "
                     "DCF-only valuation mode (low reliability)."
                 )
+            elif 1 <= peer_count < 3:
+                weights = {"dcf": 0.90, "comps": 0.10, "transactions": 0.0}
+                notes.append("Mega-cap partial comps mode: 1-2 peers → DCF 90% / comps 10%.")
+            elif 3 <= peer_count < 5:
+                weights = {"dcf": 0.75, "comps": 0.25, "transactions": 0.0}
+                notes.append("Mega-cap partial comps mode: 3-4 peers → DCF 75% / comps 25%.")
             else:
                 weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
                 notes.append(
@@ -304,6 +311,8 @@ class ValuationService:
 
         # ── 7. BUY / HOLD / SELL ─────────────────────────────────────────
         recommendation = self._compute_recommendation(blended, market_data, notes)
+        if recommendation.upside_pct is not None and recommendation.upside_pct <= -0.40 and ebitda_margin >= 0.20:
+            notes.append("DCF likely miscalibrated: >40% downside despite stable margins.")
         recommendation = self._apply_recommendation_guardrails(
             recommendation=recommendation,
             dcf_output=dcf_output,

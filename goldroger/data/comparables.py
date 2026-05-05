@@ -22,9 +22,16 @@ from dataclasses import dataclass, field
 from math import log10
 from typing import Optional
 
+import httpx
+
 from goldroger.data.fetcher import fetch_market_data, resolve_ticker, MarketData
 
 MIN_VALID_PEERS = 3
+_HTTP = httpx.Client(
+    timeout=12,
+    headers={"User-Agent": "Mozilla/5.0"},
+    follow_redirects=True,
+)
 
 # ── Sector compatibility ──────────────────────────────────────────────────────
 
@@ -219,6 +226,110 @@ def _similarity_score(target_mcap: float | None, peer_mcap: float | None, target
     return max(0.0, min(1.0, 0.65 * size_score + 0.35 * sector_score))
 
 
+def _econ_similarity(
+    target_sector: str,
+    peer_sector: str,
+    target_mcap: float | None,
+    peer_mcap: float | None,
+    target_margin: float | None,
+    peer_margin: float | None,
+    target_growth: float | None,
+    peer_growth: float | None,
+) -> float:
+    ts = (target_sector or "").lower()
+    ps = (peer_sector or "").lower()
+    industry_match = 1.0 if ts == ps and ts else (0.7 if _sectors_compatible(ts, ps) else 0.0)
+    sector_match = 1.0 if _sectors_compatible(ts, ps) else 0.0
+    business_model_match = 1.0 if _sector_group(ts or "") == _sector_group(ps or "") else 0.4
+    mcap_similarity = _similarity_score(target_mcap, peer_mcap, target_sector, peer_sector)
+    if target_margin is not None and peer_margin is not None:
+        margin_similarity = max(0.0, 1.0 - min(abs(target_margin - peer_margin) / 0.25, 1.0))
+    else:
+        margin_similarity = 0.5
+    if target_growth is not None and peer_growth is not None:
+        growth_similarity = max(0.0, 1.0 - min(abs(target_growth - peer_growth) / 0.30, 1.0))
+    else:
+        growth_similarity = 0.5
+    # Weighted formula requested by user + growth extension folded into business-model robustness.
+    base = (
+        0.30 * industry_match
+        + 0.25 * sector_match
+        + 0.20 * business_model_match
+        + 0.15 * mcap_similarity
+        + 0.10 * margin_similarity
+    )
+    return max(0.0, min(1.0, (base * 0.85) + (growth_similarity * 0.15)))
+
+
+def _search_yahoo_tickers(query: str, limit: int = 12) -> list[str]:
+    if not query.strip():
+        return []
+    try:
+        resp = _HTTP.get(
+            "https://query1.finance.yahoo.com/v1/finance/search",
+            params={"q": query, "quotesCount": max(5, min(limit, 25)), "newsCount": 0},
+        )
+        quotes = resp.json().get("quotes", [])
+        out: list[str] = []
+        for q in quotes:
+            sym = (q.get("symbol") or "").upper().strip()
+            qt = q.get("quoteType") or ""
+            if not sym or qt not in ("EQUITY", "ETF"):
+                continue
+            out.append(sym)
+        return list(dict.fromkeys(out))[:limit]
+    except Exception:
+        return []
+
+
+def find_peers_dynamic(
+    company_name: str,
+    target_sector: str,
+    target_market_cap: float | None,
+    seed_tickers: list[str],
+) -> list[str]:
+    """Dynamic staged peer discovery (no hardcoded peer tickers)."""
+    peers: list[str] = []
+    peers.extend([t.upper() for t in seed_tickers if t])
+
+    # Stage 1: same industry / sector
+    peers.extend(_search_yahoo_tickers(f"{target_sector} companies", limit=10))
+    peers.extend(_search_yahoo_tickers(f"{company_name} competitors", limit=10))
+
+    # Stage 2: same sector + similar size phrasing
+    if target_market_cap and target_market_cap > 500_000:
+        size_label = "mega cap"
+    elif target_market_cap and target_market_cap > 50_000:
+        size_label = "large cap"
+    else:
+        size_label = "mid cap"
+    peers.extend(_search_yahoo_tickers(f"{size_label} {target_sector}", limit=10))
+
+    # Stage 3: adjacent industries
+    if len(set(peers)) < 5:
+        grp = _sector_group(target_sector or "")
+        adjacent = {
+            "tech": ["communication services", "internet services", "semiconductors"],
+            "comms": ["technology", "internet platforms"],
+            "consumer": ["technology retail", "internet retail"],
+        }.get(grp or "", ["global equities"])
+        for q in adjacent:
+            peers.extend(_search_yahoo_tickers(q, limit=8))
+
+    # Stage 4: global similar business models
+    if len(set(peers)) < 3:
+        peers.extend(_search_yahoo_tickers(f"global {target_sector} leaders", limit=12))
+
+    # Small resolver pass for plain names if needed
+    if len(set(peers)) < 3:
+        for q in [company_name, target_sector]:
+            t = resolve_ticker(q)
+            if t:
+                peers.append(t.upper())
+
+    return list(dict.fromkeys(peers))
+
+
 # ── Core functions ────────────────────────────────────────────────────────────
 
 def build_peer_multiples(
@@ -226,6 +337,8 @@ def build_peer_multiples(
     target_sector: str = "",
     target_market_cap: float | None = None,
     min_similarity: float = 0.0,
+    target_ebitda_margin: float | None = None,
+    target_growth: float | None = None,
 ) -> PeerMultiples:
     """
     Fetch market data for each peer ticker and compute validated multiples.
@@ -280,7 +393,16 @@ def build_peer_multiples(
             n_sanity += 1
             continue
 
-        _sim = _similarity_score(target_market_cap, md.market_cap, target_sector, md.sector or "")
+        _sim = _econ_similarity(
+            target_sector=target_sector,
+            peer_sector=md.sector or "",
+            target_mcap=target_market_cap,
+            peer_mcap=md.market_cap,
+            target_margin=target_ebitda_margin,
+            peer_margin=md.ebitda_margin,
+            target_growth=target_growth,
+            peer_growth=(md.forward_revenue_growth or md.revenue_growth_yoy),
+        )
         if _sim < min_similarity:
             n_sector += 1
             continue
@@ -298,8 +420,8 @@ def build_peer_multiples(
             weight=max(_sim, 0.01),
         ))
 
-    # Not enough validated peers → signal sector-table fallback
-    if len(peers) < MIN_VALID_PEERS:
+    # No validated peers.
+    if len(peers) == 0:
         return PeerMultiples(
             n_peers=0,
             n_dropped_no_data=n_no_data,
@@ -346,7 +468,7 @@ def build_peer_multiples(
         n_dropped_no_data=n_no_data,
         n_dropped_sector=n_sector,
         n_dropped_sanity=n_sanity,
-        source="yfinance_peers",
+        source=("yfinance_peers" if len(peers) >= MIN_VALID_PEERS else "yfinance_peers_low_confidence"),
     )
 
 

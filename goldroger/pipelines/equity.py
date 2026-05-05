@@ -28,6 +28,7 @@ from goldroger.data.transaction_comps import (
 from goldroger.data.comparables import (
     PeerMultiples,
     build_peer_multiples,
+    find_peers_dynamic,
     parse_peer_agent_output,
     resolve_peer_tickers,
 )
@@ -72,9 +73,6 @@ from ._shared import (
 from .fill_gaps import fill_gaps
 
 load_dotenv()
-
-_MEGA_CAP_TECH_FALLBACK_PEERS = ["MSFT", "GOOGL", "NVDA", "AMZN", "META"]
-
 
 def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
     score = 0.0
@@ -699,33 +697,35 @@ def run_analysis(
     if _peers_raw:
         try:
             peer_list = parse_peer_agent_output(_peers_raw)
-            peer_tickers = resolve_peer_tickers(peer_list)
+            peer_tickers_seed = resolve_peer_tickers(peer_list)
             _is_mega_tech = bool(
                 market_data
                 and market_data.market_cap
                 and market_data.market_cap > _mega_cap_usd_m
                 and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
             )
-            if _is_mega_tech:
-                _core = ["MSFT", "GOOGL", "META"]
-                _adjacent = ["AMZN", "AVGO"]
-                _discouraged = {"DELL", "HPQ", "INTC", "TXN"}
-                sources.add_once(
-                    "Peer Selection Policy",
-                    "Core: MSFT/GOOGL/META; Adjacent: AMZN/AVGO; similarity>=0.50",
-                    "peer_policy",
-                    "verified",
-                )
-                _self_ticker = (market_data.ticker or "").upper() if market_data else ""
-                _llm_clean = [t for t in peer_tickers if t not in _discouraged]
-                _merged = [t for t in (_core + _adjacent) if t != _self_ticker] + _llm_clean
-                peer_tickers = list(dict.fromkeys(_merged))
+            peer_tickers = find_peers_dynamic(
+                company_name=company,
+                target_sector=_target_sector,
+                target_market_cap=(market_data.market_cap if market_data else None),
+                seed_tickers=peer_tickers_seed,
+            )
+            _self_ticker = (market_data.ticker or "").upper() if market_data else ""
+            peer_tickers = [t for t in peer_tickers if t and t != _self_ticker]
+            sources.add_once(
+                "Peer Selection Policy",
+                "Dynamic staged search (industry -> sector+size -> adjacent -> global), ranked by similarity",
+                "peer_policy",
+                "verified",
+            )
             if peer_tickers:
                 peer_multiples = build_peer_multiples(
                     peer_tickers,
                     target_sector=_target_sector,
                     target_market_cap=(market_data.market_cap if market_data else None),
                     min_similarity=(0.5 if _is_mega_tech else 0.0),
+                    target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
+                    target_growth=(market_data.forward_revenue_growth if market_data else None),
                 )
                 # Log validation summary
                 drops: list[str] = []
@@ -740,19 +740,9 @@ def run_analysis(
                 if peer_multiples.n_peers > 0:
                     if _is_mega_tech and peer_multiples.n_peers < 5:
                         console.print(
-                            f"  [yellow]Peer set too small for mega-cap tech ({peer_multiples.n_peers}); "
-                            "using deterministic mega-cap set.[/yellow]"
+                            f"  [yellow]Peer set expanded (adjacent/global stages used): "
+                            f"{peer_multiples.n_peers} validated peers; confidence reduced.[/yellow]"
                         )
-                        _self_ticker = (market_data.ticker or "").upper() if market_data else ""
-                        _fallback_tickers = [t for t in _MEGA_CAP_TECH_FALLBACK_PEERS if t != _self_ticker]
-                        _fb = build_peer_multiples(
-                            _fallback_tickers,
-                            target_sector=_target_sector,
-                            target_market_cap=(market_data.market_cap if market_data else None),
-                            min_similarity=0.5,
-                        )
-                        if _fb and _fb.n_peers >= 3:
-                            peer_multiples = _fb
                     console.print(
                         f"  [cyan]{peer_multiples.n_peers} validated peers:[/cyan] "
                         + ", ".join(p.ticker for p in peer_multiples.peers[:6])
@@ -828,63 +818,8 @@ def run_analysis(
                 else:
                     console.print(
                         f"  [yellow]Peer comps: fewer than 3 validated peers{drop_note} "
-                        f"— using sector-table multiples[/yellow]"
+                        f"— confidence reduced[/yellow]"
                     )
-                    _sector_txt = (fund.sector or "").lower()
-                    if (
-                        market_data
-                        and market_data.market_cap
-                        and market_data.market_cap > _mega_cap_usd_m
-                        and any(tok in _sector_txt for tok in ("technology", "tech", "software", "semiconductor"))
-                    ):
-                        _self_ticker = (market_data.ticker or "").upper()
-                        _fallback_tickers = [t for t in _MEGA_CAP_TECH_FALLBACK_PEERS if t != _self_ticker]
-                        _fb = build_peer_multiples(
-                            _fallback_tickers,
-                            target_sector=_target_sector,
-                            target_market_cap=(market_data.market_cap if market_data else None),
-                            min_similarity=0.5,
-                        )
-                        if _fb and _fb.n_peers >= 3:
-                            peer_multiples = _fb
-                            console.print(
-                                "  [cyan]Using deterministic mega-cap tech peers:[/cyan] "
-                                + ", ".join(p.ticker for p in _fb.peers[:6])
-                            )
-                            if _fb.ev_ebitda_median:
-                                console.print(
-                                    f"  Median EV/EBITDA: {_fb.ev_ebitda_median:.1f}x"
-                                    + (
-                                        f"  EV/Rev: {_fb.ev_revenue_median:.1f}x"
-                                        if _fb.ev_revenue_median else ""
-                                    )
-                                )
-                            peer_comps_table = PeerCompsTable(
-                                peers=[
-                                    PeerComp(
-                                        name=p.name,
-                                        ticker=p.ticker,
-                                        ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
-                                        ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
-                                        ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
-                                        revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
-                                    )
-                                    for p in _fb.peers
-                                ],
-                                median_ev_ebitda=(
-                                    f"{_fb.ev_ebitda_median:.1f}x"
-                                    if _fb.ev_ebitda_median else None
-                                ),
-                                median_ev_revenue=(
-                                    f"{_fb.ev_revenue_median:.1f}x"
-                                    if _fb.ev_revenue_median else None
-                                ),
-                                median_ebitda_margin=(
-                                    f"{_fb.ebitda_margin_median:.1%}"
-                                    if _fb.ebitda_margin_median else None
-                                ),
-                                n_peers=_fb.n_peers,
-                            )
                     if _is_mega_tech and peer_multiples and peer_multiples.n_peers < 5:
                         console.print(
                             f"  [yellow]Insufficient comps for mega-cap policy: "
@@ -948,14 +883,22 @@ def run_analysis(
         and market_data.market_cap
         and market_data.market_cap > _mega_cap_usd_m
     )
-    if _is_mega_cap_quality and (not peer_multiples or peer_multiples.n_peers < 3):
+    _peer_count = peer_multiples.n_peers if peer_multiples else 0
+    if _is_mega_cap_quality and _peer_count < 1:
         if quality.score > 75:
             quality.score = 75
             quality.tier = "B"
         quality.warnings.append(
-            "Public mega-cap without usable comps (minimum 3) — quality score capped."
+            "Public mega-cap without usable comps — quality score capped."
         )
-    elif _is_mega_cap_quality and peer_multiples and peer_multiples.n_peers < 5:
+    elif _is_mega_cap_quality and _peer_count < 3:
+        if quality.score > 68:
+            quality.score = 68
+            quality.tier = "C"
+        quality.warnings.append(
+            "Public mega-cap peer set below core threshold (<3) — confidence reduced."
+        )
+    elif _is_mega_cap_quality and _peer_count < 5:
         if quality.score > 70:
             quality.score = 70
             quality.tier = "C"
@@ -986,8 +929,9 @@ def run_analysis(
         and market_data.market_cap
         and market_data.market_cap > _mega_cap_usd_m
     )
+    assumptions_dict["peer_count"] = _peer_count
     assumptions_dict["insufficient_comps"] = bool(
-        _is_mega_cap and (not peer_multiples or peer_multiples.n_peers < 3)
+        _is_mega_cap and _peer_count < 1
     )
     assumptions_dict["low_confidence_comps"] = bool(
         _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5
@@ -1006,6 +950,8 @@ def run_analysis(
             f"  [cyan]Comps from {peer_multiples.n_peers} real peers (P25–P75): "
             f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
         )
+        if _is_mega_cap and peer_multiples.n_peers < 5:
+            console.print("  [yellow]⚠ Peer set expanded beyond core comparables; valuation confidence reduced.[/yellow]")
     elif assumptions_dict.get("insufficient_comps"):
         console.print(
             "  [yellow]Comps disabled: insufficient real peers for mega-cap policy (need >=3).[/yellow]"
