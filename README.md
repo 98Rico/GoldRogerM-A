@@ -77,6 +77,7 @@ In addition:
 - Numeric **valuation assumptions** (e.g. WACC, terminal growth) are **not taken from LLM output** by default.
 - They come from verified market data when available, otherwise from `data/sector_multiples.py`.
 - If you want to override them, use `--interactive` (manual user override is explicitly tagged and then allowed).
+- Trading comps are deterministic when market comps exist: if `market_data.ev_ebitda_market` is available, it is the fixed EV/EBITDA mid-anchor; peer inputs can only adjust spread (capped at ±25%).
 
 ### What the tool produces
 
@@ -421,3 +422,4 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ JSON repair for Mistral free tier — trailing commas, None literals, truncated output recovery
 ✔ Wikipedia revenue signal — NLP signal 5 in private triangulation
 ✔ Hallucination firewall — no-revenue path in ReportWriterAgent blocks any financial figure generation
+✔ EV/EBITDA comps anchor determinism — live market EV/EBITDA locks comps mid; peer ranges only adjust spread (±25% cap), with provenance in `sources.md`

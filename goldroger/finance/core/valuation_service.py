@@ -231,16 +231,18 @@ class ValuationService:
         # ── 4. Comps & transactions ───────────────────────────────────────
         ebitda = revenue_current * ebitda_margin
 
+        comps_field_sources: dict = {}
         if use_financial_path:
             comps_output, tx_output = self._financial_comps(
                 market_data, sector_m, notes
             )
             valuation_path = "pe_pb"
         else:
-            comps_output, tx_output = self._standard_comps(
+            comps_output, tx_output, comps_field_sources = self._standard_comps(
                 revenue_current, ebitda, market_data, sector_m, assumptions, notes
             )
             valuation_path = "ev_ebitda"
+        field_sources.update(comps_field_sources)
 
         # ── 5. Blended EV ─────────────────────────────────────────────────
         weights = assumptions.get("weights") or compute_valuation_weights(
@@ -300,16 +302,49 @@ class ValuationService:
 
     def _standard_comps(self, revenue, ebitda, market_data, sector_m, assumptions, notes):
         ev_ebitda_low, _, ev_ebitda_high = sector_m.ev_ebitda
+        comps_field_sources: dict = {}
+        comps_range = assumptions.get("ev_ebitda_range")
 
         if market_data and market_data.ev_ebitda_market:
             implied = market_data.ev_ebitda_market
-            ev_ebitda_low = implied * 0.75
-            ev_ebitda_high = implied * 1.25
-            notes.append(f"Comps anchored to live EV/EBITDA of {implied:.1f}x.")
-
-        comps_range = assumptions.get("ev_ebitda_range")
-        if comps_range and len(comps_range) == 2:
-            ev_ebitda_low, ev_ebitda_high = comps_range
+            width = implied * 0.25  # default: ±25% around market anchor
+            if comps_range and len(comps_range) == 2:
+                peer_low, peer_high = sorted((float(comps_range[0]), float(comps_range[1])))
+                peer_dev = max(abs(peer_low - implied), abs(peer_high - implied))
+                width = min(max(peer_dev, 0.0), implied * 0.25)
+                notes.append(
+                    f"Comps mid fixed to live EV/EBITDA {implied:.1f}x; "
+                    f"peer range {peer_low:.1f}x–{peer_high:.1f}x used for spread (capped ±25%)."
+                )
+                comps_field_sources["EV/EBITDA (peer range)"] = (
+                    f"{peer_low:.1f}x–{peer_high:.1f}x",
+                    "validated_peers",
+                    "estimated",
+                )
+            else:
+                notes.append(f"Comps anchored to live EV/EBITDA of {implied:.1f}x (±25% range).")
+                comps_field_sources["EV/EBITDA (peer range)"] = (
+                    f"{(implied * 0.75):.1f}x–{(implied * 1.25):.1f}x",
+                    "market_anchor_band",
+                    "verified",
+                )
+            ev_ebitda_low = max(0.1, implied - width)
+            ev_ebitda_high = implied + width
+            comps_field_sources["EV/EBITDA (comps anchor)"] = (
+                f"{implied:.1f}x",
+                market_data.data_source or "yfinance",
+                "verified",
+            )
+        elif comps_range and len(comps_range) == 2:
+            ev_ebitda_low, ev_ebitda_high = sorted((float(comps_range[0]), float(comps_range[1])))
+            comps_field_sources["EV/EBITDA (peer range)"] = (
+                f"{ev_ebitda_low:.1f}x–{ev_ebitda_high:.1f}x",
+                "validated_peers",
+                "estimated",
+            )
+            notes.append(
+                f"Comps from validated peers: {ev_ebitda_low:.1f}x–{ev_ebitda_high:.1f}x EV/EBITDA."
+            )
 
         comps = compute_comps(
             CompsInput(metric_value=ebitda, multiple_range=(ev_ebitda_low, ev_ebitda_high))
@@ -328,7 +363,7 @@ class ValuationService:
         tx = compute_transaction(
             TransactionInput(revenue=revenue, multiple=tx_multiple)
         )
-        return comps, tx
+        return comps, tx, comps_field_sources
 
     def _financial_comps(self, market_data, sector_m, notes):
         """P/E and P/B based equity valuation for banks/insurers."""
