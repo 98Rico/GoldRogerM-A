@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from math import log10
 from typing import Optional
 
 from goldroger.data.fetcher import fetch_market_data, resolve_ticker, MarketData
@@ -109,6 +110,8 @@ class PeerData:
     revenue_growth: Optional[float] = None
     market_cap: Optional[float] = None
     sector: Optional[str] = None
+    similarity: Optional[float] = None
+    weight: Optional[float] = None
 
 
 @dataclass
@@ -167,11 +170,62 @@ def _winsorize(values: list[float], p_low: float = 0.10, p_high: float = 0.90) -
     return [min(max(v, lo), hi) for v in clean]
 
 
+def _weighted_mean(values: list[float], weights: list[float]) -> Optional[float]:
+    if not values or not weights or len(values) != len(weights):
+        return None
+    den = sum(max(w, 0.0) for w in weights)
+    if den <= 0:
+        return None
+    num = sum(v * max(w, 0.0) for v, w in zip(values, weights))
+    return num / den
+
+
+def _weighted_percentile(values: list[float], weights: list[float], pct: float) -> Optional[float]:
+    if not values or not weights or len(values) != len(weights):
+        return None
+    paired = sorted(
+        [(v, max(w, 0.0)) for v, w in zip(values, weights) if v and v > 0 and w and w > 0],
+        key=lambda x: x[0],
+    )
+    if not paired:
+        return None
+    total = sum(w for _, w in paired)
+    if total <= 0:
+        return None
+    threshold = total * max(0.0, min(1.0, pct))
+    run = 0.0
+    for v, w in paired:
+        run += w
+        if run >= threshold:
+            return v
+    return paired[-1][0]
+
+
+def _similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
+    size_score = 0.5
+    if target_mcap and peer_mcap and target_mcap > 0 and peer_mcap > 0:
+        ratio = max(target_mcap, peer_mcap) / min(target_mcap, peer_mcap)
+        size_score = max(0.0, 1.0 - min(log10(ratio) / 2.0, 1.0))
+    ts = (target_sector or "").lower()
+    ps = (peer_sector or "").lower()
+    sector_score = 0.4
+    if ts and ps:
+        tset = {x for x in ts.replace("/", " ").replace("-", " ").split() if len(x) > 2}
+        pset = {x for x in ps.replace("/", " ").replace("-", " ").split() if len(x) > 2}
+        if tset and pset:
+            inter = len(tset & pset)
+            union = len(tset | pset)
+            sector_score = (inter / union) if union else 0.4
+    return max(0.0, min(1.0, 0.65 * size_score + 0.35 * sector_score))
+
+
 # ── Core functions ────────────────────────────────────────────────────────────
 
 def build_peer_multiples(
     peer_tickers: list[str],
     target_sector: str = "",
+    target_market_cap: float | None = None,
+    min_similarity: float = 0.0,
 ) -> PeerMultiples:
     """
     Fetch market data for each peer ticker and compute validated multiples.
@@ -226,6 +280,10 @@ def build_peer_multiples(
             n_sanity += 1
             continue
 
+        _sim = _similarity_score(target_market_cap, md.market_cap, target_sector, md.sector or "")
+        if _sim < min_similarity:
+            n_sector += 1
+            continue
         peers.append(PeerData(
             name=md.company_name,
             ticker=ticker,
@@ -236,6 +294,8 @@ def build_peer_multiples(
             revenue_growth=md.forward_revenue_growth or md.revenue_growth_yoy,
             market_cap=md.market_cap,
             sector=md.sector,
+            similarity=_sim,
+            weight=max(_sim, 0.01),
         ))
 
     # Not enough validated peers → signal sector-table fallback
@@ -249,17 +309,20 @@ def build_peer_multiples(
         )
 
     ev_ebitdas_raw = [p.ev_ebitda for p in peers if p.ev_ebitda]
+    ev_ebitda_w = [p.weight or 1.0 for p in peers if p.ev_ebitda]
     ev_revenues_raw = [p.ev_revenue for p in peers if p.ev_revenue]
+    ev_revenue_w = [p.weight or 1.0 for p in peers if p.ev_revenue]
     ev_ebitdas = _winsorize(ev_ebitdas_raw)
     ev_revenues = _winsorize(ev_revenues_raw)
     pes = [p.pe_ratio for p in peers if p.pe_ratio]
     margins = [p.ebitda_margin for p in peers if p.ebitda_margin]
     growths = [p.revenue_growth for p in peers if p.revenue_growth]
 
-    ev_ebitda_low = _percentile(ev_ebitdas, 0.25)
-    ev_ebitda_high = _percentile(ev_ebitdas, 0.75)
-    ev_revenue_low = _percentile(ev_revenues, 0.25)
-    ev_revenue_high = _percentile(ev_revenues, 0.75)
+    # weighted dispersion on raw lists; medians on winsorized weighted central tendency
+    ev_ebitda_low = _weighted_percentile(ev_ebitdas_raw, ev_ebitda_w, 0.25) or _percentile(ev_ebitdas, 0.25)
+    ev_ebitda_high = _weighted_percentile(ev_ebitdas_raw, ev_ebitda_w, 0.75) or _percentile(ev_ebitdas, 0.75)
+    ev_revenue_low = _weighted_percentile(ev_revenues_raw, ev_revenue_w, 0.25) or _percentile(ev_revenues, 0.25)
+    ev_revenue_high = _weighted_percentile(ev_revenues_raw, ev_revenue_w, 0.75) or _percentile(ev_revenues, 0.75)
 
     # Small peer sets create unstable percentile bands.
     if len(ev_ebitdas) < 5:
@@ -270,8 +333,8 @@ def build_peer_multiples(
 
     return PeerMultiples(
         peers=peers,
-        ev_ebitda_median=_median(ev_ebitdas),
-        ev_revenue_median=_median(ev_revenues),
+        ev_ebitda_median=_weighted_mean(ev_ebitdas, ev_ebitda_w) or _median(ev_ebitdas),
+        ev_revenue_median=_weighted_mean(ev_revenues, ev_revenue_w) or _median(ev_revenues),
         pe_median=_median(pes),
         ebitda_margin_median=_median(margins),
         revenue_growth_median=_median(growths),

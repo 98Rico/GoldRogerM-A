@@ -136,7 +136,7 @@ def test_median_computed_correctly():
     # ev_ebitda values: 5, 10, 15, 20 → median = 12.5
     with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
         result = build_peer_multiples(["P1", "P2", "P3", "P4"])
-    assert result.ev_ebitda_median == 12.5
+    assert round(float(result.ev_ebitda_median or 0.0), 2) == 12.5
     assert result.n_peers == 4
 
 

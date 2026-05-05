@@ -289,6 +289,13 @@ class ValuationService:
         w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
         notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)
+        field_sources["Blended EV Calculation"] = (
+            f"({weights.get('dcf', 0):.2f}×{dcf_output.enterprise_value:.0f}) + "
+            f"({weights.get('comps', 0):.2f}×{comps_output.mid:.0f}) + "
+            f"({weights.get('transactions', 0):.2f}×{tx_output.implied_value:.0f})",
+            "valuation_aggregator",
+            "verified",
+        )
 
         # ── 6. LBO (always run, may be infeasible; skipped for mega-caps) ──
         lbo = self._run_lbo(
@@ -310,6 +317,7 @@ class ValuationService:
             market_data
             and market_data.ev_ebitda_market
             and comps_field_sources.get("EV/EBITDA (peer median)", ("", "", ""))[1] == "validated_peers"
+            and not assumptions.get("low_confidence_comps")
         ):
             _peer_median = None
             _pm = comps_field_sources.get("EV/EBITDA (peer median)")
@@ -370,11 +378,11 @@ class ValuationService:
             _disp = max(dcf_output.enterprise_value, comps_output.mid) / min(dcf_output.enterprise_value, comps_output.mid)
             if _disp > 2.0:
                 field_sources["Valuation Uncertainty"] = (
-                    f"High dispersion ({_disp:.1f}x DCF vs comps)",
+                    f"⚠ High uncertainty / low confidence ({_disp:.1f}x DCF vs comps)",
                     "valuation_engine",
                     "inferred",
                 )
-                notes.append(f"High dispersion / low confidence: DCF vs comps gap {_disp:.1f}x.")
+                notes.append(f"⚠ High uncertainty / low confidence: DCF vs comps gap {_disp:.1f}x.")
 
         # ── 8. Sensitivity matrix ─────────────────────────────────────────
         sensitivity = self._build_sensitivity(dcf_input, wacc, terminal_growth)
@@ -817,6 +825,15 @@ class ValuationService:
             notes.append(f"Terminal growth {tg:.1%} from user override.")
         else:
             tg = sector_m.terminal_growth
+        # Mega-cap tech guardrail: keep terminal growth in realistic GDP+innovation band.
+        if assumptions.get("mega_cap_tech") and tg < 0.03:
+            notes.append(
+                f"Terminal growth raised {tg:.1%}→3.0% for mega-cap tech (GDP-linked steady-state guardrail)."
+            )
+            tg = 0.03
+        if assumptions.get("mega_cap_tech") and tg > 0.035:
+            notes.append("Terminal growth capped at 3.5% for mega-cap tech realism.")
+            tg = 0.035
         if tg >= wacc:
             tg = wacc - 0.01
             notes.append("Terminal growth clamped below WACC.")

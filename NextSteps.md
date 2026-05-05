@@ -328,5 +328,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 33 | Temporal + comps quality hardening — 6-month recency policy, historical labeling for stale events, mandatory mega-cap peer seeding, winsorized peer dispersion, fair-value range output, football-field low/mid/high cleanup | ✅ |
 | 34 | Integrity guardrails — enforce mega-cap minimum peer policy (no sector-table fallback), scenario-based fair-value range containment, peer-level trace outputs, high-dispersion uncertainty flag | ✅ |
 | 35 | JSON + valuation reliability patch — strict JSON failure logging, safe strict-retry for all agents, mega-cap comps fallback removal, minimum-3 peer low-confidence mode, DCF-only naming, public mega-cap quality cap when comps missing | ✅ |
+| 36 | Peer-quality calibration pass — tiered Apple-class peer policy, similarity-weighted comps with low-similarity filtering, mega-cap terminal-growth guardrail (3.0–3.5%), weak-peer quality downgrades, and peer-policy traceability in sources | ✅ |
 
 </details>

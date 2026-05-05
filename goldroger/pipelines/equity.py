@@ -136,6 +136,8 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
         txt = str(c or "").strip()
         if not txt:
             continue
+        if _re.search(r"\b(apple car|project titan|rumou?red|speculat(?:ive|ion))\b", txt, flags=_re.IGNORECASE):
+            txt = f"Speculative catalyst (low confidence): {txt}"
         y, q, mth = _event_position(txt)
         is_upcoming_label = bool(_re.search(r"\b(upcoming|expected|will|next)\b", txt, flags=_re.IGNORECASE))
 
@@ -705,13 +707,25 @@ def run_analysis(
                 and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
             )
             if _is_mega_tech:
-                _mandatory = ["MSFT", "GOOGL", "META", "AMZN", "AVGO"]
+                _core = ["MSFT", "GOOGL", "META"]
+                _adjacent = ["AMZN", "AVGO"]
+                _discouraged = {"DELL", "HPQ", "INTC", "TXN"}
+                sources.add_once(
+                    "Peer Selection Policy",
+                    "Core: MSFT/GOOGL/META; Adjacent: AMZN/AVGO; similarity>=0.50",
+                    "peer_policy",
+                    "verified",
+                )
                 _self_ticker = (market_data.ticker or "").upper() if market_data else ""
-                _merged = [t for t in _mandatory if t != _self_ticker] + peer_tickers
+                _llm_clean = [t for t in peer_tickers if t not in _discouraged]
+                _merged = [t for t in (_core + _adjacent) if t != _self_ticker] + _llm_clean
                 peer_tickers = list(dict.fromkeys(_merged))
             if peer_tickers:
                 peer_multiples = build_peer_multiples(
-                    peer_tickers, target_sector=_target_sector
+                    peer_tickers,
+                    target_sector=_target_sector,
+                    target_market_cap=(market_data.market_cap if market_data else None),
+                    min_similarity=(0.5 if _is_mega_tech else 0.0),
                 )
                 # Log validation summary
                 drops: list[str] = []
@@ -731,7 +745,12 @@ def run_analysis(
                         )
                         _self_ticker = (market_data.ticker or "").upper() if market_data else ""
                         _fallback_tickers = [t for t in _MEGA_CAP_TECH_FALLBACK_PEERS if t != _self_ticker]
-                        _fb = build_peer_multiples(_fallback_tickers, target_sector=_target_sector)
+                        _fb = build_peer_multiples(
+                            _fallback_tickers,
+                            target_sector=_target_sector,
+                            target_market_cap=(market_data.market_cap if market_data else None),
+                            min_similarity=0.5,
+                        )
                         if _fb and _fb.n_peers >= 3:
                             peer_multiples = _fb
                     console.print(
@@ -751,6 +770,12 @@ def run_analysis(
                             f"(similarity {_sim:.2f})[/dim]"
                             if _p.ev_ebitda
                             else f"  [dim]Peer {_p.ticker}: similarity {_sim:.2f}[/dim]"
+                        )
+                        sources.add_once(
+                            f"Peer {_p.ticker} Similarity",
+                            f"{_sim:.2f}",
+                            "peer_similarity_model",
+                            "inferred",
                         )
                     if peer_multiples.ev_ebitda_median:
                         console.print(
@@ -814,7 +839,12 @@ def run_analysis(
                     ):
                         _self_ticker = (market_data.ticker or "").upper()
                         _fallback_tickers = [t for t in _MEGA_CAP_TECH_FALLBACK_PEERS if t != _self_ticker]
-                        _fb = build_peer_multiples(_fallback_tickers, target_sector=_target_sector)
+                        _fb = build_peer_multiples(
+                            _fallback_tickers,
+                            target_sector=_target_sector,
+                            target_market_cap=(market_data.market_cap if market_data else None),
+                            min_similarity=0.5,
+                        )
                         if _fb and _fb.n_peers >= 3:
                             peer_multiples = _fb
                             console.print(
@@ -925,6 +955,13 @@ def run_analysis(
         quality.warnings.append(
             "Public mega-cap without usable comps (minimum 3) — quality score capped."
         )
+    elif _is_mega_cap_quality and peer_multiples and peer_multiples.n_peers < 5:
+        if quality.score > 70:
+            quality.score = 70
+            quality.tier = "C"
+        quality.warnings.append(
+            "Public mega-cap peer set is weak (<5 validated peers) — confidence reduced."
+        )
     console.print(
         f"  [bold]Data quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
         + (" [yellow]limited-confidence mode[/yellow]" if quality.is_blocked else "")
@@ -951,6 +988,12 @@ def run_analysis(
     )
     assumptions_dict["insufficient_comps"] = bool(
         _is_mega_cap and (not peer_multiples or peer_multiples.n_peers < 3)
+    )
+    assumptions_dict["low_confidence_comps"] = bool(
+        _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5
+    )
+    assumptions_dict["mega_cap_tech"] = bool(
+        _is_mega_cap and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
     )
     if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
         assumptions_dict["ev_ebitda_range"] = [
@@ -1312,6 +1355,10 @@ def run_analysis(
             f"  [bold]Football field:[/bold] Bear {football_field.bear.blended_ev if football_field.bear else 'N/A'} "
             f"/ Base {football_field.base.blended_ev if football_field.base else 'N/A'} "
             f"/ Bull {football_field.bull.blended_ev if football_field.bull else 'N/A'}"
+        )
+        console.print(
+            "  [dim]Interpretation: DCF anchors downside, comps anchor upside; "
+            "wide spread implies higher model uncertainty.[/dim]"
         )
     except Exception as e:
         console.print(f"  [yellow]Scenarios skipped: {e}[/yellow]")

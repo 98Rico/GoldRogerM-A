@@ -500,3 +500,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ No mega-cap sector-multiple fallback — rejected/missing peer ranges no longer silently degrade to sector-table comps
 ✔ Valuation mode naming integrity — 100% DCF runs are labeled `DCF-only Valuation` (not blended)
 ✔ Public mega-cap quality cap with missing comps — quality score capped at 75 when usable trading comps are unavailable
+✔ Tiered Apple-class peers — core platform peers prioritized (MSFT/GOOGL/META), adjacent peers included (AMZN/AVGO), low-fit OEM/legacy-semi names de-prioritized
+✔ Similarity-weighted comps — peers are filtered by minimum similarity and weighted in EV/EBITDA central tendency and dispersion
+✔ Mega-cap terminal-growth guardrail — terminal growth is constrained to a realistic 3.0–3.5% band with rationale notes
+✔ Peer-policy transparency — output now logs peer selection policy and per-peer similarity scores
+✔ Weak-peer scoring penalty — mega-cap analyses with weak but usable peer sets are downgraded to lower-confidence quality tiers
