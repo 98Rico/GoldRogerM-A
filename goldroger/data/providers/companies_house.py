@@ -36,6 +36,13 @@ _SIC_SECTOR = {
     "86": "Healthcare", "87": "Healthcare",
 }
 
+_SIC_DESCRIPTION = {
+    "62012": "Business and domestic software development",
+    "63120": "Web portals",
+}
+
+_MAX_FILING_ITEMS = 200
+
 
 class CompaniesHouseProvider(DataProvider):
     name = "companies_house"
@@ -81,6 +88,79 @@ class CompaniesHouseProvider(DataProvider):
         )
         return best.get("company_number")
 
+    def _fetch_all_filings(self, company_number: str) -> list[dict]:
+        """Fetch filing history pages (bounded) for richer metadata extraction."""
+        items: list[dict] = []
+        start = 0
+        page_size = 100
+        while start < _MAX_FILING_ITEMS:
+            page = self._get(
+                f"/company/{company_number}/filing-history",
+                {"items_per_page": page_size, "start_index": start},
+            )
+            if not page:
+                break
+            batch = page.get("items", []) or []
+            if not batch:
+                break
+            items.extend(batch)
+            total = int(page.get("total_count") or 0)
+            start += len(batch)
+            if (total and start >= total) or len(batch) < page_size:
+                break
+        return items[:_MAX_FILING_ITEMS]
+
+    def _summarise_filing_documents(self, filing_items: list[dict]) -> dict:
+        """
+        Summarise filings and extract lightweight signals from document metadata.
+        We inspect all fetched filing items and read document metadata for each item.
+        """
+        doc_count = 0
+        has_accounts = False
+        has_confirmation_statement = False
+        has_director_changes = False
+        notes: list[str] = []
+        recent_docs: list[dict] = []
+
+        for it in filing_items:
+            desc = (it.get("description") or "").replace("_", " ").strip()
+            typ = (it.get("type") or "").strip()
+            date = (it.get("date") or "").strip()
+            dmeta = it.get("links", {}).get("document_metadata", "")
+            if dmeta:
+                doc_count += 1
+            low = f"{typ} {desc}".lower()
+            if "accounts" in low or typ in {"AA", "AA01"}:
+                has_accounts = True
+            if "confirmation statement" in low or typ == "CS01":
+                has_confirmation_statement = True
+            if "appointment" in low or "director" in low or typ in {"AP01", "TM01"}:
+                has_director_changes = True
+            if len(recent_docs) < 12:
+                recent_docs.append({"date": date, "type": typ, "description": desc})
+
+            if dmeta and len(notes) < 10:
+                try:
+                    r = httpx.get(dmeta, auth=self._auth(), timeout=10, headers={"Accept": "application/json"})
+                    meta = r.json() if r.status_code == 200 else None
+                except Exception:
+                    meta = None
+                if isinstance(meta, dict):
+                    resources = meta.get("resources", {}) or {}
+                    mime_list = sorted(resources.keys())
+                    if mime_list:
+                        notes.append(f"{date} {typ}: available formats {', '.join(mime_list[:3])}")
+
+        return {
+            "filing_count_total": len(filing_items),
+            "document_count_total": doc_count,
+            "has_accounts_filings": has_accounts,
+            "has_confirmation_statement": has_confirmation_statement,
+            "has_director_changes": has_director_changes,
+            "filing_history_recent": recent_docs,
+            "filing_notes": notes,
+        }
+
     def fetch(self, ticker: str) -> Optional[MarketData]:
         return None  # Companies House uses company names, not tickers
 
@@ -117,8 +197,51 @@ class CompaniesHouseProvider(DataProvider):
                 sector = _SIC_SECTOR[prefix]
                 break
 
+        officers = self._get(
+            f"/company/{company_number}/officers",
+            {"items_per_page": 100},
+        ) or {}
+        officer_items = officers.get("items", []) or []
+        director_count = len([
+            x for x in officer_items
+            if (x.get("officer_role") or "").lower() == "director"
+            and not x.get("resigned_on")
+        ])
+        officer_count = len([
+            x for x in officer_items
+            if not x.get("resigned_on")
+        ])
+
+        filing_items = self._fetch_all_filings(company_number)
+        filing_summary = self._summarise_filing_documents(filing_items)
+        recent_filings = filing_summary.get("filing_history_recent", []) or []
+
         # Try to get revenue from most recent filed accounts (best-effort)
-        revenue = self._fetch_revenue(company_number)
+        revenue = self._fetch_revenue(company_number, filing_items=filing_items)
+
+        sic_details = []
+        for c in sic_codes:
+            sic_details.append({"code": c, "description": _SIC_DESCRIPTION.get(c, "")})
+
+        meta = {
+            "registry": "companies_house",
+            "company_number": company_number,
+            "company_status": profile.get("company_status", ""),
+            "date_of_creation": profile.get("date_of_creation", ""),
+            "registered_office_address": profile.get("registered_office_address", {}) or {},
+            "sic_codes": sic_codes,
+            "sic_details": sic_details,
+            "officer_count_active": officer_count,
+            "director_count_active": director_count,
+            "filing_history_recent": recent_filings,
+            "last_filing_date": recent_filings[0]["date"] if recent_filings else "",
+            "filing_count_total": filing_summary.get("filing_count_total", 0),
+            "document_count_total": filing_summary.get("document_count_total", 0),
+            "has_accounts_filings": filing_summary.get("has_accounts_filings", False),
+            "has_confirmation_statement": filing_summary.get("has_confirmation_statement", False),
+            "has_director_changes": filing_summary.get("has_director_changes", False),
+            "filing_notes": filing_summary.get("filing_notes", []),
+        }
 
         return MarketData(
             ticker=(profile.get("company_name", fallback_name) or fallback_name or company_number).upper()[:6],
@@ -127,20 +250,15 @@ class CompaniesHouseProvider(DataProvider):
             revenue_ttm=revenue,
             confidence="verified" if revenue else "inferred",
             data_source="companies_house",
+            additional_metadata=meta,
         )
 
-    def _fetch_revenue(self, company_number: str) -> Optional[float]:
-        filings = self._get(
-            f"/company/{company_number}/filing-history",
-            {"category": "accounts", "items_per_page": 10},
-        )
-        if not filings:
-            return None
-        items = filings.get("items", [])
+    def _fetch_revenue(self, company_number: str, filing_items: Optional[list[dict]] = None) -> Optional[float]:
+        items = filing_items or self._fetch_all_filings(company_number)
         # Prefer full/small accounts over abbreviated (abbreviated rarely have revenue)
         priority_types = {"AA", "ACCOUNTS TYPE FULL", "ACCOUNTS TYPE SMALL", "AA01"}
         sorted_filings = sorted(
-            items,
+            [x for x in items if "accounts" in (x.get("description") or "").lower() or x.get("type") in priority_types],
             key=lambda f: (0 if f.get("type", "") in priority_types else 1),
         )
         for filing in sorted_filings:

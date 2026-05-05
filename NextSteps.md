@@ -31,6 +31,8 @@ Two modes:
 | CLI env/key loading parity | ✅ Done | CLI now loads `.env` at startup, and Companies House is correctly marked as key-required in source status |
 | GB confirmation fallback when CH API auth fails | ✅ Done | CLI now falls back to public Companies House search HTML and still shows candidate company numbers |
 | Entity identity guardrail in pipeline/thesis | ✅ Done | Confirmed company identifier now flows into analysis, GB private lookups can resolve by company number, and thesis is constrained against similarly named-company hallucinations |
+| GB Companies House metadata enrichment | ✅ Done | Pipeline now ingests SIC details, active directors/officers counts, incorporation date, and recent filing-history metadata for fundamentals + thesis grounding |
+| GB filing-history document ingestion | ✅ Done | Companies House provider now reads paginated filing history (bounded), indexes document metadata formats, and logs filing/document counts into analysis provenance |
 | Public company valuation (DCF + Comps + LBO) | ✅ Solid | yfinance, CAPM WACC, sector multiples |
 | Private company valuation — high-growth | ✅ Improved | DCF 20% / Comps 35% / Tx 45% weights |
 | Sector-calibrated growth + margin fallbacks | ✅ Done | `get_sector_rev_growth` / `get_sector_ebitda_margin` |

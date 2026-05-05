@@ -94,6 +94,7 @@ class MarketData:
 
     confidence: str = "verified"
     data_source: str = "yfinance"
+    additional_metadata: dict = field(default_factory=dict)
 
 
 def fetch_market_data(ticker: str) -> Optional[MarketData]:

@@ -233,6 +233,7 @@ class ReportWriterAgent(BaseAgent):
         rev_confidence = context.get("revenue_confidence", "estimated")
         ebitda_margin = context.get("ebitda_margin", "")
         identity_note = context.get("identity_note", "")
+        registry_facts = context.get("registry_facts", {}) or {}
         rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated"
         margin_line = f"  EBITDA Margin: {ebitda_margin}\n" if ebitda_margin else ""
         has_revenue = (
@@ -259,11 +260,14 @@ class ReportWriterAgent(BaseAgent):
         return f"""Write a complete investment thesis for "{company}".
 Recommendation context: {rec} with {upside} upside/downside.{revenue_lock}
 Identity context: {identity_note}
+Verified registry facts: {registry_facts}
 
 CRITICAL IDENTITY RULE:
 - Do NOT confuse this company with similarly named companies.
 - If verified sources do not provide product/business specifics, explicitly say details are not publicly disclosed.
 - Never invent product claims (e.g., robotics, hardware, SaaS) unless directly supported by verified context above.
+- If SIC code descriptions are provided, use them as the primary business classification baseline.
+- If filing history/director metadata is provided, reference only those verified facts and avoid extrapolating unsupported operational claims.
 
 Return ONLY this JSON:
 {{

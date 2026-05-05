@@ -362,6 +362,60 @@ def run_analysis(
             fund.ticker = market_data.ticker
         if not fund.sector:
             fund.sector = market_data.sector
+        _meta = market_data.additional_metadata if isinstance(market_data.additional_metadata, dict) else {}
+        if _meta.get("date_of_creation") and not fund.founded:
+            fund.founded = _meta.get("date_of_creation")
+        _addr = _meta.get("registered_office_address") or {}
+        _hq = ", ".join([x for x in [_addr.get("locality"), _addr.get("country")] if x])
+        if _hq and not fund.headquarters:
+            fund.headquarters = _hq
+        _sic_details = _meta.get("sic_details") or []
+        _sic_labels = [d.get("description") for d in _sic_details if d.get("description")]
+        if _sic_labels and (
+            "Not publicly disclosed" in (fund.business_model or "")
+            or not (fund.business_model or "").strip()
+        ):
+            fund.business_model = " / ".join(_sic_labels[:2])
+        _dir_count = _meta.get("director_count_active")
+        if _dir_count is not None and (not fund.employees or fund.employees == "N/A"):
+            fund.employees = f"Directors listed: {_dir_count}"
+        if _meta.get("company_number"):
+            sources.add_once("Company Number (GB)", str(_meta.get("company_number")), "companies_house", "verified")
+        if _meta.get("sic_codes"):
+            sources.add_once(
+                "SIC Codes (GB)",
+                ", ".join(_meta.get("sic_codes")[:4]),
+                "companies_house",
+                "verified",
+            )
+        if _meta.get("director_count_active") is not None:
+            sources.add_once(
+                "Directors (active)",
+                str(_meta.get("director_count_active")),
+                "companies_house",
+                "verified",
+            )
+        if _meta.get("last_filing_date"):
+            sources.add_once(
+                "Latest Filing Date",
+                str(_meta.get("last_filing_date")),
+                "companies_house",
+                "verified",
+            )
+        if _meta.get("filing_count_total") is not None:
+            sources.add_once(
+                "Filings Read (GB)",
+                str(_meta.get("filing_count_total")),
+                "companies_house",
+                "verified",
+            )
+        if _meta.get("document_count_total") is not None:
+            sources.add_once(
+                "Documents Indexed (GB)",
+                str(_meta.get("document_count_total")),
+                "companies_house",
+                "verified",
+            )
     # Identity guardrail: if we only have registry identity (no verified business description),
     # avoid hallucinated business models from similarly named entities.
     if (
@@ -943,6 +997,9 @@ def run_analysis(
                 f"Confirmed legal entity: {fund.company_name} "
                 f"(Companies House #{company_identifier}, {country_hint or 'unknown country'})"
                 if company_identifier else f"Confirmed legal entity: {fund.company_name}"
+            ),
+            "registry_facts": (
+                market_data.additional_metadata if market_data and isinstance(market_data.additional_metadata, dict) else {}
             ),
         },
         InvestmentThesis,
