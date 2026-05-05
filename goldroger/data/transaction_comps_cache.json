@@ -46,5 +46,53 @@
     "ev_ebitda": 26.7,
     "ev_revenue": 6.4,
     "source": "https://www.philips.com/a-w/about/news/archive/standard/news/press/2021/20210310-philips-completes-acquisition-of-biotelemetry.html"
+  },
+  {
+    "target": "Splunk",
+    "acquirer": "Cisco",
+    "sector": "Software (Cybersecurity/Data Analytics)",
+    "year": 2024,
+    "ev_m": 28000.0,
+    "revenue_m": 3650.0,
+    "ebitda_m": 700.0,
+    "ev_ebitda": 40.0,
+    "ev_revenue": 7.7,
+    "source": "https://www.cisco.com/c/en/us/about/corporate-strategy-office/acquisitions/splunk.html"
+  },
+  {
+    "target": "VMware",
+    "acquirer": "Broadcom",
+    "sector": "Software (Cloud/Infrastructure)",
+    "year": 2023,
+    "ev_m": 61000.0,
+    "revenue_m": 13300.0,
+    "ebitda_m": 4700.0,
+    "ev_ebitda": 13.0,
+    "ev_revenue": 4.6,
+    "source": "https://investors.broadcom.com/financial-information/acquisitions/vmware"
+  },
+  {
+    "target": "Mandiant",
+    "acquirer": "Google",
+    "sector": "Cybersecurity",
+    "year": 2022,
+    "ev_m": 5400.0,
+    "revenue_m": 480.0,
+    "ebitda_m": null,
+    "ev_ebitda": null,
+    "ev_revenue": 11.3,
+    "source": "https://cloud.google.com/blog/products/identity-security/google-to-acquire-mandiant"
+  },
+  {
+    "target": "Citrix Systems",
+    "acquirer": "Vista Equity Partners and Evergreen Coast Capital",
+    "sector": "Software (Virtualization/Cloud)",
+    "year": 2022,
+    "ev_m": 16500.0,
+    "revenue_m": 3200.0,
+    "ebitda_m": 1100.0,
+    "ev_ebitda": 15.0,
+    "ev_revenue": 5.2,
+    "source": "https://www.vistaequitypartners.com/portfolio/citrix/"
   }
 ]

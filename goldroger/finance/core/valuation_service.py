@@ -81,6 +81,8 @@ class FullValuationOutput:
     has_revenue: bool = True       # False → all quantitative methods skipped
     weights_used: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    # Per-field provenance: metric → (value_str, source, confidence)
+    field_sources: dict = field(default_factory=dict)
 
 
 # ── Weight resolution ─────────────────────────────────────────────────────────
@@ -132,12 +134,13 @@ class ValuationService:
         use_financial_path = is_financial_sector(sector)
 
         # ── 1. Core inputs ────────────────────────────────────────────────
-        revenue_series, _ = self._build_revenue_series(
+        field_sources: dict = {}
+        revenue_series, rev_confidence = self._build_revenue_series(
             financials, market_data, notes, sector=sector
         )
 
         if revenue_series is None:
-            wacc, _ = self._resolve_wacc(assumptions, market_data, sector_m, notes)
+            wacc, wacc_confidence = self._resolve_wacc(assumptions, market_data, sector_m, notes)
             tg = self._resolve_terminal_growth(assumptions, sector_m, wacc, notes)
             rec = self._compute_recommendation(
                 ValuationResult(low=0, mid=0, high=0, blended=0), market_data, notes
@@ -155,6 +158,7 @@ class ValuationService:
                 has_revenue=False,
                 weights_used=_w0,
                 notes=notes,
+                field_sources={"WACC": (f"{wacc:.2%}", "capm_model", wacc_confidence)},
             )
 
         revenue_current = revenue_series[-1]
@@ -168,17 +172,41 @@ class ValuationService:
         else:
             base_revenue_y0 = self._f(financials.get("revenue_current"), None)
 
-        ebitda_margin, _ = self._resolve_ebitda_margin(financials, market_data, notes, sector=sector)
+        ebitda_margin, ebitda_confidence = self._resolve_ebitda_margin(
+            financials, market_data, notes, sector=sector
+        )
         tax_rate = self._resolve_tax_rate(financials, market_data)
         capex_pct = self._resolve_capex_pct(financials, market_data, revenue_current)
         nwc_pct = self._f(financials.get("nwc_pct"), 0.02)
         da_pct = self._resolve_da_pct(market_data, revenue_current)
 
         # ── 2. WACC ───────────────────────────────────────────────────────
-        wacc, _ = self._resolve_wacc(
+        wacc, wacc_confidence = self._resolve_wacc(
             assumptions, market_data, sector_m, notes
         )
         terminal_growth = self._resolve_terminal_growth(assumptions, sector_m, wacc, notes)
+
+        # ── Populate field_sources ────────────────────────────────────────
+        _rev_src = market_data.data_source if market_data else "llm"
+        _rev_val = market_data.revenue_ttm if market_data and market_data.revenue_ttm else revenue_current
+        field_sources["Revenue TTM"] = (f"${_rev_val:.0f}M", _rev_src, rev_confidence)
+        field_sources["EBITDA Margin"] = (f"{ebitda_margin:.1%}", _rev_src, ebitda_confidence)
+        field_sources["WACC"] = (f"{wacc:.2%}", "capm_model", wacc_confidence)
+        field_sources["Terminal Growth"] = (f"{terminal_growth:.2%}", "sector_default", "inferred")
+        if market_data and market_data.beta:
+            field_sources["Beta (β)"] = (f"{market_data.beta:.3f}", _rev_src, "verified")
+        if market_data and market_data.forward_revenue_growth is not None:
+            field_sources["Forward Revenue Growth"] = (
+                f"{market_data.forward_revenue_growth:+.1%}", "yfinance", "verified"
+            )
+        if market_data and market_data.market_cap:
+            field_sources["Market Cap"] = (f"${market_data.market_cap:.0f}M", _rev_src, "verified")
+        if market_data and market_data.ev_ebitda_market:
+            field_sources["EV/EBITDA (market)"] = (
+                f"{market_data.ev_ebitda_market:.1f}x", _rev_src, "verified"
+            )
+        if market_data and market_data.net_debt is not None:
+            field_sources["Net Debt"] = (f"${market_data.net_debt:.0f}M", _rev_src, "verified")
 
         # ── 3. DCF ───────────────────────────────────────────────────────
         dcf_input = DCFInput(
@@ -263,6 +291,7 @@ class ValuationService:
             data_confidence=data_confidence,
             sector=sector or "Unknown",
             valuation_path=valuation_path,
+            field_sources=field_sources,
             weights_used=weights,
             notes=notes,
         )

@@ -23,6 +23,7 @@ Two modes:
 
 | Capability | Status | Notes |
 |-----------|--------|-------|
+| Full per-field provenance tracking | ✅ Done | `sources.md` logs all inputs — revenue, margins, beta, WACC, growth, EV — with source + confidence; WACC now correctly tagged `verified` when CAPM used |
 | Public company valuation (DCF + Comps + LBO) | ✅ Solid | yfinance, CAPM WACC, sector multiples |
 | Private company valuation — high-growth | ✅ Improved | DCF 20% / Comps 35% / Tx 45% weights |
 | Sector-calibrated growth + margin fallbacks | ✅ Done | `get_sector_rev_growth` / `get_sector_ebitda_margin` |
@@ -54,6 +55,7 @@ Two modes:
 
 | Problem | Impact | Root cause |
 |---------|--------|-----------|
+| **🔴 Implied EV swings wildly between runs** | Core output untrustworthy — observed $4.9T → $19.4T on NVIDIA across 4 runs | Peer comps EV/EBITDA multiple comes from LLM (varies per run); at 40% blend weight on $133B EBITDA, a 10x multiple swing adds ~$1.3T to the output |
 | Private revenue still often missing | Blocks accurate valuation | FR SAS confidentiality law; DE/ES/NL registries expose no revenue |
 | Mistral free tier JSON failures | Agent output silently discarded | Token-limit truncation + non-standard JSON; repair catches most but not all |
 | Transaction comps coverage still thin | Multiples can be sparse | No paid deal feed yet (Capital IQ / Refinitiv / Mergermarket) |
@@ -67,6 +69,17 @@ Two modes:
 ## PRIORITY ROADMAP
 
 ### 🔴 PRIORITY 0 — Data quality (before anything else)
+
+#### 0.0 — Fix EV volatility from LLM peer comps  ← **NEXT TO FIX**
+
+**Status**: confirmed bug. Observed on NVIDIA: Implied EV ranged from $4.9T to $19.4T across 4 consecutive runs with identical inputs.
+
+**Root cause**: `PeerFinderAgent` returns EV/EBITDA multiples from LLM memory. These vary per run (e.g. 35.8x → 45.1x). At 40% blend weight on NVIDIA's $133B EBITDA, a 10-point multiple swing adds ~$1.3T to the output. The peer multiple is supposed to be anchored to `market_data.ev_ebitda_market` (live yfinance) but LLM-suggested overrides can bypass this.
+
+**Fix**: the comps multiple used in `ValuationService._standard_comps()` must be locked to the live yfinance EV/EBITDA when available. LLM peer suggestions should only adjust the *range* (low/high), never override the *anchor* (mid). Specifically:
+- When `market_data.ev_ebitda_market` is set, use it as the fixed mid; only allow ±25% range from peers
+- Log the peer multiple source in `field_sources` so it's visible in `sources.md`
+- Add a test: run valuation twice with same inputs, assert blended EV within 5%
 
 #### 0.1 — Private revenue confidence scoring refinement
 
@@ -257,5 +270,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 24 | Scenario weights propagation — `run_scenarios(weights=result.weights_used)`, display weights corrected | ✅ |
 | 25 | CLI source control (`--sources`, `--list-sources`) + auto-skip missing credentials + deterministic WACC/TG guardrail | ✅ |
 | 26 | Deterministic private revenue merge + stricter transaction comp acceptance + tests | ✅ |
+| 27 | Full per-field provenance — `sources.md` logs all financial inputs with source + confidence; `SourcesLog.add_once()` deduplication; WACC correctly tagged `verified` when CAPM used | ✅ |
 
 </details>

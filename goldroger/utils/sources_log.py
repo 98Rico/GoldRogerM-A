@@ -23,6 +23,9 @@ class SourcesLog:
         self.company = company
         self._entries: list[SourceEntry] = []
 
+    def has_metric(self, metric: str) -> bool:
+        return any(e.metric == metric for e in self._entries)
+
     def add(
         self,
         metric: str,
@@ -32,6 +35,17 @@ class SourcesLog:
         url: str = "",
     ) -> None:
         self._entries.append(SourceEntry(metric, value, source, confidence, url))
+
+    def add_once(
+        self,
+        metric: str,
+        value: str,
+        source: str,
+        confidence: str,
+        url: str = "",
+    ) -> None:
+        if not self.has_metric(metric):
+            self.add(metric, value, source, confidence, url)
 
     def to_markdown(self) -> str:
         lines = [

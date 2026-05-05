@@ -313,6 +313,21 @@ def run_analysis(
                     console.print(
                         f"  [cyan]Forward growth: {market_data.forward_revenue_growth:+.1%}[/cyan]"
                     )
+                sources.add("Revenue TTM", f"${market_data.revenue_ttm:.0f}M", "yfinance", "verified")
+                sources.add("EBITDA Margin", f"{market_data.ebitda_margin:.1%}", "yfinance", "verified")
+                sources.add("Market Cap", f"${market_data.market_cap:.0f}M", "yfinance", "verified")
+                if market_data.beta:
+                    sources.add("Beta (β)", f"{market_data.beta:.3f}", "yfinance", "verified")
+                if market_data.forward_revenue_growth is not None:
+                    sources.add(
+                        "Forward Revenue Growth",
+                        f"{market_data.forward_revenue_growth:+.1%}",
+                        "yfinance", "verified",
+                    )
+                if market_data.gross_margin is not None:
+                    sources.add("Gross Margin", f"{market_data.gross_margin:.1%}", "yfinance", "verified")
+                if market_data.net_debt is not None:
+                    sources.add("Net Debt", f"${market_data.net_debt:.0f}M", "yfinance", "verified")
         log.end_step("market_data", t0)
         _done("Market Data", t0)
 
@@ -654,8 +669,15 @@ def run_analysis(
     else:
         _rec = _raw_rec
 
-    sources.add("WACC", f"{result.wacc_used:.2%}", "capm_model", "inferred")
-    sources.add("Terminal growth", f"{result.terminal_growth_used:.2%}", "sector_default", "inferred")
+    # Dump all per-field provenance from the valuation engine.
+    # add_once deduplicates by metric name — equity.py may have already logged
+    # revenue/margins from the market data fetch above.
+    for _metric, (_val, _src, _conf) in result.field_sources.items():
+        sources.add_once(_metric, _val, _src, _conf)
+
+    _wacc_conf = result.field_sources.get("WACC", (None, None, "inferred"))[2]
+    sources.add_once("WACC", f"{result.wacc_used:.2%}", "capm_model", _wacc_conf)
+    sources.add_once("Terminal Growth", f"{result.terminal_growth_used:.2%}", "sector_default", "inferred")
     sources.add("Implied EV", _ev_str, "valuation_engine", "inferred")
     if peer_multiples and peer_multiples.ev_ebitda_median:
         sources.add(

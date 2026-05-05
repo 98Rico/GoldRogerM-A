@@ -406,6 +406,7 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Pappers integrated — RNCS-verified revenue for French private companies
 ✔ Peer scale constraint — revenue bracket ×0.25–×4, no mega-cap as SME comparable
 ✔ Confidence tagging — `[verified]` / `[estimated]` visible in CLI and exported
+✔ Full per-field provenance — `sources.md` logs every input (revenue, margins, beta, WACC, growth, EV) with source and confidence; WACC tagged `verified` when CAPM/real beta used, `inferred` for sector default; deduplication via `SourcesLog.add_once()`
 ✔ HealthTech sector — dedicated multiples (EV/Rev 6–20x, WACC 11.5%, growth 22%)
 ✔ Sector-calibrated revenue growth fallback (22% HealthTech, not generic 8%)
 ✔ Sector-calibrated EBITDA margin fallback (sector benchmark, not generic 20%)
