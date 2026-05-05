@@ -245,11 +245,20 @@ class ValuationService:
         ebitda = revenue_current * ebitda_margin
 
         comps_field_sources: dict = {}
+        insufficient_comps = bool(assumptions.get("insufficient_comps"))
         if use_financial_path:
             comps_output, tx_output = self._financial_comps(
                 market_data, sector_m, notes
             )
             valuation_path = "pe_pb"
+        elif insufficient_comps:
+            comps_output = CompsOutput(low=0.0, mid=0.0, high=0.0)
+            tx_output = TransactionOutput(implied_value=0.0)
+            comps_field_sources = {
+                "EV/EBITDA (peer range)": ("insufficient peers", "validated_peers", "inferred"),
+            }
+            notes.append("Comps disabled: insufficient validated peer set for mega-cap policy.")
+            valuation_path = "ev_ebitda"
         else:
             comps_output, tx_output, comps_field_sources = self._standard_comps(
                 revenue_current, ebitda, market_data, sector_m, assumptions, notes, sector
@@ -265,11 +274,18 @@ class ValuationService:
         )
         _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
         if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
-            weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
-            notes.append(
-                f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap): "
-                "tx comps excluded — weights DCF 60% / Comps 40%."
-            )
+            if insufficient_comps:
+                weights = {"dcf": 1.0, "comps": 0.0, "transactions": 0.0}
+                notes.append(
+                    f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap) with insufficient peers: "
+                    "comps/tx excluded — weights DCF 100%."
+                )
+            else:
+                weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
+                notes.append(
+                    f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap): "
+                    "tx comps excluded — weights DCF 60% / Comps 40%."
+                )
         w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
         notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)
@@ -290,7 +306,11 @@ class ValuationService:
             ebitda_margin=ebitda_margin,
         )
 
-        if market_data and market_data.ev_ebitda_market:
+        if (
+            market_data
+            and market_data.ev_ebitda_market
+            and comps_field_sources.get("EV/EBITDA (peer median)", ("", "", ""))[1] == "validated_peers"
+        ):
             _peer_median = None
             _pm = comps_field_sources.get("EV/EBITDA (peer median)")
             if _pm:
@@ -346,6 +366,15 @@ class ValuationService:
                 "valuation_engine",
                 "inferred",
             )
+        if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
+            _disp = max(dcf_output.enterprise_value, comps_output.mid) / min(dcf_output.enterprise_value, comps_output.mid)
+            if _disp > 2.0:
+                field_sources["Valuation Uncertainty"] = (
+                    f"High dispersion ({_disp:.1f}x DCF vs comps)",
+                    "valuation_engine",
+                    "inferred",
+                )
+                notes.append(f"High dispersion / low confidence: DCF vs comps gap {_disp:.1f}x.")
 
         # ── 8. Sensitivity matrix ─────────────────────────────────────────
         sensitivity = self._build_sensitivity(dcf_input, wacc, terminal_growth)

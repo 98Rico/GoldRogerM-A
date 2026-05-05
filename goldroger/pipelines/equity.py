@@ -76,6 +76,23 @@ load_dotenv()
 _MEGA_CAP_TECH_FALLBACK_PEERS = ["MSFT", "GOOGL", "NVDA", "AMZN", "META"]
 
 
+def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
+    score = 0.0
+    if target_mcap and peer_mcap and target_mcap > 0 and peer_mcap > 0:
+        ratio = max(target_mcap, peer_mcap) / min(target_mcap, peer_mcap)
+        if ratio <= 2.0:
+            score += 0.6
+        elif ratio <= 5.0:
+            score += 0.4
+        elif ratio <= 10.0:
+            score += 0.2
+    ts = (target_sector or "").lower()
+    ps = (peer_sector or "").lower()
+    if ts and ps and any(tok in ps for tok in ts.split()):
+        score += 0.4
+    return round(min(score, 1.0), 2)
+
+
 def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> list[str]:
     """Enforce time-aware catalyst labels:
     - 'Upcoming' only for future-dated events
@@ -722,6 +739,19 @@ def run_analysis(
                         + ", ".join(p.ticker for p in peer_multiples.peers[:6])
                         + drop_note
                     )
+                    for _p in peer_multiples.peers[:8]:
+                        _sim = _peer_similarity_score(
+                            market_data.market_cap if market_data else None,
+                            _p.market_cap,
+                            _target_sector,
+                            _p.sector or "",
+                        )
+                        console.print(
+                            f"  [dim]Peer {_p.ticker}: EV/EBITDA={_p.ev_ebitda:.1f}x "
+                            f"(similarity {_sim:.2f})[/dim]"
+                            if _p.ev_ebitda
+                            else f"  [dim]Peer {_p.ticker}: similarity {_sim:.2f}[/dim]"
+                        )
                     if peer_multiples.ev_ebitda_median:
                         console.print(
                             f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x"
@@ -825,6 +855,11 @@ def run_analysis(
                                 ),
                                 n_peers=_fb.n_peers,
                             )
+                    if _is_mega_tech and peer_multiples and peer_multiples.n_peers < 5:
+                        console.print(
+                            f"  [yellow]Insufficient comps for mega-cap policy: "
+                            f"{peer_multiples.n_peers} validated peers (<5).[/yellow]"
+                        )
         except Exception as e:
             console.print(f"  [yellow]Peer post-processing skipped: {e}[/yellow]")
     elif _peers_err:
@@ -895,6 +930,15 @@ def run_analysis(
 
     assumptions_dict = assumptions.model_dump()
     assumptions_dict["_assumption_source"] = "system"
+    _is_mega_cap = bool(
+        company_type == "public"
+        and market_data
+        and market_data.market_cap
+        and market_data.market_cap > _mega_cap_usd_m
+    )
+    assumptions_dict["insufficient_comps"] = bool(
+        _is_mega_cap and (not peer_multiples or peer_multiples.n_peers < 5)
+    )
     if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
         assumptions_dict["ev_ebitda_range"] = [
             peer_multiples.ev_ebitda_low,
@@ -905,6 +949,10 @@ def run_analysis(
         console.print(
             f"  [cyan]Comps from {peer_multiples.n_peers} real peers (P25–P75): "
             f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
+        )
+    elif assumptions_dict.get("insufficient_comps"):
+        console.print(
+            "  [yellow]Comps disabled: insufficient real peers for mega-cap policy (need >=5).[/yellow]"
         )
 
     # Policy: do not anchor valuation inputs to LLM-sourced transaction comps.
@@ -1218,6 +1266,24 @@ def run_analysis(
                 football_field.base.comps_ev = _fmt_ev(result.comps.mid)
             if blended_ev:
                 football_field.base.blended_ev = _fmt_ev(blended_ev)
+        # Scenario-based fair-value range in price space, must contain point estimate.
+        if (
+            rec.intrinsic_price is not None
+            and market_data
+            and market_data.shares_outstanding
+            and market_data.shares_outstanding > 0
+        ):
+            _nd = market_data.net_debt or 0.0
+            _px_low = (scenarios_out.bear.blended_ev - _nd) / market_data.shares_outstanding
+            _px_high = (scenarios_out.bull.blended_ev - _nd) / market_data.shares_outstanding
+            _lo = min(_px_low, _px_high, rec.intrinsic_price)
+            _hi = max(_px_low, _px_high, rec.intrinsic_price)
+            sources.add_once(
+                "Fair Value Range",
+                f"${_lo:.2f}–${_hi:.2f}",
+                "scenario_blended",
+                "inferred",
+            )
         console.print(
             f"  [bold]Football field:[/bold] Bear {football_field.bear.blended_ev if football_field.bear else 'N/A'} "
             f"/ Base {football_field.base.blended_ev if football_field.base else 'N/A'} "

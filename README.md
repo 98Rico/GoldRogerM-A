@@ -490,3 +490,7 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Fair-value presentation — output now shows fair value range + point estimate
 ✔ Football-field cleanup — DCF/comps/blended low-mid-high rows are now shown consistently
 ✔ Peer robustness — mega-cap tech runs with mandatory platform peers and small-set safeguards
+✔ Mega-cap comps policy hardening — no sector-table multiples when peer set is insufficient; comps disabled and confidence reduced instead
+✔ Range integrity — fair value range is scenario-based and always includes point estimate
+✔ Peer transparency — per-peer EV/EBITDA and similarity hints are surfaced in runtime output
+✔ Uncertainty signaling — DCF vs comps dispersion >2x is explicitly flagged as high-dispersion / low-confidence

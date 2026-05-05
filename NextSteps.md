@@ -326,5 +326,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 31 | Tier-1 credibility blockers — time-aware catalyst guardrail, 90-cap on estimated/proxy quality, peer premium/discount interpretation notes, recommendation conviction guardrails | ✅ |
 | 32 | Real-comps enforcement — removed market-anchor ±25%, switched to peer P25/Median/P75 comps logic, tightened stale catalyst rewriting and low-conviction signaling | ✅ |
 | 33 | Temporal + comps quality hardening — 6-month recency policy, historical labeling for stale events, mandatory mega-cap peer seeding, winsorized peer dispersion, fair-value range output, football-field low/mid/high cleanup | ✅ |
+| 34 | Integrity guardrails — enforce mega-cap minimum peer policy (no sector-table fallback), scenario-based fair-value range containment, peer-level trace outputs, high-dispersion uncertainty flag | ✅ |
 
 </details>
