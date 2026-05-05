@@ -23,6 +23,7 @@ def assess_data_quality(
     company_type: str,
     market_data: Optional[MarketData],
     financials: dict,
+    market_analysis: Optional[dict] = None,
 ) -> DataQualityReport:
     score = 100
     blockers: list[str] = []
@@ -63,6 +64,7 @@ def assess_data_quality(
         score = _score_public(market_data, checks, warnings, blockers, score)
     else:
         score = _score_private(market_data, checks, warnings, score)
+    score = _score_market_context(market_analysis, checks, warnings, score)
 
     score = max(0, min(100, score))
     tier = _tier(score)
@@ -131,6 +133,48 @@ def _score_private(market_data, checks, warnings, score: int) -> int:
     return score
 
 
+def _score_market_context(market_analysis, checks, warnings, score: int) -> int:
+    if not isinstance(market_analysis, dict):
+        checks["market_context"] = "not_provided"
+        return score
+
+    checks["market_context"] = "ok"
+    market_size = market_analysis.get("market_size")
+    market_growth = market_analysis.get("market_growth")
+    market_segment = market_analysis.get("market_segment")
+    key_trends = market_analysis.get("key_trends")
+
+    if _text_missing(market_size):
+        score -= 10
+        warnings.append("Missing TAM / market size context")
+        checks["market_size"] = "missing"
+    else:
+        checks["market_size"] = "ok"
+
+    if _text_missing(market_growth):
+        score -= 8
+        warnings.append("Missing market growth context")
+        checks["market_growth"] = "missing"
+    else:
+        checks["market_growth"] = "ok"
+
+    if _text_missing(market_segment):
+        score -= 6
+        warnings.append("Missing market segment definition")
+        checks["market_segment"] = "missing"
+    else:
+        checks["market_segment"] = "ok"
+
+    if not isinstance(key_trends, list) or len([x for x in key_trends if str(x).strip()]) < 2:
+        score -= 4
+        warnings.append("Missing key trend depth (need 2+ material trends)")
+        checks["key_trends"] = "thin"
+    else:
+        checks["key_trends"] = "ok"
+
+    return score
+
+
 def _tier(score: int) -> str:
     if score >= 85:
         return "A"
@@ -153,3 +197,15 @@ def _num(v) -> Optional[float]:
         return float(s)
     except Exception:
         return None
+
+
+def _text_missing(v) -> bool:
+    if v is None:
+        return True
+    s = str(v).strip().lower()
+    if not s:
+        return True
+    for token in ("n/a", "not available", "unavailable", "none", "unknown"):
+        if token in s:
+            return True
+    return False

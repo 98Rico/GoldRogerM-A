@@ -535,6 +535,19 @@ def run_analysis(
 
     # Override LLM-derived financials with registry-verified values when available
     fin = _reconcile_financials(fin, market_data, console)
+    # Public display policy: prefer verified forward growth from market data.
+    if (
+        company_type == "public"
+        and market_data
+        and market_data.forward_revenue_growth is not None
+    ):
+        fin.revenue_growth = f"{market_data.forward_revenue_growth:+.1%}"
+        sources.add_once(
+            "Revenue Growth",
+            f"{market_data.forward_revenue_growth:+.1%}",
+            "yfinance",
+            "verified",
+        )
     # Strict provenance policy for confirmed low-data private entities:
     # do not surface unsourced LLM financial metrics as factual numbers.
     _strict_registry_mode = bool(
@@ -669,6 +682,7 @@ def run_analysis(
         company_type=company_type,
         market_data=market_data,
         financials=fin.model_dump(),
+        market_analysis=mkt.model_dump(),
     )
     console.print(
         f"  [bold]Data quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
@@ -723,11 +737,11 @@ def run_analysis(
     _w_tx   = round(_w.get("transactions", 0.2) * 100)
 
     _methods: list = []
-    if result.has_revenue and result.dcf:
+    if result.has_revenue and result.dcf and _w_dcf > 0:
         _methods.append(ValuationMethod(
             name="DCF", mid=str(round(result.dcf.enterprise_value, 1)), weight=_w_dcf
         ))
-    if result.has_revenue and result.comps:
+    if result.has_revenue and result.comps and _w_comp > 0:
         _methods.append(ValuationMethod(
             name=f"Trading Comps ({result.valuation_path.upper()})",
             low=str(round(result.comps.low, 1)),
@@ -735,7 +749,7 @@ def run_analysis(
             high=str(round(result.comps.high, 1)),
             weight=_w_comp,
         ))
-    if result.has_revenue and result.transactions:
+    if result.has_revenue and result.transactions and _w_tx > 0:
         tx_label = "Transaction Comps"
         tx_n = _tx_medians.get("n_deals", 0)
         if tx_n:

@@ -400,6 +400,87 @@ class _Footnotes:
         return self._items
 
 
+def _split_qualifier(raw: str) -> tuple[str, str]:
+    m = re.match(r"^(.*?)(\s*\[[^\]]+\])?$", raw.strip())
+    if not m:
+        return raw, ""
+    return (m.group(1) or "").strip(), (m.group(2) or "")
+
+
+def _to_float(s: str) -> Optional[float]:
+    t = s.strip().replace(",", "")
+    if not t:
+        return None
+    if t.startswith("$"):
+        t = t[1:]
+    mult = 1.0
+    if t.endswith("T"):
+        mult = 1_000_000.0
+        t = t[:-1]
+    elif t.endswith("B"):
+        mult = 1_000.0
+        t = t[:-1]
+    elif t.endswith("M"):
+        mult = 1.0
+        t = t[:-1]
+    elif t.endswith("K"):
+        mult = 0.001
+        t = t[:-1]
+    try:
+        return float(t) * mult
+    except Exception:
+        return None
+
+
+def _fmt_money_m(v_m: float) -> str:
+    if abs(v_m) >= 1_000_000:
+        return f"${v_m / 1_000_000:.2f}T"
+    if abs(v_m) >= 1_000:
+        return f"${v_m / 1_000:.1f}B"
+    return f"${v_m:,.0f}M"
+
+
+def _fmt_percentish(raw: str, signed: bool = False) -> str:
+    base, q = _split_qualifier(raw)
+    if not base:
+        return raw
+    if base.endswith("%"):
+        return f"{base}{q}"
+    n = _to_float(base)
+    if n is None:
+        return raw
+    if abs(n) > 1.5:
+        n = n / 100.0
+    spec = "+.1%" if signed else ".1%"
+    return f"{format(n, spec)}{q}"
+
+
+def _format_metric_value(metric: str, value: str) -> str:
+    metric = metric.strip()
+    raw = (value or "").strip()
+    if not raw:
+        return "N/A"
+    if metric in {"Revenue", "Free Cash Flow"}:
+        base, q = _split_qualifier(raw)
+        n = _to_float(base)
+        if n is not None:
+            return f"{_fmt_money_m(n)}{q}"
+    if metric in {"Revenue Growth", "Market Growth"}:
+        return _fmt_percentish(raw, signed=True)
+    if metric in {"Gross Margin", "EBITDA Margin", "Net Margin"}:
+        return _fmt_percentish(raw, signed=False)
+    return raw
+
+
+def _format_valuation_cell(value: Optional[str]) -> str:
+    if not value:
+        return "—"
+    n = _to_float(value)
+    if n is None:
+        return value
+    return _fmt_money_m(n)
+
+
 def print_result(result):
     f = result.fundamentals
     m = result.market
@@ -410,8 +491,9 @@ def print_result(result):
     footnotes = _Footnotes()
 
     def _value_with_source(metric: str, value: Optional[str]) -> str:
-        shown = value or "N/A"
-        note = _infer_source_note(metric, shown, src_map)
+        shown_raw = value or "N/A"
+        note = _infer_source_note(metric, shown_raw, src_map)
+        shown = _format_metric_value(metric, shown_raw)
         return f"{shown}{footnotes.tag(note)}"
 
     # Header
@@ -464,11 +546,14 @@ def print_result(result):
             else:
                 source_metric = method.name
             method_note = footnotes.tag(_infer_source_note(source_metric, method.mid or "", src_map))
+            _low = _format_valuation_cell(method.low)
+            _mid = _format_valuation_cell(method.mid)
+            _high = _format_valuation_cell(method.high)
             val_table.add_row(
                 method.name,
-                f"{(method.low or '—')}{method_note if method.low else ''}",
-                f"{(method.mid or '—')}{method_note if method.mid else ''}",
-                f"{(method.high or '—')}{method_note if method.high else ''}",
+                f"{_low}{method_note if method.low else ''}",
+                f"{_mid}{method_note if method.mid else ''}",
+                f"{_high}{method_note if method.high else ''}",
                 (f"{method.weight}%{method_note}" if method.weight is not None else "—"),
             )
         console.print(val_table)

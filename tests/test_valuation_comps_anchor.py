@@ -72,3 +72,20 @@ def test_comps_mid_stable_when_market_anchor_present():
 
     assert "EV/EBITDA (peer range)" in out_wide.field_sources
     assert out_wide.field_sources["EV/EBITDA (peer range)"][1] == "validated_peers"
+
+
+def test_mega_cap_tech_rejects_low_peer_range():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "ev_ebitda_range": [8.0, 12.0],
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert out.field_sources["EV/EBITDA (peer range)"][1] == "peer_quality_gate"
+    assert "rejected" in out.field_sources["EV/EBITDA (peer range)"][0]

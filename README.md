@@ -470,3 +470,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ UI/API credential management — keyed providers can be configured from UI and persisted to `.env`
 ✔ Mandatory company confirmation — explicit pre-run company selection with a “None of these companies” path
 ✔ CLI value footnotes — every displayed KPI/valuation value now includes a `(S#)` marker with a source/confidence legend (and URL when available)
+✔ Market-context-aware quality scoring — missing TAM/market growth/segment/trend depth now penalizes confidence score
+✔ Verified growth precedence — public Key Financials now prefer `yfinance` forward growth when available
+✔ Zero-weight valuation cleanup — methods with 0% weight are hidden from the valuation table
+✔ Mega-cap tech peer-quality gate — low EV/EBITDA peer bands (e.g. 8x–12x) are rejected for Apple-class companies
+✔ Standardized CLI financial formatting — consistent `%`, `$M/$B/$T`, and readable valuation cells

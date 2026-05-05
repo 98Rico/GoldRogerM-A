@@ -239,7 +239,7 @@ class ValuationService:
             valuation_path = "pe_pb"
         else:
             comps_output, tx_output, comps_field_sources = self._standard_comps(
-                revenue_current, ebitda, market_data, sector_m, assumptions, notes
+                revenue_current, ebitda, market_data, sector_m, assumptions, notes, sector
             )
             valuation_path = "ev_ebitda"
         field_sources.update(comps_field_sources)
@@ -300,7 +300,7 @@ class ValuationService:
 
     # ── Comps paths ───────────────────────────────────────────────────────────
 
-    def _standard_comps(self, revenue, ebitda, market_data, sector_m, assumptions, notes):
+    def _standard_comps(self, revenue, ebitda, market_data, sector_m, assumptions, notes, sector=""):
         ev_ebitda_low, _, ev_ebitda_high = sector_m.ev_ebitda
         comps_field_sources: dict = {}
         comps_range = assumptions.get("ev_ebitda_range")
@@ -310,17 +310,31 @@ class ValuationService:
             width = implied * 0.25  # default: ±25% around market anchor
             if comps_range and len(comps_range) == 2:
                 peer_low, peer_high = sorted((float(comps_range[0]), float(comps_range[1])))
-                peer_dev = max(abs(peer_low - implied), abs(peer_high - implied))
-                width = min(max(peer_dev, 0.0), implied * 0.25)
-                notes.append(
-                    f"Comps mid fixed to live EV/EBITDA {implied:.1f}x; "
-                    f"peer range {peer_low:.1f}x–{peer_high:.1f}x used for spread (capped ±25%)."
-                )
-                comps_field_sources["EV/EBITDA (peer range)"] = (
-                    f"{peer_low:.1f}x–{peer_high:.1f}x",
-                    "validated_peers",
-                    "estimated",
-                )
+                # Mega-cap tech quality gate:
+                # reject low-multiple peer bands (e.g. 8x–12x) that are not credible
+                # for Apple/Microsoft/NVIDIA-scale companies.
+                if self._reject_peer_range_for_mega_cap_tech(peer_low, peer_high, market_data, sector):
+                    notes.append(
+                        f"Peer range {peer_low:.1f}x–{peer_high:.1f}x rejected by mega-cap tech gate; "
+                        f"using market-anchor ±25% around {implied:.1f}x."
+                    )
+                    comps_field_sources["EV/EBITDA (peer range)"] = (
+                        f"{peer_low:.1f}x–{peer_high:.1f}x (rejected)",
+                        "peer_quality_gate",
+                        "inferred",
+                    )
+                else:
+                    peer_dev = max(abs(peer_low - implied), abs(peer_high - implied))
+                    width = min(max(peer_dev, 0.0), implied * 0.25)
+                    notes.append(
+                        f"Comps mid fixed to live EV/EBITDA {implied:.1f}x; "
+                        f"peer range {peer_low:.1f}x–{peer_high:.1f}x used for spread (capped ±25%)."
+                    )
+                    comps_field_sources["EV/EBITDA (peer range)"] = (
+                        f"{peer_low:.1f}x–{peer_high:.1f}x",
+                        "validated_peers",
+                        "estimated",
+                    )
             else:
                 notes.append(f"Comps anchored to live EV/EBITDA of {implied:.1f}x (±25% range).")
                 comps_field_sources["EV/EBITDA (peer range)"] = (
@@ -364,6 +378,24 @@ class ValuationService:
             TransactionInput(revenue=revenue, multiple=tx_multiple)
         )
         return comps, tx, comps_field_sources
+
+    def _reject_peer_range_for_mega_cap_tech(self, peer_low, peer_high, market_data, sector: str) -> bool:
+        if not market_data or not market_data.market_cap:
+            return False
+        _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+        if market_data.market_cap <= _mega_cap_usd_m:
+            return False
+
+        s = f"{sector or ''} {market_data.sector or ''}".lower()
+        tech_tokens = (
+            "technology", "tech", "software", "semiconductor", "information technology"
+        )
+        is_tech = any(tok in s for tok in tech_tokens)
+        if not is_tech:
+            return False
+
+        # Apple-class peers should not be valued on low-teens EV/EBITDA bands.
+        return float(peer_high) < 15.0
 
     def _financial_comps(self, market_data, sector_m, notes):
         """P/E and P/B based equity valuation for banks/insurers."""
