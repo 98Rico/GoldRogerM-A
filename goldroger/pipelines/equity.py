@@ -446,6 +446,9 @@ def run_analysis(
         and market_data.data_source == "companies_house"
         and not market_data.revenue_ttm
     ):
+        # For confirmed GB entity lookups, registry sector takes precedence over LLM guess.
+        if market_data.sector:
+            fund.sector = market_data.sector
         fund.company_name = market_data.company_name or fund.company_name
         fund.description = (
             f"UK registered private company (Companies House #{company_identifier}). "
@@ -1021,6 +1024,15 @@ def run_analysis(
             ),
             "registry_facts": (
                 market_data.additional_metadata if market_data and isinstance(market_data.additional_metadata, dict) else {}
+            ),
+            "strict_registry_mode": (
+                bool(
+                    company_type == "private"
+                    and company_identifier
+                    and market_data
+                    and market_data.data_source == "companies_house"
+                    and not market_data.revenue_ttm
+                )
             ),
         },
         InvestmentThesis,

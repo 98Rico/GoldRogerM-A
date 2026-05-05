@@ -34,6 +34,7 @@ Two modes:
 | GB Companies House metadata enrichment | ✅ Done | Pipeline now ingests SIC details, active directors/officers counts, incorporation date, and recent filing-history metadata for fundamentals + thesis grounding |
 | GB filing-history document ingestion | ✅ Done | Companies House provider now reads paginated filing history (bounded), indexes document metadata formats, and logs filing/document counts into analysis provenance |
 | GB statement-of-capital extraction | ✅ Done | Incorporation filing PDFs are now parsed for share class, total shares, aggregate nominal value, unpaid capital, and rights summary; surfaced in metadata and `sources.md` |
+| GB strict thesis grounding mode | ✅ Done | For confirmed GB entities with limited verified detail, thesis output now avoids named competitor/product/TAM speculation and uses registry facts as hard baseline |
 | Public company valuation (DCF + Comps + LBO) | ✅ Solid | yfinance, CAPM WACC, sector multiples |
 | Private company valuation — high-growth | ✅ Improved | DCF 20% / Comps 35% / Tx 45% weights |
 | Sector-calibrated growth + margin fallbacks | ✅ Done | `get_sector_rev_growth` / `get_sector_ebitda_margin` |

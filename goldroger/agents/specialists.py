@@ -234,6 +234,7 @@ class ReportWriterAgent(BaseAgent):
         ebitda_margin = context.get("ebitda_margin", "")
         identity_note = context.get("identity_note", "")
         registry_facts = context.get("registry_facts", {}) or {}
+        strict_registry_mode = bool(context.get("strict_registry_mode", False))
         rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated"
         margin_line = f"  EBITDA Margin: {ebitda_margin}\n" if ebitda_margin else ""
         has_revenue = (
@@ -268,6 +269,7 @@ CRITICAL IDENTITY RULE:
 - Never invent product claims (e.g., robotics, hardware, SaaS) unless directly supported by verified context above.
 - If SIC code descriptions are provided, use them as the primary business classification baseline.
 - If filing history/director metadata is provided, reference only those verified facts and avoid extrapolating unsupported operational claims.
+{"- STRICT REGISTRY MODE: Do NOT name specific competitors, products, fundraising events, partnerships, TAM figures, or growth percentages unless explicitly present in verified registry facts/context. Keep statements generic and evidence-bounded." if strict_registry_mode else ""}
 
 Return ONLY this JSON:
 {{
