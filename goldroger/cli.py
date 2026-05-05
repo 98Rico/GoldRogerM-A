@@ -355,7 +355,7 @@ def _metric_source_keys(metric: str) -> list[str]:
         "Free Cash Flow": ["Free Cash Flow"],
         "TAM": ["TAM", "Market Size"],
         "Market Growth": ["Market Growth"],
-        "Target": ["Target Price", "Implied EV"],
+        "Target": ["Implied Target Price", "Target Price", "Implied EV"],
         "Upside": ["Upside", "Upside/Downside"],
         "WACC": ["WACC"],
         "Terminal Growth": ["Terminal Growth"],
@@ -510,6 +510,21 @@ def print_result(result):
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
     ))
+    _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
+    _eq_bridge = src_map.get("Equity Value", {}).get("value")
+    _nd_bridge = src_map.get("Net Debt", {}).get("value")
+    _sh_bridge = src_map.get("Shares Outstanding", {}).get("value")
+    _tp_bridge = src_map.get("Implied Target Price", {}).get("value")
+    if _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge:
+        _tag_ev = footnotes.tag(_infer_source_note("Enterprise Value (blended)", _ev_bridge, src_map))
+        _tag_eq = footnotes.tag(_infer_source_note("Equity Value", _eq_bridge, src_map))
+        _tag_sh = footnotes.tag(_infer_source_note("Shares Outstanding", _sh_bridge, src_map))
+        _tag_tp = footnotes.tag(_infer_source_note("Implied Target Price", _tp_bridge, src_map))
+        _nd_txt = f" - Net Debt {_nd_bridge}" if _nd_bridge else ""
+        console.print(
+            f"[dim]Bridge:[/] EV {_ev_bridge}{_tag_ev}{_nd_txt} = Equity {_eq_bridge}{_tag_eq} "
+            f"→ / Shares {_sh_bridge}{_tag_sh} = Target {_tp_bridge}{_tag_tp}"
+        )
 
     # KPIs
     kpi_table = Table(title="Key Financials", show_header=True, header_style="bold magenta")

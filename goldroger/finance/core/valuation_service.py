@@ -196,8 +196,14 @@ class ValuationService:
         if market_data and market_data.beta:
             field_sources["Beta (β)"] = (f"{market_data.beta:.3f}", _rev_src, "verified")
         if market_data and market_data.forward_revenue_growth is not None:
+            _fg_src = (
+                "yfinance_analyst_revenue"
+                if market_data.forward_revenue_1y is not None
+                else "yfinance_earnings_proxy"
+            )
+            _fg_conf = "verified" if market_data.forward_revenue_1y is not None else "estimated"
             field_sources["Forward Revenue Growth"] = (
-                f"{market_data.forward_revenue_growth:+.1%}", "yfinance", "verified"
+                f"{market_data.forward_revenue_growth:+.1%}", _fg_src, _fg_conf
             )
         if market_data and market_data.market_cap:
             field_sources["Market Cap"] = (f"${market_data.market_cap:.0f}M", _rev_src, "verified")
@@ -268,6 +274,40 @@ class ValuationService:
 
         # ── 7. BUY / HOLD / SELL ─────────────────────────────────────────
         recommendation = self._compute_recommendation(blended, market_data, notes)
+        field_sources["Enterprise Value (blended)"] = (
+            f"${blended.blended:.0f}M",
+            "valuation_engine",
+            "inferred",
+        )
+        if (
+            market_data
+            and market_data.shares_outstanding
+            and market_data.shares_outstanding > 0
+            and recommendation.intrinsic_price is not None
+        ):
+            net_debt = market_data.net_debt or 0.0
+            equity_value = blended.blended - net_debt
+            field_sources["Equity Value"] = (
+                f"${equity_value:.0f}M",
+                "valuation_bridge",
+                "verified",
+            )
+            field_sources["Shares Outstanding"] = (
+                f"{market_data.shares_outstanding:.0f}M",
+                market_data.data_source or "yfinance",
+                "verified",
+            )
+            field_sources["Implied Target Price"] = (
+                f"${recommendation.intrinsic_price:.2f}",
+                "valuation_bridge",
+                "verified",
+            )
+        if recommendation.upside_pct is not None:
+            field_sources["Upside/Downside"] = (
+                f"{recommendation.upside_pct:+.1%}",
+                "valuation_engine",
+                "inferred",
+            )
 
         # ── 8. Sensitivity matrix ─────────────────────────────────────────
         sensitivity = self._build_sensitivity(dcf_input, wacc, terminal_growth)
@@ -450,14 +490,29 @@ class ValuationService:
 
             if market_data.forward_revenue_growth is not None:
                 fwd = market_data.forward_revenue_growth
-                # Fade curve: analyst year-1 estimate → converge to sustainable rate by year 5
-                # Avoids extrapolating hyper-growth (e.g. 95%) for 5 full years
-                long_run = min(max(fwd * 0.15, 0.04), 0.15)  # clamp long-run to 4–15%
+                # Mature mega-cap normalization:
+                # analyst 1Y growth can spike with cycle effects and should not be directly
+                # extrapolated for 5-year cash-flow projections.
+                _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+                if (
+                    market_data.market_cap
+                    and market_data.market_cap > _mega_cap_usd_m
+                    and fwd > 0.15
+                ):
+                    hist_cagr = self._historical_cagr(hist)
+                    norm_fwd = min(max((fwd * 0.45) + (hist_cagr * 0.55), 0.08), 0.12)
+                    notes.append(
+                        f"Forward growth normalised for mega-cap maturity: {fwd:.1%}→{norm_fwd:.1%} "
+                        f"(blend of analyst 1Y and historical CAGR)."
+                    )
+                    fwd = norm_fwd
+                # Multi-stage fade: near-term growth gradually converges to sustainable rate.
+                long_run = min(max(fwd * 0.35, 0.03), 0.08)  # clamp long-run to 3–8%
                 growth_rates = [
                     fwd,
-                    fwd * 0.60,
-                    fwd * 0.35,
-                    long_run * 1.30,
+                    max(fwd * 0.70, long_run * 1.80),
+                    max(fwd * 0.45, long_run * 1.40),
+                    long_run * 1.15,
                     long_run,
                 ]
                 series = []
@@ -466,7 +521,7 @@ class ValuationService:
                     rev = rev * (1 + g)
                     series.append(rev)
                 y1, y5 = growth_rates[0], growth_rates[-1]
-                notes.append(f"Revenue fade: {y1:.1%}→{y5:.1%} (analyst estimate + normalisation).")
+                notes.append(f"Revenue fade: {y1:.1%}→{y5:.1%} (multi-stage convergence).")
             else:
                 growth = min(self._historical_cagr(hist), 0.35)
                 series = [base * (1 + growth) ** i for i in range(1, self.PROJECTION_YEARS + 1)]

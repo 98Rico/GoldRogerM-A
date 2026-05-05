@@ -72,6 +72,8 @@ from .fill_gaps import fill_gaps
 
 load_dotenv()
 
+_MEGA_CAP_TECH_FALLBACK_PEERS = ["MSFT", "GOOGL", "NVDA", "AMZN", "META"]
+
 
 def _country_hint_from_market_data(market_data: MarketData | None) -> str:
     """Best-effort country hint inferred from provider/source name."""
@@ -331,8 +333,15 @@ def run_analysis(
                     f"MCap=${market_data.market_cap:.0f}M"
                 )
                 if market_data.forward_revenue_growth is not None:
+                    _fg_src = (
+                        "yfinance_analyst_revenue"
+                        if market_data.forward_revenue_1y is not None
+                        else "yfinance_earnings_proxy"
+                    )
+                    _fg_conf = "verified" if market_data.forward_revenue_1y is not None else "estimated"
                     console.print(
                         f"  [cyan]Forward growth: {market_data.forward_revenue_growth:+.1%}[/cyan]"
+                        + (" [dim](earnings-growth proxy)[/dim]" if _fg_conf == "estimated" else "")
                     )
                 sources.add("Revenue TTM", f"${market_data.revenue_ttm:.0f}M", "yfinance", "verified")
                 sources.add("EBITDA Margin", f"{market_data.ebitda_margin:.1%}", "yfinance", "verified")
@@ -343,12 +352,20 @@ def run_analysis(
                     sources.add(
                         "Forward Revenue Growth",
                         f"{market_data.forward_revenue_growth:+.1%}",
-                        "yfinance", "verified",
+                        _fg_src, _fg_conf,
                     )
                 if market_data.gross_margin is not None:
                     sources.add("Gross Margin", f"{market_data.gross_margin:.1%}", "yfinance", "verified")
+                if market_data.net_margin is not None:
+                    sources.add("Net Margin", f"{market_data.net_margin:.1%}", "yfinance", "verified")
+                if market_data.fcf_ttm is not None:
+                    sources.add("Free Cash Flow", f"${market_data.fcf_ttm:.0f}M", "yfinance", "verified")
                 if market_data.net_debt is not None:
                     sources.add("Net Debt", f"${market_data.net_debt:.0f}M", "yfinance", "verified")
+                if market_data.shares_outstanding is not None:
+                    sources.add("Shares Outstanding", f"{market_data.shares_outstanding:.0f}M", "yfinance", "verified")
+                if market_data.current_price is not None:
+                    sources.add("Current Price", f"${market_data.current_price:.2f}", "yfinance", "verified")
         log.end_step("market_data", t0)
         _done("Market Data", t0)
 
@@ -463,6 +480,13 @@ def run_analysis(
     # ── 2+2b+3. MARKET / PEERS / FINANCIALS — parallel ────────────────────
     _parallel_t0 = time.time()
     _peer_rev = market_data.revenue_ttm if market_data and market_data.revenue_ttm else None
+    _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+    _skip_tx_comps = bool(
+        company_type == "public"
+        and market_data
+        and market_data.market_cap
+        and market_data.market_cap > _mega_cap_usd_m
+    )
 
     def _do_market():
         _t = _step("Market Analysis")
@@ -527,11 +551,17 @@ def run_analysis(
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
-        _fut_tx = _pool.submit(_do_tx_comps)
+        _fut_tx = None if _skip_tx_comps else _pool.submit(_do_tx_comps)
         mkt = _fut_mkt.result()
         _peers_raw, _peers_err = _fut_peers.result()
         fin = _fut_fin.result()
-        _tx_raw, _tx_err = _fut_tx.result()
+        if _fut_tx is not None:
+            _tx_raw, _tx_err = _fut_tx.result()
+        else:
+            _tx_raw, _tx_err = None, None
+            console.rule("[bold cyan]Transaction Comps")
+            console.print("  [dim]Skipped for mega-cap public company (tx weight forced to 0%).[/dim]")
+            _done("Transaction Comps", time.time())
 
     # Override LLM-derived financials with registry-verified values when available
     fin = _reconcile_financials(fin, market_data, console)
@@ -637,6 +667,56 @@ def run_analysis(
                         f"  [yellow]Peer comps: fewer than 3 validated peers{drop_note} "
                         f"— using sector-table multiples[/yellow]"
                     )
+                    _sector_txt = (fund.sector or "").lower()
+                    if (
+                        market_data
+                        and market_data.market_cap
+                        and market_data.market_cap > _mega_cap_usd_m
+                        and any(tok in _sector_txt for tok in ("technology", "tech", "software", "semiconductor"))
+                    ):
+                        _self_ticker = (market_data.ticker or "").upper()
+                        _fallback_tickers = [t for t in _MEGA_CAP_TECH_FALLBACK_PEERS if t != _self_ticker]
+                        _fb = build_peer_multiples(_fallback_tickers, target_sector=_target_sector)
+                        if _fb and _fb.n_peers >= 3:
+                            peer_multiples = _fb
+                            console.print(
+                                "  [cyan]Using deterministic mega-cap tech peers:[/cyan] "
+                                + ", ".join(p.ticker for p in _fb.peers[:6])
+                            )
+                            if _fb.ev_ebitda_median:
+                                console.print(
+                                    f"  Median EV/EBITDA: {_fb.ev_ebitda_median:.1f}x"
+                                    + (
+                                        f"  EV/Rev: {_fb.ev_revenue_median:.1f}x"
+                                        if _fb.ev_revenue_median else ""
+                                    )
+                                )
+                            peer_comps_table = PeerCompsTable(
+                                peers=[
+                                    PeerComp(
+                                        name=p.name,
+                                        ticker=p.ticker,
+                                        ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
+                                        ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
+                                        ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
+                                        revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
+                                    )
+                                    for p in _fb.peers
+                                ],
+                                median_ev_ebitda=(
+                                    f"{_fb.ev_ebitda_median:.1f}x"
+                                    if _fb.ev_ebitda_median else None
+                                ),
+                                median_ev_revenue=(
+                                    f"{_fb.ev_revenue_median:.1f}x"
+                                    if _fb.ev_revenue_median else None
+                                ),
+                                median_ebitda_margin=(
+                                    f"{_fb.ebitda_margin_median:.1%}"
+                                    if _fb.ebitda_margin_median else None
+                                ),
+                                n_peers=_fb.n_peers,
+                            )
         except Exception as e:
             console.print(f"  [yellow]Peer post-processing skipped: {e}[/yellow]")
     elif _peers_err:
@@ -866,6 +946,8 @@ def run_analysis(
         methods=_methods,
         sources=[result.data_confidence],
     )
+    sources.add_once("Target Price", _target_price or "N/A", "valuation_engine", "inferred")
+    sources.add_once("Upside/Downside", val.upside_downside or "N/A", "valuation_engine", "inferred")
 
     if result.lbo:
         lbo = result.lbo
@@ -874,6 +956,26 @@ def run_analysis(
             f"IRR {lbo.irr:.1%} / {lbo.moic:.1f}x MOIC / "
             f"{lbo.leverage_at_entry:.1f}x entry leverage"
         )
+    if result.sensitivity and result.sensitivity.ev_matrix:
+        try:
+            _sr = result.sensitivity
+            _wi = min(range(len(_sr.wacc_range)), key=lambda i: abs(_sr.wacc_range[i] - result.wacc_used))
+            _ti = min(range(len(_sr.tg_range)), key=lambda i: abs(_sr.tg_range[i] - result.terminal_growth_used))
+            _i_up = min(_wi + 1, len(_sr.wacc_range) - 1)
+            _i_dn = max(_wi - 1, 0)
+            _ev_up = _sr.ev_matrix[_i_up][_ti]
+            _ev_dn = _sr.ev_matrix[_i_dn][_ti]
+            console.print(
+                f"  [dim]Sensitivity (WACC ±100bps): {_fmt_ev_human(_ev_dn)} to {_fmt_ev_human(_ev_up)}[/dim]"
+            )
+            sources.add_once(
+                "Sensitivity (WACC ±100bps)",
+                f"{_fmt_ev_human(_ev_dn)} to {_fmt_ev_human(_ev_up)}",
+                "valuation_engine",
+                "inferred",
+            )
+        except Exception:
+            pass
     for note in result.notes:
         console.print(f"  [dim]• {note}[/dim]")
 
@@ -971,10 +1073,18 @@ def run_analysis(
                 f"{_fmt_ev(scenarios_out.bull.blended_ev)}"
             ),
         )
+        # Ensure base scenario reconciles with current method outputs and blend.
+        if football_field.base:
+            if result.dcf:
+                football_field.base.dcf_ev = _fmt_ev(result.dcf.enterprise_value)
+            if result.comps:
+                football_field.base.comps_ev = _fmt_ev(result.comps.mid)
+            if blended_ev:
+                football_field.base.blended_ev = _fmt_ev(blended_ev)
         console.print(
-            f"  [bold]Football field:[/bold] Bear {_fmt_ev(scenarios_out.bear.blended_ev)} "
-            f"/ Base {_fmt_ev(scenarios_out.base.blended_ev)} "
-            f"/ Bull {_fmt_ev(scenarios_out.bull.blended_ev)}"
+            f"  [bold]Football field:[/bold] Bear {football_field.bear.blended_ev if football_field.bear else 'N/A'} "
+            f"/ Base {football_field.base.blended_ev if football_field.base else 'N/A'} "
+            f"/ Bull {football_field.bull.blended_ev if football_field.bull else 'N/A'}"
         )
     except Exception as e:
         console.print(f"  [yellow]Scenarios skipped: {e}[/yellow]")
@@ -1103,4 +1213,11 @@ def run_analysis(
         sources_md=sources.to_markdown(),
     )
     fill_gaps(analysis, fund.sector or "")
+    _tam_v = analysis.market.market_size or "Not available"
+    _mg_v = analysis.market.market_growth or "Not available"
+    _tam_conf = "inferred" if "not available" in str(_tam_v).lower() else "estimated"
+    _mg_conf = "inferred" if "not available" in str(_mg_v).lower() else "estimated"
+    sources.add_once("TAM", _tam_v, "market_analysis", _tam_conf)
+    sources.add_once("Market Growth", _mg_v, "market_analysis", _mg_conf)
+    analysis.sources_md = sources.to_markdown()
     return analysis

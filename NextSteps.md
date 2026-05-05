@@ -322,5 +322,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 27 | Full per-field provenance — `sources.md` logs all financial inputs with source + confidence; `SourcesLog.add_once()` deduplication; WACC correctly tagged `verified` when CAPM used | ✅ |
 | 28 | CLI footnote provenance — rendered `(S#)` markers for displayed values + source legend (source/confidence/url) | ✅ |
 | 29 | Valuation credibility hardening — market-context quality penalties, verified forward growth precedence, zero-weight method hiding, mega-cap tech peer-range gate, standardized CLI formatting | ✅ |
+| 30 | IC-grade credibility pass — skip tx comps for mega-caps, deterministic mega-cap peer fallback, EV→equity bridge provenance, mega-cap growth normalization, base football-field reconciliation | ✅ |
 
 </details>

@@ -89,3 +89,23 @@ def test_mega_cap_tech_rejects_low_peer_range():
     )
     assert out.field_sources["EV/EBITDA (peer range)"][1] == "peer_quality_gate"
     assert "rejected" in out.field_sources["EV/EBITDA (peer range)"][0]
+
+
+def test_forward_growth_source_and_mega_cap_normalisation_note():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    market_data.forward_revenue_growth = 0.22
+    market_data.forward_revenue_1y = None  # force proxy classification
+
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={"_assumption_source": "system"},
+        market_data=market_data,
+        sector="Technology",
+    )
+
+    assert "Forward Revenue Growth" in out.field_sources
+    assert out.field_sources["Forward Revenue Growth"][1] == "yfinance_earnings_proxy"
+    assert out.field_sources["Forward Revenue Growth"][2] == "estimated"
+    assert any("normalised for mega-cap maturity" in n for n in out.notes)

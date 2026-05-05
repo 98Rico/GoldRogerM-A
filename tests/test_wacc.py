@@ -3,17 +3,17 @@ from goldroger.finance.core.wacc import compute_capm_wacc, capm_cost_of_equity
 
 def test_capm_beta_one():
     re = capm_cost_of_equity(beta=1.0)
-    assert abs(re - 0.10) < 0.001, f"Expected ~10%, got {re:.3%}"
+    assert abs(re - 0.105) < 0.001, f"Expected ~10.5%, got {re:.3%}"
 
 
 def test_capm_high_beta():
     re = capm_cost_of_equity(beta=2.0)
-    assert abs(re - 0.155) < 0.001, f"Expected ~15.5%, got {re:.3%}"
+    assert abs(re - 0.165) < 0.001, f"Expected ~16.5%, got {re:.3%}"
 
 
 def test_wacc_equity_only():
     wacc = compute_capm_wacc(beta=1.0, market_cap=1000.0, net_debt=0.0, tax_rate=0.25)
-    assert abs(wacc - 0.10) < 0.001, f"Expected ~10% (equity-only), got {wacc:.3%}"
+    assert abs(wacc - 0.105) < 0.001, f"Expected ~10.5% (equity-only), got {wacc:.3%}"
 
 
 def test_wacc_with_debt():

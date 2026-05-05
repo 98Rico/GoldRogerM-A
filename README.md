@@ -475,3 +475,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Zero-weight valuation cleanup — methods with 0% weight are hidden from the valuation table
 ✔ Mega-cap tech peer-quality gate — low EV/EBITDA peer bands (e.g. 8x–12x) are rejected for Apple-class companies
 ✔ Standardized CLI financial formatting — consistent `%`, `$M/$B/$T`, and readable valuation cells
+✔ Mega-cap tx-comps skip — transaction comps are no longer executed when tx weight is forced to 0%
+✔ EV→Equity bridge transparency — valuation output now logs blended EV, equity value, share count, and implied target price provenance
+✔ Mega-cap growth normalization — forward growth is normalized for mature mega-caps with multi-stage fade
+✔ Forward growth provenance clarity — distinguishes analyst revenue estimate vs earnings-growth proxy in source tags
+✔ Football-field base reconciliation — base scenario now reconciles with current DCF/comps/blended outputs

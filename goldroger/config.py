@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 @dataclass
 class WACCConfig:
     risk_free_rate: float = 0.045        # 10-yr US Treasury proxy, April 2025
-    equity_risk_premium: float = 0.055   # Damodaran long-run ERP
+    equity_risk_premium: float = 0.060   # institutional base ERP assumption
 
 
 @dataclass
