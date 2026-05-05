@@ -109,3 +109,20 @@ def test_forward_growth_source_and_mega_cap_normalisation_note():
     assert out.field_sources["Forward Revenue Growth"][1] == "yfinance_earnings_proxy"
     assert out.field_sources["Forward Revenue Growth"][2] == "estimated"
     assert any("normalised for mega-cap maturity" in n for n in out.notes)
+
+
+def test_recommendation_guardrail_caps_sell_on_high_dispersion():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "ev_ebitda_range": [60.0, 80.0],  # force large comps-vs-dcf dispersion
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert out.recommendation.recommendation in {"HOLD", "BUY"}
+    assert any("Recommendation guardrail" in n for n in out.notes)

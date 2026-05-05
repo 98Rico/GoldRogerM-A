@@ -75,6 +75,24 @@ load_dotenv()
 _MEGA_CAP_TECH_FALLBACK_PEERS = ["MSFT", "GOOGL", "NVDA", "AMZN", "META"]
 
 
+def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> list[str]:
+    """Rewrite stale 'upcoming' catalysts into recent-events phrasing."""
+    if run_year is None:
+        run_year = time.gmtime().tm_year
+    out: list[str] = []
+    for c in catalysts or []:
+        txt = str(c or "").strip()
+        if not txt:
+            continue
+        years = [int(y) for y in _re.findall(r"\b(20\d{2})\b", txt)]
+        stale = any(y < run_year for y in years)
+        if stale:
+            txt = _re.sub(r"\b(upcoming|expected|will|next)\b", "recent", txt, flags=_re.IGNORECASE)
+            txt = f"Recent event context: {txt}"
+        out.append(txt)
+    return out
+
+
 def _country_hint_from_market_data(market_data: MarketData | None) -> str:
     """Best-effort country hint inferred from provider/source name."""
     _src = (market_data.data_source or "").lower() if market_data else ""
@@ -763,6 +781,11 @@ def run_analysis(
         market_data=market_data,
         financials=fin.model_dump(),
         market_analysis=mkt.model_dump(),
+        proxy_growth_used=bool(
+            market_data
+            and market_data.forward_revenue_growth is not None
+            and market_data.forward_revenue_1y is None
+        ),
     )
     console.print(
         f"  [bold]Data quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
@@ -1177,6 +1200,7 @@ def run_analysis(
         InvestmentThesis,
         InvestmentThesis(thesis="N/A"),
     )
+    thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
     log.end_step("thesis", t0)
     _done("Investment Thesis", t0)
 

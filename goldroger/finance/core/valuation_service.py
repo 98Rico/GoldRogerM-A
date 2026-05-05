@@ -274,6 +274,39 @@ class ValuationService:
 
         # ── 7. BUY / HOLD / SELL ─────────────────────────────────────────
         recommendation = self._compute_recommendation(blended, market_data, notes)
+        recommendation = self._apply_recommendation_guardrails(
+            recommendation=recommendation,
+            dcf_output=dcf_output,
+            comps_output=comps_output,
+            market_data=market_data,
+            notes=notes,
+            ebitda_margin=ebitda_margin,
+        )
+
+        if market_data and market_data.ev_ebitda_market:
+            _peer_low = _peer_high = None
+            _peer_range = comps_field_sources.get("EV/EBITDA (peer range)")
+            if _peer_range:
+                _txt = str(_peer_range[0])
+                _nums = __import__("re").findall(r"([0-9]+(?:\.[0-9]+)?)x", _txt)
+                if len(_nums) >= 2:
+                    _peer_low, _peer_high = float(_nums[0]), float(_nums[1])
+            if _peer_low is not None and _peer_high is not None and _peer_high > 0:
+                _peer_med = (_peer_low + _peer_high) / 2.0
+                _delta = ((market_data.ev_ebitda_market / _peer_med) - 1.0) * 100.0
+                _stance = "premium" if _delta >= 0 else "discount"
+                notes.append(
+                    f"Implied vs peer median: {market_data.ev_ebitda_market:.1f}x vs {_peer_med:.1f}x "
+                    f"→ {abs(_delta):.1f}% {_stance}."
+                )
+                if _delta >= 0:
+                    notes.append(
+                        "Premium rationale to test: margin durability, FCF conversion, and balance-sheet quality."
+                    )
+                else:
+                    notes.append(
+                        "Discount rationale to test: growth deceleration, innovation exposure, and cyclicality."
+                    )
         field_sources["Enterprise Value (blended)"] = (
             f"${blended.blended:.0f}M",
             "valuation_engine",
@@ -337,6 +370,40 @@ class ValuationService:
             weights_used=weights,
             notes=notes,
         )
+
+    def _apply_recommendation_guardrails(
+        self,
+        recommendation: RecommendationOutput,
+        dcf_output: Optional[DCFOutput],
+        comps_output: Optional[CompsOutput],
+        market_data,
+        notes: list[str],
+        ebitda_margin: float,
+    ) -> RecommendationOutput:
+        if recommendation.recommendation != "SELL":
+            return recommendation
+
+        rec = recommendation.recommendation
+        if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
+            ratio = max(dcf_output.enterprise_value, comps_output.mid) / min(dcf_output.enterprise_value, comps_output.mid)
+            if ratio > 2.0:
+                notes.append(
+                    f"Recommendation guardrail: high valuation dispersion ({ratio:.1f}x DCF/comps) "
+                    "→ downgraded SELL to HOLD."
+                )
+                rec = "HOLD"
+
+        if rec == "SELL" and ebitda_margin >= 0.25:
+            _g = market_data.forward_revenue_growth if market_data else None
+            if _g is None or _g > -0.02:
+                notes.append(
+                    "Recommendation guardrail: resilient margins and no structural growth collapse "
+                    "→ capped at HOLD."
+                )
+                rec = "HOLD"
+
+        recommendation.recommendation = rec
+        return recommendation
 
     # ── Comps paths ───────────────────────────────────────────────────────────
 

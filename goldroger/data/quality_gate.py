@@ -24,11 +24,13 @@ def assess_data_quality(
     market_data: Optional[MarketData],
     financials: dict,
     market_analysis: Optional[dict] = None,
+    proxy_growth_used: bool = False,
 ) -> DataQualityReport:
     score = 100
     blockers: list[str] = []
     warnings: list[str] = []
     checks: dict[str, str] = {}
+    has_estimated_inputs = False
 
     rev = _num(
         (market_data.revenue_ttm if market_data else None)
@@ -61,12 +63,29 @@ def assess_data_quality(
             checks["ebitda_margin"] = "ok"
 
     if company_type == "public":
-        score = _score_public(market_data, checks, warnings, blockers, score)
+        score, has_estimated_inputs = _score_public(
+            market_data, checks, warnings, blockers, score, has_estimated_inputs
+        )
     else:
-        score = _score_private(market_data, checks, warnings, score)
-    score = _score_market_context(market_analysis, checks, warnings, score)
+        score, has_estimated_inputs = _score_private(
+            market_data, checks, warnings, score, has_estimated_inputs
+        )
+    score, has_estimated_inputs = _score_market_context(
+        market_analysis, checks, warnings, score, has_estimated_inputs
+    )
+
+    if proxy_growth_used:
+        score -= 5
+        has_estimated_inputs = True
+        checks["forward_growth_source"] = "proxy"
+        warnings.append("Forward growth uses proxy signal (not analyst revenue estimate)")
+    elif market_data and market_data.forward_revenue_growth is not None:
+        checks["forward_growth_source"] = "analyst_estimate"
 
     score = max(0, min(100, score))
+    # Credibility cap: estimates present => max 90. Perfect 100 reserved for fully verified sets.
+    if has_estimated_inputs and score > 90:
+        score = 90
     tier = _tier(score)
     is_blocked = "Missing revenue" in blockers
     return DataQualityReport(
@@ -79,12 +98,12 @@ def assess_data_quality(
     )
 
 
-def _score_public(market_data, checks, warnings, blockers, score: int) -> int:
+def _score_public(market_data, checks, warnings, blockers, score: int, has_estimated_inputs: bool) -> tuple[int, bool]:
     if market_data is None:
         score -= 35
         blockers.append("Missing market data")
         checks["market_data"] = "missing"
-        return score
+        return score, has_estimated_inputs
 
     checks["market_data"] = "ok"
 
@@ -109,15 +128,16 @@ def _score_public(market_data, checks, warnings, blockers, score: int) -> int:
     else:
         checks["beta"] = "ok"
 
-    return score
+    return score, has_estimated_inputs
 
 
-def _score_private(market_data, checks, warnings, score: int) -> int:
+def _score_private(market_data, checks, warnings, score: int, has_estimated_inputs: bool) -> tuple[int, bool]:
     if market_data is None:
         score -= 25
         warnings.append("No registry/provider market data found")
         checks["provider_record"] = "missing"
-        return score
+        has_estimated_inputs = True
+        return score, has_estimated_inputs
 
     checks["provider_record"] = "ok"
     conf = (market_data.confidence or "inferred").lower()
@@ -126,17 +146,21 @@ def _score_private(market_data, checks, warnings, score: int) -> int:
     elif conf == "estimated":
         score -= 8
         checks["confidence"] = "estimated"
+        has_estimated_inputs = True
     else:
         score -= 15
         checks["confidence"] = "inferred"
         warnings.append("Private revenue confidence is inferred")
-    return score
+        has_estimated_inputs = True
+    return score, has_estimated_inputs
 
 
-def _score_market_context(market_analysis, checks, warnings, score: int) -> int:
+def _score_market_context(
+    market_analysis, checks, warnings, score: int, has_estimated_inputs: bool
+) -> tuple[int, bool]:
     if not isinstance(market_analysis, dict):
         checks["market_context"] = "not_provided"
-        return score
+        return score, has_estimated_inputs
 
     checks["market_context"] = "ok"
     market_size = market_analysis.get("market_size")
@@ -149,14 +173,18 @@ def _score_market_context(market_analysis, checks, warnings, score: int) -> int:
         warnings.append("Missing TAM / market size context")
         checks["market_size"] = "missing"
     else:
-        checks["market_size"] = "ok"
+        checks["market_size"] = "estimated"
+        score -= 5
+        has_estimated_inputs = True
 
     if _text_missing(market_growth):
         score -= 8
         warnings.append("Missing market growth context")
         checks["market_growth"] = "missing"
     else:
-        checks["market_growth"] = "ok"
+        checks["market_growth"] = "estimated"
+        score -= 5
+        has_estimated_inputs = True
 
     if _text_missing(market_segment):
         score -= 6
@@ -172,7 +200,7 @@ def _score_market_context(market_analysis, checks, warnings, score: int) -> int:
     else:
         checks["key_trends"] = "ok"
 
-    return score
+    return score, has_estimated_inputs
 
 
 def _tier(score: int) -> str:

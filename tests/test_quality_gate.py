@@ -57,3 +57,31 @@ def test_public_quality_penalized_when_market_context_missing():
     assert out.score <= 80
     assert out.checks.get("market_size") == "missing"
     assert out.checks.get("market_growth") == "missing"
+
+
+def test_quality_cap_at_90_when_estimates_present():
+    md = MarketData(
+        ticker="AAPL",
+        company_name="Apple",
+        sector="Technology",
+        revenue_ttm=400000.0,
+        ebitda_margin=0.34,
+        market_cap=3000000.0,
+        ev_ebitda_market=25.0,
+        beta=1.0,
+        forward_revenue_growth=0.20,
+        forward_revenue_1y=None,  # proxy
+    )
+    out = assess_data_quality(
+        "public",
+        md,
+        {"revenue_current": 400000.0},
+        market_analysis={
+            "market_size": "$500B",
+            "market_growth": "6%",
+            "market_segment": "Consumer devices",
+            "key_trends": ["AI", "Services"],
+        },
+        proxy_growth_used=True,
+    )
+    assert out.score <= 90

@@ -480,3 +480,7 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Mega-cap growth normalization — forward growth is normalized for mature mega-caps with multi-stage fade
 ✔ Forward growth provenance clarity — distinguishes analyst revenue estimate vs earnings-growth proxy in source tags
 ✔ Football-field base reconciliation — base scenario now reconciles with current DCF/comps/blended outputs
+✔ Time-aware catalyst guardrail — stale “upcoming” catalysts are rewritten as recent-event context
+✔ Quality score credibility cap — any estimated/proxy input caps data quality at 90
+✔ Comps interpretation layer — output now states implied premium/discount vs peer median with rationale hooks
+✔ Recommendation guardrails — high method dispersion or resilient fundamentals can cap SELL to HOLD
