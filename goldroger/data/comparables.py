@@ -23,8 +23,10 @@ from math import log10
 from typing import Optional
 
 import httpx
+import yfinance as yf
 
 from goldroger.data.fetcher import fetch_market_data, resolve_ticker, MarketData
+from goldroger.utils.cache import peer_universe_cache
 
 MIN_VALID_PEERS = 3
 _HTTP = httpx.Client(
@@ -328,6 +330,71 @@ def find_peers_dynamic(
                 peers.append(t.upper())
 
     return list(dict.fromkeys(peers))
+
+
+def find_peers_deterministic_quick(
+    target_md: MarketData | None,
+    target_sector: str,
+    target_peers: int = 12,
+) -> list[str]:
+    """
+    Deterministic quick peer universe (no LLM / no generic web-search endpoint).
+    Uses yfinance Sector/Industry endpoints and caches the universe for 24h.
+    """
+    if target_md is None:
+        return []
+
+    meta = target_md.additional_metadata if isinstance(target_md.additional_metadata, dict) else {}
+    sector_key = str(meta.get("sector_key") or "").strip()
+    industry_key = str(meta.get("industry_key") or "").strip()
+    cache_key = f"quick_peers:{sector_key}:{industry_key}:{target_sector}"
+    cached = peer_universe_cache.get(cache_key)
+    if cached is not None:
+        return list(cached)
+
+    candidates: list[str] = []
+
+    def _extract_symbols(df_like) -> list[str]:
+        out: list[str] = []
+        try:
+            if df_like is None:
+                return out
+            if hasattr(df_like, "columns") and "symbol" in getattr(df_like, "columns", []):
+                out.extend([str(x).upper() for x in df_like["symbol"].tolist() if str(x).strip()])
+            if hasattr(df_like, "index"):
+                out.extend([str(x).upper() for x in list(df_like.index) if str(x).strip()])
+        except Exception:
+            pass
+        return out
+
+    try:
+        if industry_key:
+            ind = yf.Industry(industry_key)
+            candidates.extend(_extract_symbols(getattr(ind, "top_performing_companies", None)))
+            candidates.extend(_extract_symbols(getattr(ind, "top_growth_companies", None)))
+    except Exception:
+        pass
+
+    try:
+        if sector_key:
+            sec = yf.Sector(sector_key)
+            candidates.extend(_extract_symbols(getattr(sec, "top_companies", None)))
+            # yfinance Sector.industries may contain representative symbols.
+            industries = getattr(sec, "industries", None)
+            candidates.extend(_extract_symbols(industries))
+    except Exception:
+        pass
+
+    # Deterministic fallback: narrow yahoo-finance endpoint query (not LLM/web-search agent).
+    if len(set(candidates)) < 5:
+        candidates.extend(_search_yahoo_tickers(f"{target_sector} equities", limit=20))
+
+    # Deduplicate, remove self ticker, and cap.
+    self_ticker = (target_md.ticker or "").upper().strip()
+    out = [t for t in dict.fromkeys(candidates) if t and t != self_ticker]
+    out = out[:max(5, target_peers)]
+    peer_universe_cache.set(cache_key, out)
+    return out
 
 
 # ── Core functions ────────────────────────────────────────────────────────────

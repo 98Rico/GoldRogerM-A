@@ -269,8 +269,8 @@ class BaseAgent:
         quick_mode = bool(context.get("quick_mode", False))
         effective_retries = 1 if quick_mode else self.max_retries
         effective_tool_rounds = 1 if quick_mode else self.max_tool_rounds
-        max_queries = int(context.get("max_queries", 5 if quick_mode else 8))
-        max_results = int(context.get("max_results", 3 if quick_mode else 5))
+        max_queries = int(context.get("max_queries", 5 if quick_mode else 6))
+        max_results = int(context.get("max_results", 3 if quick_mode else 3))
         seen_queries: set[str] = set()
         queries_used = 0
 

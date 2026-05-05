@@ -132,9 +132,22 @@ def _fmt_ev_human(v_m: float) -> str:
 
 
 # ── Agent runner with retry ────────────────────────────────────────────────
-def _parse_with_retry(agent, company, company_type, context, model_class, fallback, *, fatal_on_fail: bool = False):
+def _parse_with_retry(
+    agent,
+    company,
+    company_type,
+    context,
+    model_class,
+    fallback,
+    *,
+    fatal_on_fail: bool = False,
+    retry_on_fail: bool = True,
+    log_raw_errors: bool = False,
+):
     """Run agent, parse JSON output; retry once with strict hint on failure."""
     def _log_bad_json(raw_text: Any, stage: str) -> None:
+        if not log_raw_errors:
+            return
         try:
             _raw = str(raw_text or "")
             # Keep a large slice so debugging has real context.
@@ -147,6 +160,10 @@ def _parse_with_retry(agent, company, company_type, context, model_class, fallba
     result = parse_model(raw, model_class, fallback)
     if did_fallback(result):
         _log_bad_json(raw, "first pass")
+        if not retry_on_fail:
+            if fatal_on_fail:
+                raise ValueError(f"{agent.__class__.__name__}: invalid JSON (retry disabled)")
+            return result
         console.print("  [yellow]JSON parse failed — retrying with strict prompt[/yellow]")
         strict_ctx = {**context, "__strict_json_hint": True}
         try:

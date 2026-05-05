@@ -526,3 +526,9 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Retry throttling in quick mode — reduced LLM retries/tool rounds for faster degraded output instead of long retry chains
 ✔ End-to-end latency controls — explicit 30s caps for market/peer stages and 20s cap for report writer
 ✔ Timing diagnostics in output — final report now prints per-stage timings and total runtime for regression tracking
+✔ Real quick-mode pipeline split — `--quick` now runs a bounded fast path and skips deep market research/TAM workflows
+✔ Deterministic quick peers — quick mode now bypasses LLM peer discovery and uses a deterministic sector/industry universe screen
+✔ Quick-mode retry suppression — JSON retry loops are curtailed in quick mode to avoid long degraded stalls
+✔ Pipeline status semantics — final status now uses explicit `OK/SKIPPED_QUICK_MODE/TIMEOUT/FAILED/DEGRADED` stage outcomes
+✔ Failure-safe rendering — `INCONCLUSIVE` outputs suppress target/bridge/fair-value style leakage in final display
+✔ Debug-gated diagnostics — noisy raw parse diagnostics and deep peer traces are now behind `--debug`

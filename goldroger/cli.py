@@ -506,19 +506,20 @@ def print_result(result):
         return None
 
     # Header
-    rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(v.recommendation or "", "white")
+    _is_inconclusive = (v.recommendation or "").upper().startswith("INCONCLUSIVE")
+    rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow", "INCONCLUSIVE": "magenta"}.get((v.recommendation or "").split(" ")[0], "white")
     console.print()
-    _target_display = "N/A" if (v.recommendation or "").upper().startswith("INCONCLUSIVE") else (v.target_price or v.implied_value)
+    _target_display = "N/A" if _is_inconclusive else (v.target_price or v.implied_value)
     _fv_range = _source_value("Fair Value Range")
     _ev_display = (
         f" | Implied EV: {v.implied_value}"
-        if (v.target_price and not (v.recommendation or "").upper().startswith("INCONCLUSIVE"))
+        if (v.target_price and not _is_inconclusive)
         else ""
     )
     _target_line = (
         f"Fair Value Range: {_value_with_source('Fair Value Range', _fv_range)} | "
         f"Point Estimate: {_value_with_source('Target', _target_display)}"
-        if _fv_range and v.target_price and not (v.recommendation or "").upper().startswith("INCONCLUSIVE")
+        if _fv_range and v.target_price and not _is_inconclusive
         else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
     )
     console.print(Panel(
@@ -537,7 +538,9 @@ def print_result(result):
             f"  Market analysis: {_pipeline_status.get('market_analysis', 'N/A')}\n"
             f"  Peers: {_pipeline_status.get('peers', 'N/A')}\n"
             f"  Valuation: {_pipeline_status.get('valuation', 'N/A')}\n"
-            f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}"
+            f"  Model signal: {_pipeline_status.get('model_signal', 'N/A')}\n"
+            f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
+            f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}"
         )
     _timings = (getattr(result, "data_quality", {}) or {}).get("timings_s", {})
     if _timings:
@@ -555,7 +558,7 @@ def print_result(result):
     _nd_bridge = src_map.get("Net Debt", {}).get("value")
     _sh_bridge = src_map.get("Shares Outstanding", {}).get("value")
     _tp_bridge = src_map.get("Implied Target Price", {}).get("value")
-    if _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge:
+    if (not _is_inconclusive) and _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge:
         _tag_ev = footnotes.tag(_infer_source_note("Enterprise Value (blended)", _ev_bridge, src_map))
         _tag_eq = footnotes.tag(_infer_source_note("Equity Value", _eq_bridge, src_map))
         _tag_sh = footnotes.tag(_infer_source_note("Shares Outstanding", _sh_bridge, src_map))
@@ -586,7 +589,7 @@ def print_result(result):
     console.print(kpi_table)
 
     # Valuation methods
-    if v.methods:
+    if v.methods and not _is_inconclusive:
         val_table = Table(title="Valuation Football Field", show_header=True, header_style="bold yellow")
         val_table.add_column("Method")
         val_table.add_column("Low")
@@ -679,6 +682,7 @@ def main():
     )
     parser.add_argument("--llm", default=None, help="LLM provider: mistral (default), anthropic, openai")
     parser.add_argument("--country-hint", default="", help="Optional ISO-2 country hint for private company resolution (FR/GB/DE/NL/ES/US)")
+    parser.add_argument("--debug", action="store_true", help="Show verbose diagnostics (JSON parse/raw search details, full notes)")
     args = parser.parse_args()
 
     if args.list_sources:
@@ -747,7 +751,7 @@ def main():
             result = run_analysis(confirmed_company, args.type, llm=args.llm, siren=args.siren,
                                    interactive=args.interactive, data_sources=selected_sources,
                                    country_hint=country_hint, company_identifier=company_identifier,
-                                   quick_mode=args.quick)
+                                   quick_mode=args.quick, debug=args.debug)
             print_result(result)
 
         if args.output:

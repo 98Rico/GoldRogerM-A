@@ -295,6 +295,12 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
             analyst_target_price=float(target) if target else None,
             analyst_recommendation=rec,
             interest_expense=interest_expense,
+            additional_metadata={
+                "sector_key": info.get("sectorKey"),
+                "industry_key": info.get("industryKey"),
+                "industry": info.get("industry"),
+                "country": info.get("country"),
+            },
         )
     except Exception as exc:
         print(f"[fetcher] Error fetching {ticker}: {exc}")

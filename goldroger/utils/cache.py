@@ -49,3 +49,4 @@ class TTLCache:
 # Module-level singletons
 market_data_cache = TTLCache(ttl_seconds=3600)   # yfinance: 1 hour
 ticker_cache = TTLCache(ttl_seconds=86400)        # ticker resolution: 24 hours
+peer_universe_cache = TTLCache(ttl_seconds=86400) # peer universe snapshots: 24 hours

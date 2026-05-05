@@ -333,5 +333,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 38 | Reliability regression hotfix — fail-fast 60s agent timeouts, fatal JSON parsing for market analysis, explicit `INCONCLUSIVE` failed-valuation state (no peers + DCF sanity fail), non-contradictory comps messaging, and stronger quality penalties for weak/missing peers | ✅ |
 | 39 | Temporal + fail-fast stabilization — stale-year query sanitization, 30s hard timeouts for market/peer agents, pipeline status reporting, `INCONCLUSIVE` target suppression, strict market-failure data consistency, and cleaner concise output formatting | ✅ |
 | 40 | Quick-mode performance hardening — skip deep market analysis in `--quick`, cap web-search query budgets, reduce retries/tool rounds, add report-writer timeout fallback, and expose per-stage timing diagnostics in final output | ✅ |
+| 41 | Quick-pipeline architecture hardening — deterministic quick peer screening (no LLM peer discovery), quick-mode JSON retry suppression, explicit stage-status semantics (`OK/SKIPPED_QUICK_MODE/TIMEOUT/FAILED/DEGRADED`), stricter INCONCLUSIVE rendering suppression, and `--debug` gated diagnostics | ✅ |
 
 </details>

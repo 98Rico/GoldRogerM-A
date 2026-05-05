@@ -29,6 +29,7 @@ from goldroger.data.transaction_comps import (
 from goldroger.data.comparables import (
     PeerMultiples,
     build_peer_multiples,
+    find_peers_deterministic_quick,
     find_peers_dynamic,
     parse_peer_agent_output,
     resolve_peer_tickers,
@@ -166,6 +167,8 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
             txt = f"Historical context: {txt}"
         elif stale and not txt.lower().startswith("recent"):
             txt = f"Recent event context: {txt}"
+        # Avoid stale product-cycle naming when date provenance is weak.
+        txt = _re.sub(r"\biPhone\s*\d+\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
         out.append(txt)
     return out
 
@@ -221,6 +224,7 @@ def run_analysis(
     country_hint: str = "",
     company_identifier: str = "",
     quick_mode: bool = False,
+    debug: bool = False,
 ) -> AnalysisResult:
     log = new_run(company, company_type)
     client = _client(llm)
@@ -468,7 +472,7 @@ def run_analysis(
     # ── 1. FUNDAMENTALS ───────────────────────────────────────────────────
     t0 = _step("Fundamentals")
     fund = _parse_with_retry(
-        data_agent, company, company_type, {}, Fundamentals, _fund_fallback(company)
+        data_agent, company, company_type, {}, Fundamentals, _fund_fallback(company), log_raw_errors=debug
     )
     if market_data:
         if not fund.ticker:
@@ -590,7 +594,7 @@ def run_analysis(
             console.print("  [dim]Quick mode: skipping deep market analysis.[/dim]")
             log.end_step("market_analysis", _t)
             _done("Market Analysis", _t)
-            return MarketAnalysis(), "skipped"
+            return MarketAnalysis(), "skipped_quick_mode"
         try:
             result = _parse_with_retry(
                 market_agent, company, company_type,
@@ -605,6 +609,8 @@ def run_analysis(
                 },
                 MarketAnalysis, MarketAnalysis(),
                 fatal_on_fail=True,
+                retry_on_fail=(not quick_mode),
+                log_raw_errors=debug,
             )
             status = "ok"
         except Exception as e:
@@ -617,6 +623,18 @@ def run_analysis(
 
     def _do_peers():
         _t = _step("Peer Comparables")
+        if quick_mode:
+            try:
+                tickers = find_peers_deterministic_quick(
+                    target_md=market_data,
+                    target_sector=fund.sector or "",
+                    target_peers=12,
+                )
+                result = ({"mode": "quick_deterministic", "tickers": tickers}, None)
+            except Exception as e:
+                result = (None, e)
+            _done("Peer Comparables", _t)
+            return result
         try:
             raw = peer_agent.run(company, company_type, {
                 "sector": fund.sector or "",
@@ -645,6 +663,8 @@ def run_analysis(
                 fin_agent, company, company_type,
                 {"sector": fund.sector or "", "description": fund.description, "quick_mode": quick_mode},
                 Financials, _fin_fallback(),
+                retry_on_fail=(not quick_mode),
+                log_raw_errors=debug,
             )
             # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
             f.revenue_current = normalise_revenue_string(f.revenue_current)
@@ -671,6 +691,9 @@ def run_analysis(
 
     market_analysis_failed = False
     peer_timeout_or_fail = False
+    market_status = "OK"
+    peers_status = "OK"
+    valuation_status = "OK"
     with ThreadPoolExecutor(max_workers=_cfg.agent.parallel_workers) as _pool:
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
@@ -678,17 +701,26 @@ def run_analysis(
         _fut_tx = None if _skip_tx_comps else _pool.submit(_do_tx_comps)
         try:
             mkt, _mkt_status = _fut_mkt.result(timeout=_MARKET_ANALYSIS_TIMEOUT)
-            market_analysis_failed = (_mkt_status == "failed")
+            if _mkt_status == "failed":
+                market_analysis_failed = True
+                market_status = "FAILED"
+            elif _mkt_status == "skipped_quick_mode":
+                market_status = "SKIPPED_QUICK_MODE"
+            else:
+                market_status = "OK"
         except FutureTimeoutError:
             market_analysis_failed = True
+            market_status = "TIMEOUT"
             mkt = MarketAnalysis()
             console.print(f"  [red]Market analysis failed: timeout > {_MARKET_ANALYSIS_TIMEOUT}s[/red]")
         try:
             _peers_raw, _peers_err = _fut_peers.result(timeout=_PEER_COMPS_TIMEOUT)
             peer_timeout_or_fail = bool(_peers_err)
+            peers_status = "FAILED" if _peers_err else "OK"
         except FutureTimeoutError:
             _peers_raw, _peers_err = None, TimeoutError("peer timeout")
             peer_timeout_or_fail = True
+            peers_status = "TIMEOUT"
             console.print(f"  [red]Peer comparables failed: timeout > {_PEER_COMPS_TIMEOUT}s[/red]")
         fin = _fut_fin.result()
         if _fut_tx is not None:
@@ -746,8 +778,11 @@ def run_analysis(
     peer_multiples: PeerMultiples | None = None
     if _peers_raw:
         try:
-            peer_list = parse_peer_agent_output(_peers_raw)
-            peer_tickers_seed = resolve_peer_tickers(peer_list)
+            if isinstance(_peers_raw, dict) and _peers_raw.get("mode") == "quick_deterministic":
+                peer_tickers_seed = [str(t).upper() for t in (_peers_raw.get("tickers") or [])]
+            else:
+                peer_list = parse_peer_agent_output(_peers_raw)
+                peer_tickers_seed = resolve_peer_tickers(peer_list)
             _is_mega_tech = bool(
                 market_data
                 and market_data.market_cap
@@ -788,6 +823,8 @@ def run_analysis(
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
                 if peer_multiples.n_peers > 0:
+                    if peers_status == "OK" and peer_multiples.n_peers < 5:
+                        peers_status = "DEGRADED"
                     if _is_mega_tech and peer_multiples.n_peers < 5:
                         console.print(
                             f"  [yellow]Peer set expanded (adjacent/global stages used): "
@@ -805,12 +842,13 @@ def run_analysis(
                             _target_sector,
                             _p.sector or "",
                         )
-                        console.print(
-                            f"  [dim]Peer {_p.ticker}: EV/EBITDA={_p.ev_ebitda:.1f}x "
-                            f"(similarity {_sim:.2f})[/dim]"
-                            if _p.ev_ebitda
-                            else f"  [dim]Peer {_p.ticker}: similarity {_sim:.2f}[/dim]"
-                        )
+                        if debug:
+                            console.print(
+                                f"  [dim]Peer {_p.ticker}: EV/EBITDA={_p.ev_ebitda:.1f}x "
+                                f"(similarity {_sim:.2f})[/dim]"
+                                if _p.ev_ebitda
+                                else f"  [dim]Peer {_p.ticker}: similarity {_sim:.2f}[/dim]"
+                            )
                         sources.add_once(
                             f"Peer {_p.ticker} Similarity",
                             f"{_sim:.2f}",
@@ -866,6 +904,7 @@ def run_analysis(
                         n_peers=peer_multiples.n_peers,
                     )
                 else:
+                    peers_status = "FAILED"
                     console.print(
                         f"  [yellow]Peer comps: fewer than 3 validated peers{drop_note} "
                         f"— confidence reduced[/yellow]"
@@ -876,8 +915,10 @@ def run_analysis(
                             f"{peer_multiples.n_peers} validated peers (<5).[/yellow]"
                         )
         except Exception as e:
+            peers_status = "FAILED"
             console.print(f"  [yellow]Peer post-processing skipped: {e}[/yellow]")
     elif _peers_err:
+        peers_status = "FAILED"
         console.print(f"  [yellow]Peer finder skipped: {_peers_err}[/yellow]")
 
     # Post-process transaction comps — cache + extract medians
@@ -928,6 +969,7 @@ def run_analysis(
         ),
         peer_count=(peer_multiples.n_peers if peer_multiples else 0),
         market_analysis_failed=market_analysis_failed,
+        market_analysis_skipped_quick=(market_status == "SKIPPED_QUICK_MODE"),
     )
     _is_mega_cap_quality = bool(
         company_type == "public"
@@ -1027,14 +1069,31 @@ def run_analysis(
     rec = result.recommendation
     _dcf_sanity_fail = any("DCF likely miscalibrated" in str(n) for n in (result.notes or []))
     valuation_failed = False
+    if _dcf_sanity_fail:
+        quality.score = max(0, quality.score - 12)
+        quality.warnings.append("DCF sanity check failed")
+        quality.checks["dcf_sanity"] = "failed"
     if _peer_count == 0 and _dcf_sanity_fail:
         console.print("  [red]❌ Valuation failed: peer comps unavailable and DCF sanity check failed.[/red]")
         rec.recommendation = "INCONCLUSIVE"
         rec.intrinsic_price = None
         rec.upside_pct = None
         valuation_failed = True
+        valuation_status = "FAILED"
         result.field_sources.pop("Fair Value Range", None)
         result.notes.append("Valuation status: FAILED — no peers + DCF sanity failure.")
+        if quality.score > 40:
+            quality.score = 40
+        quality.tier = "D"
+        console.print(f"  [red]Adjusted data quality after valuation failure: {quality.score}/100 (Tier {quality.tier})[/red]")
+    elif _dcf_sanity_fail and _peer_count > 0:
+        valuation_status = "DEGRADED"
+    sources.add(
+        "Data Quality Score",
+        f"{quality.score}/100 (Tier {quality.tier})",
+        "quality_gate",
+        "verified",
+    )
 
     if not result.has_revenue:
         console.print(
@@ -1152,9 +1211,12 @@ def run_analysis(
         _rec = _raw_rec
     if _low_conviction and _rec in {"BUY", "SELL", "HOLD"}:
         _rec = f"{_rec} / LOW CONVICTION"
+    if (not valuation_failed) and _low_conviction and valuation_status == "OK":
+        valuation_status = "DEGRADED"
     if valuation_failed:
         _rec = "INCONCLUSIVE"
         _target_price = None
+        _ev_str = "N/A"
 
     # Dump all per-field provenance from the valuation engine.
     # add_once deduplicates by metric name — equity.py may have already logged
@@ -1217,8 +1279,9 @@ def run_analysis(
             )
         except Exception:
             pass
-    for note in result.notes:
-        console.print(f"  [dim]• {note}[/dim]")
+    if debug:
+        for note in result.notes:
+            console.print(f"  [dim]• {note}[/dim]")
 
     # ── 5b. BEAR / BASE / BULL SCENARIOS ─────────────────────────────────
     football_field: FootballField | None = None
@@ -1469,9 +1532,16 @@ def run_analysis(
     try:
         with ThreadPoolExecutor(max_workers=1) as _tp:
             _fut_thesis = _tp.submit(
-                _parse_with_retry,
-                thesis_agent, company, company_type, _thesis_ctx,
-                InvestmentThesis, InvestmentThesis(thesis="N/A"),
+                lambda: _parse_with_retry(
+                    thesis_agent,
+                    company,
+                    company_type,
+                    _thesis_ctx,
+                    InvestmentThesis,
+                    InvestmentThesis(thesis="N/A"),
+                    retry_on_fail=(not quick_mode),
+                    log_raw_errors=debug,
+                )
             )
             thesis = _fut_thesis.result(timeout=_REPORT_WRITER_TIMEOUT)
     except FutureTimeoutError:
@@ -1484,7 +1554,20 @@ def run_analysis(
             catalysts=["Next earnings/filing update", "Product/strategy update", "Macro/regulatory change"],
             key_questions=["What is verified growth?", "How durable are margins?", "What valuation anchor is most reliable?"],
         )
+    except Exception as _th_err:
+        console.print(f"  [yellow]Investment thesis failed: {_th_err}[/yellow]")
+        thesis = InvestmentThesis(
+            thesis=f"{company}: quick summary unavailable due to model failure.",
+            catalysts=["Operational update", "Regulatory update", "Funding/earnings update"],
+            key_questions=["What data is verified?", "What peer anchor is robust?", "What key diligence gap remains?"],
+        )
     thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
+    if quick_mode:
+        thesis.catalysts = (thesis.catalysts or [])[:3]
+        thesis.key_questions = (thesis.key_questions or [])[:3]
+        thesis.bull_case = None
+        thesis.base_case = None
+        thesis.bear_case = None
     log.end_step("thesis", t0)
     _done("Investment Thesis", t0)
 
@@ -1518,10 +1601,16 @@ def run_analysis(
             "warnings": quality.warnings,
             "checks": quality.checks,
             "pipeline_status": {
-                "market_analysis": "FAILED" if market_analysis_failed else "OK",
-                "peers": "FAILED" if (_peer_count == 0 or peer_timeout_or_fail) else "OK",
-                "valuation": "FAILED" if valuation_failed else "OK",
+                "market_analysis": market_status,
+                "peers": peers_status,
+                "valuation": valuation_status,
+                "model_signal": _raw_rec,
                 "recommendation": _rec,
+                "confidence": (
+                    "Low"
+                    if valuation_status in {"FAILED", "DEGRADED"} or peers_status in {"FAILED", "TIMEOUT", "DEGRADED"}
+                    else "Medium"
+                ),
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),
@@ -1536,7 +1625,12 @@ def run_analysis(
         sources_md=sources.to_markdown(),
     )
     fill_gaps(analysis, fund.sector or "")
-    if market_analysis_failed:
+    if market_status == "SKIPPED_QUICK_MODE":
+        analysis.market.market_size = "Not available in quick mode"
+        analysis.market.market_growth = "Not available in quick mode"
+        analysis.market.market_segment = "Not available in quick mode"
+        analysis.market.key_trends = []
+    elif market_analysis_failed:
         analysis.market.market_size = "Not available"
         analysis.market.market_growth = "Not available"
         analysis.market.market_segment = "Not available"
