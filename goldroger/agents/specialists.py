@@ -12,7 +12,7 @@ class DataCollectorAgent(BaseAgent):
     model_tier = "large"
     use_tools = False
 
-    def run(self, company: str, company_type: str, context: dict = None):
+    def run(self, company: str, company_type: str, context: dict = None, **kwargs):
 
         prompt = f"""You are a financial data extraction system.
 

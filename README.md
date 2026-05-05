@@ -298,6 +298,7 @@ For non-pipeline workflows, both UI and CLI now enforce an explicit company conf
 - GB provider now paginates through filing history (bounded), indexes document metadata/resources across filings, and surfaces filing/document coverage counts in `sources.md`
 - GB incorporation PDFs are now parsed (best effort) for statement-of-capital fields (share class, total shares, nominal value, unpaid capital, rights summary), and these are logged in provenance
 - For confirmed GB private entities with limited verified facts, thesis generation now runs in strict registry mode: no named competitor/product/TAM speculation unless explicitly verified in context
+- Agent retry path hardened: `DataCollectorAgent` now supports strict JSON retry mode kwargs to avoid crashes during transient provider/API instability
 
 API guardrail:
 - `POST /analyze` rejects non-pipeline requests unless `confirmed_company=true`
