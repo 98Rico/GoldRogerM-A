@@ -30,7 +30,6 @@ from goldroger.data.comparables import (
     PeerMultiples,
     build_peer_multiples,
     find_peers_deterministic_quick,
-    find_peers_dynamic,
     parse_peer_agent_output,
     resolve_peer_tickers,
 )
@@ -77,8 +76,11 @@ from .fill_gaps import fill_gaps
 load_dotenv()
 _MARKET_ANALYSIS_TIMEOUT = 30
 _PEER_COMPS_TIMEOUT = 30
+_FINANCIALS_TIMEOUT = 30
 _TX_COMPS_TIMEOUT = 45
 _REPORT_WRITER_TIMEOUT = 20
+_TOTAL_TIMEOUT_QUICK = 60
+_TOTAL_TIMEOUT_FULL = 300
 
 def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
     score = 0.0
@@ -227,6 +229,8 @@ def run_analysis(
     debug: bool = False,
 ) -> AnalysisResult:
     log = new_run(company, company_type)
+    _run_started = time.time()
+    _total_budget_s = _TOTAL_TIMEOUT_QUICK if quick_mode else _TOTAL_TIMEOUT_FULL
     client = _client(llm)
     svc = ValuationService()
     sources = SourcesLog(company)
@@ -694,7 +698,8 @@ def run_analysis(
     market_status = "OK"
     peers_status = "OK"
     valuation_status = "OK"
-    with ThreadPoolExecutor(max_workers=_cfg.agent.parallel_workers) as _pool:
+    _pool = ThreadPoolExecutor(max_workers=_cfg.agent.parallel_workers)
+    try:
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
@@ -712,6 +717,7 @@ def run_analysis(
             market_analysis_failed = True
             market_status = "TIMEOUT"
             mkt = MarketAnalysis()
+            _fut_mkt.cancel()
             console.print(f"  [red]Market analysis failed: timeout > {_MARKET_ANALYSIS_TIMEOUT}s[/red]")
         try:
             _peers_raw, _peers_err = _fut_peers.result(timeout=_PEER_COMPS_TIMEOUT)
@@ -721,19 +727,29 @@ def run_analysis(
             _peers_raw, _peers_err = None, TimeoutError("peer timeout")
             peer_timeout_or_fail = True
             peers_status = "TIMEOUT"
+            _fut_peers.cancel()
             console.print(f"  [red]Peer comparables failed: timeout > {_PEER_COMPS_TIMEOUT}s[/red]")
-        fin = _fut_fin.result()
+        try:
+            fin = _fut_fin.result(timeout=_FINANCIALS_TIMEOUT)
+        except FutureTimeoutError:
+            _fut_fin.cancel()
+            console.print(f"  [yellow]Financials timeout > {_FINANCIALS_TIMEOUT}s — using fallback.[/yellow]")
+            fin = _fin_fallback()
         if _fut_tx is not None:
             try:
                 _tx_raw, _tx_err = _fut_tx.result(timeout=_TX_COMPS_TIMEOUT)
             except FutureTimeoutError:
                 _tx_raw, _tx_err = None, TimeoutError("tx comps timeout")
+                _fut_tx.cancel()
                 console.print(f"  [yellow]Transaction comps timeout > {_TX_COMPS_TIMEOUT}s — skipped.[/yellow]")
         else:
             _tx_raw, _tx_err = None, None
             console.rule("[bold cyan]Transaction Comps")
             console.print("  [dim]Skipped for mega-cap public company (tx weight forced to 0%).[/dim]")
             _done("Transaction Comps", time.time())
+    finally:
+        # Best-effort cancellation: do not block on timed-out side tasks.
+        _pool.shutdown(wait=False, cancel_futures=True)
 
     # Override LLM-derived financials with registry-verified values when available
     fin = _reconcile_financials(fin, market_data, console)
@@ -776,11 +792,22 @@ def run_analysis(
     _target_sector = fund.sector or "" if fund else ""
     peer_comps_table: PeerCompsTable | None = None
     peer_multiples: PeerMultiples | None = None
-    if _peers_raw:
+    # Always start from deterministic peer engine; full-mode LLM results can only enrich.
+    try:
+        _deterministic_base = find_peers_deterministic_quick(
+            target_md=market_data,
+            target_sector=_target_sector,
+            target_peers=16,
+        )
+    except Exception:
+        _deterministic_base = []
+
+    if _peers_raw or _deterministic_base:
         try:
+            peer_tickers_seed: list[str] = []
             if isinstance(_peers_raw, dict) and _peers_raw.get("mode") == "quick_deterministic":
                 peer_tickers_seed = [str(t).upper() for t in (_peers_raw.get("tickers") or [])]
-            else:
+            elif _peers_raw:
                 peer_list = parse_peer_agent_output(_peers_raw)
                 peer_tickers_seed = resolve_peer_tickers(peer_list)
             _is_mega_tech = bool(
@@ -789,17 +816,17 @@ def run_analysis(
                 and market_data.market_cap > _mega_cap_usd_m
                 and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
             )
-            peer_tickers = find_peers_dynamic(
-                company_name=company,
-                target_sector=_target_sector,
-                target_market_cap=(market_data.market_cap if market_data else None),
-                seed_tickers=peer_tickers_seed,
-            )
             _self_ticker = (market_data.ticker or "").upper() if market_data else ""
-            peer_tickers = [t for t in peer_tickers if t and t != _self_ticker]
+
+            # Core peer set from deterministic engine for BOTH quick and full.
+            peer_tickers = [t for t in _deterministic_base if t and t != _self_ticker]
+            # Optional full-mode enrichment: merge validated LLM candidates (no overwrite).
+            if (not quick_mode) and peer_tickers_seed:
+                peer_tickers = list(dict.fromkeys(peer_tickers + [t for t in peer_tickers_seed if t and t != _self_ticker]))
+
             sources.add_once(
                 "Peer Selection Policy",
-                "Dynamic staged search (industry -> sector+size -> adjacent -> global), ranked by similarity",
+                "Deterministic core peers (sector/industry/size) + optional full-mode LLM enrichment",
                 "peer_policy",
                 "verified",
             )
@@ -811,6 +838,7 @@ def run_analysis(
                     min_similarity=(0.5 if _is_mega_tech else 0.0),
                     target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
                     target_growth=(market_data.forward_revenue_growth if market_data else None),
+                    min_market_cap_ratio=(0.05 if _is_mega_tech else 0.0),
                 )
                 # Log validation summary
                 drops: list[str] = []
@@ -820,9 +848,13 @@ def run_analysis(
                     drops.append(f"{peer_multiples.n_dropped_sector} wrong sector")
                 if peer_multiples.n_dropped_sanity:
                     drops.append(f"{peer_multiples.n_dropped_sanity} bad multiples")
+                if peer_multiples.n_dropped_scale:
+                    drops.append(f"{peer_multiples.n_dropped_scale} too small for scale")
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
                 if peer_multiples.n_peers > 0:
+                    if peers_status in {"FAILED", "TIMEOUT"}:
+                        peers_status = "DEGRADED"
                     if peers_status == "OK" and peer_multiples.n_peers < 5:
                         peers_status = "DEGRADED"
                     if _is_mega_tech and peer_multiples.n_peers < 5:
@@ -831,7 +863,7 @@ def run_analysis(
                             f"{peer_multiples.n_peers} validated peers; confidence reduced.[/yellow]"
                         )
                     console.print(
-                        f"  [cyan]{peer_multiples.n_peers} validated peers:[/cyan] "
+                        f"  [cyan]{peer_multiples.n_peers} validated peers (top 6 shown):[/cyan] "
                         + ", ".join(p.ticker for p in peer_multiples.peers[:6])
                         + drop_note
                     )
@@ -843,11 +875,13 @@ def run_analysis(
                             _p.sector or "",
                         )
                         if debug:
+                            _mcap_b = (_p.market_cap / 1000.0) if _p.market_cap else None
+                            _mcap_txt = f"{_mcap_b:.1f}B" if _mcap_b is not None else "N/A"
                             console.print(
                                 f"  [dim]Peer {_p.ticker}: EV/EBITDA={_p.ev_ebitda:.1f}x "
-                                f"(similarity {_sim:.2f})[/dim]"
+                                f"MCap={_mcap_txt} (similarity {_sim:.2f}, included)[/dim]"
                                 if _p.ev_ebitda
-                                else f"  [dim]Peer {_p.ticker}: similarity {_sim:.2f}[/dim]"
+                                else f"  [dim]Peer {_p.ticker}: MCap={_mcap_txt} similarity {_sim:.2f} (included)[/dim]"
                             )
                         sources.add_once(
                             f"Peer {_p.ticker} Similarity",
@@ -1189,7 +1223,7 @@ def run_analysis(
     _ev_str = _fmt_ev_human(blended_ev) if blended_ev else "N/A"
     _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
-    _low_conviction = any("dispersion" in str(n).lower() for n in (result.notes or []))
+    _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
     if peer_multiples and peer_multiples.n_peers < 3:
         _low_conviction = True
     if _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5:
@@ -1486,90 +1520,107 @@ def run_analysis(
 
     # ── 6. THESIS ─────────────────────────────────────────────────────────
     t0 = _step("Investment Thesis")
-    _thesis_ctx = {
-        "sector": fund.sector or "",
-        "valuation": val.implied_value,
-        "recommendation": val.recommendation,
-        "upside": val.upside_downside,
-        "wacc": result.wacc_used,
-        "market": mkt.market_size,
-        "verified_revenue": (
-            str(market_data.revenue_ttm)
-            if market_data and market_data.revenue_ttm
-            else fin.revenue_current or "unknown"
-        ),
-        "revenue_confidence": (
-            market_data.confidence if market_data and market_data.revenue_ttm else "estimated"
-        ),
-        "ebitda_margin": (
-            f"{market_data.ebitda_margin:.1%}"
-            if market_data and market_data.ebitda_margin is not None
-            else fin.ebitda_margin or ""
-        ),
-        "company_identifier": company_identifier,
-        "country_hint": country_hint or "",
-        "identity_note": (
-            f"Confirmed legal entity: {fund.company_name} "
-            f"(Companies House #{company_identifier}, {country_hint or 'unknown country'})"
-            if company_identifier else f"Confirmed legal entity: {fund.company_name}"
-        ),
-        "registry_facts": (
-            market_data.additional_metadata if market_data and isinstance(market_data.additional_metadata, dict) else {}
-        ),
-        "strict_registry_mode": (
-            bool(
-                company_type == "private"
-                and company_identifier
-                and market_data
-                and market_data.data_source == "companies_house"
-                and not market_data.revenue_ttm
-            )
-        ),
-        "run_date": date.today().isoformat(),
-        "recent_window_months": 6,
-        "quick_mode": quick_mode,
-    }
-    try:
-        with ThreadPoolExecutor(max_workers=1) as _tp:
-            _fut_thesis = _tp.submit(
-                lambda: _parse_with_retry(
-                    thesis_agent,
-                    company,
-                    company_type,
-                    _thesis_ctx,
-                    InvestmentThesis,
-                    InvestmentThesis(thesis="N/A"),
-                    retry_on_fail=(not quick_mode),
-                    log_raw_errors=debug,
+    thesis_status = "OK"
+    if (time.time() - _run_started) > _total_budget_s:
+        thesis_status = "TIMEOUT"
+        console.print(
+            f"  [yellow]Global runtime budget exceeded ({_total_budget_s}s) — using short fallback thesis.[/yellow]"
+        )
+        thesis = InvestmentThesis(
+            thesis=f"{company}: quick summary only. Full thesis unavailable due to runtime budget.",
+            catalysts=["Next earnings/filing update", "Operational milestone", "Regulatory/macro update"],
+            key_questions=["What valuation anchor is strongest?", "What is the biggest data gap?", "What changes recommendation?"],
+        )
+        thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
+        log.end_step("thesis", t0)
+        _done("Investment Thesis", t0)
+    else:
+        _thesis_ctx = {
+            "sector": fund.sector or "",
+            "valuation": val.implied_value,
+            "recommendation": val.recommendation,
+            "upside": val.upside_downside,
+            "wacc": result.wacc_used,
+            "market": mkt.market_size,
+            "verified_revenue": (
+                str(market_data.revenue_ttm)
+                if market_data and market_data.revenue_ttm
+                else fin.revenue_current or "unknown"
+            ),
+            "revenue_confidence": (
+                market_data.confidence if market_data and market_data.revenue_ttm else "estimated"
+            ),
+            "ebitda_margin": (
+                f"{market_data.ebitda_margin:.1%}"
+                if market_data and market_data.ebitda_margin is not None
+                else fin.ebitda_margin or ""
+            ),
+            "company_identifier": company_identifier,
+            "country_hint": country_hint or "",
+            "identity_note": (
+                f"Confirmed legal entity: {fund.company_name} "
+                f"(Companies House #{company_identifier}, {country_hint or 'unknown country'})"
+                if company_identifier else f"Confirmed legal entity: {fund.company_name}"
+            ),
+            "registry_facts": (
+                market_data.additional_metadata if market_data and isinstance(market_data.additional_metadata, dict) else {}
+            ),
+            "strict_registry_mode": (
+                bool(
+                    company_type == "private"
+                    and company_identifier
+                    and market_data
+                    and market_data.data_source == "companies_house"
+                    and not market_data.revenue_ttm
                 )
+            ),
+            "run_date": date.today().isoformat(),
+            "recent_window_months": 6,
+            "quick_mode": quick_mode,
+        }
+        try:
+            with ThreadPoolExecutor(max_workers=1) as _tp:
+                _fut_thesis = _tp.submit(
+                    lambda: _parse_with_retry(
+                        thesis_agent,
+                        company,
+                        company_type,
+                        _thesis_ctx,
+                        InvestmentThesis,
+                        InvestmentThesis(thesis="N/A"),
+                        retry_on_fail=(not quick_mode),
+                        log_raw_errors=debug,
+                    )
+                )
+                thesis = _fut_thesis.result(timeout=_REPORT_WRITER_TIMEOUT)
+        except FutureTimeoutError:
+            thesis_status = "TIMEOUT"
+            console.print(f"  [yellow]Investment thesis timeout > {_REPORT_WRITER_TIMEOUT}s — using short fallback.[/yellow]")
+            thesis = InvestmentThesis(
+                thesis=f"{company}: quick summary only. Full thesis unavailable due to timeout.",
+                bull_case="Upside depends on execution and market conditions.",
+                base_case="Base case assumes stable operations and gradual growth.",
+                bear_case="Downside risk from execution, demand, or pricing pressure.",
+                catalysts=["Next earnings/filing update", "Product/strategy update", "Macro/regulatory change"],
+                key_questions=["What is verified growth?", "How durable are margins?", "What valuation anchor is most reliable?"],
             )
-            thesis = _fut_thesis.result(timeout=_REPORT_WRITER_TIMEOUT)
-    except FutureTimeoutError:
-        console.print(f"  [yellow]Investment thesis timeout > {_REPORT_WRITER_TIMEOUT}s — using short fallback.[/yellow]")
-        thesis = InvestmentThesis(
-            thesis=f"{company}: quick summary only. Full thesis unavailable due to timeout.",
-            bull_case="Upside depends on execution and market conditions.",
-            base_case="Base case assumes stable operations and gradual growth.",
-            bear_case="Downside risk from execution, demand, or pricing pressure.",
-            catalysts=["Next earnings/filing update", "Product/strategy update", "Macro/regulatory change"],
-            key_questions=["What is verified growth?", "How durable are margins?", "What valuation anchor is most reliable?"],
-        )
-    except Exception as _th_err:
-        console.print(f"  [yellow]Investment thesis failed: {_th_err}[/yellow]")
-        thesis = InvestmentThesis(
-            thesis=f"{company}: quick summary unavailable due to model failure.",
-            catalysts=["Operational update", "Regulatory update", "Funding/earnings update"],
-            key_questions=["What data is verified?", "What peer anchor is robust?", "What key diligence gap remains?"],
-        )
-    thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
-    if quick_mode:
-        thesis.catalysts = (thesis.catalysts or [])[:3]
-        thesis.key_questions = (thesis.key_questions or [])[:3]
-        thesis.bull_case = None
-        thesis.base_case = None
-        thesis.bear_case = None
-    log.end_step("thesis", t0)
-    _done("Investment Thesis", t0)
+        except Exception as _th_err:
+            thesis_status = "FAILED"
+            console.print(f"  [yellow]Investment thesis failed: {_th_err}[/yellow]")
+            thesis = InvestmentThesis(
+                thesis=f"{company}: quick summary unavailable due to model failure.",
+                catalysts=["Operational update", "Regulatory update", "Funding/earnings update"],
+                key_questions=["What data is verified?", "What peer anchor is robust?", "What key diligence gap remains?"],
+            )
+        thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
+        if quick_mode:
+            thesis.catalysts = (thesis.catalysts or [])[:3]
+            thesis.key_questions = (thesis.key_questions or [])[:3]
+            thesis.bull_case = None
+            thesis.base_case = None
+            thesis.bear_case = None
+        log.end_step("thesis", t0)
+        _done("Investment Thesis", t0)
 
     if football_field and thesis:
         if football_field.bear and thesis.bear_case:
@@ -1604,6 +1655,29 @@ def run_analysis(
                 "market_analysis": market_status,
                 "peers": peers_status,
                 "valuation": valuation_status,
+                "thesis": thesis_status,
+                "core_valuation": (
+                    "FAILED"
+                    if valuation_status == "FAILED"
+                    else (
+                        "DEGRADED"
+                        if valuation_status == "DEGRADED" or peers_status in {"FAILED", "TIMEOUT", "DEGRADED"}
+                        else "OK"
+                    )
+                ),
+                "research_enrichment": (
+                    "FAILED"
+                    if market_status in {"FAILED", "TIMEOUT"} and thesis_status in {"FAILED", "TIMEOUT"}
+                    else (
+                        "SKIPPED_QUICK_MODE"
+                        if market_status == "SKIPPED_QUICK_MODE"
+                        else (
+                            "DEGRADED"
+                            if market_status in {"FAILED", "TIMEOUT"} or thesis_status in {"FAILED", "TIMEOUT"}
+                            else "OK"
+                        )
+                    )
+                ),
                 "model_signal": _raw_rec,
                 "recommendation": _rec,
                 "confidence": (

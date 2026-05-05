@@ -334,5 +334,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 39 | Temporal + fail-fast stabilization — stale-year query sanitization, 30s hard timeouts for market/peer agents, pipeline status reporting, `INCONCLUSIVE` target suppression, strict market-failure data consistency, and cleaner concise output formatting | ✅ |
 | 40 | Quick-mode performance hardening — skip deep market analysis in `--quick`, cap web-search query budgets, reduce retries/tool rounds, add report-writer timeout fallback, and expose per-stage timing diagnostics in final output | ✅ |
 | 41 | Quick-pipeline architecture hardening — deterministic quick peer screening (no LLM peer discovery), quick-mode JSON retry suppression, explicit stage-status semantics (`OK/SKIPPED_QUICK_MODE/TIMEOUT/FAILED/DEGRADED`), stricter INCONCLUSIVE rendering suppression, and `--debug` gated diagnostics | ✅ |
+| 42 | Shared-core stabilization pass — fixed peer-scale filter path and thesis runtime bug, added financial-stage timeout + best-effort cancellation, ensured deterministic peers survive full-mode enrichment failures, expanded pipeline statuses (`core_valuation` / `research_enrichment` / `thesis`), and aligned quick-mode quality/tier semantics | ✅ |
 
 </details>

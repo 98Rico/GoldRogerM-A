@@ -234,6 +234,20 @@ class ValuationService:
             base_revenue=base_revenue_y0,
         )
         dcf_output = compute_dcf(dcf_input)
+        # DCF sanity diagnostics
+        try:
+            _y5_ebitda = revenue_series[-1] * ebitda_margin if revenue_series else 0.0
+            _y5_fcf = dcf_output.free_cash_flows[-1] if dcf_output.free_cash_flows else 0.0
+            if _y5_ebitda and dcf_output.enterprise_value > 0:
+                _implied_exit = dcf_output.enterprise_value / _y5_ebitda
+                notes.append(f"DCF implied exit EV/EBITDA: {_implied_exit:.1f}x.")
+                if assumptions.get("mega_cap_tech") and _implied_exit < 15.0:
+                    notes.append("DCF sanity flag: implied exit multiple appears low for mega-cap tech.")
+            if _y5_fcf and dcf_output.enterprise_value > 0:
+                _fcf_yield = _y5_fcf / dcf_output.enterprise_value
+                notes.append(f"DCF implied terminal FCF yield: {_fcf_yield:.1%}.")
+        except Exception:
+            pass
 
         if dcf_output.terminal_value_pct > 0.85:
             notes.append(
@@ -385,7 +399,7 @@ class ValuationService:
             )
         if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
             _disp = max(dcf_output.enterprise_value, comps_output.mid) / min(dcf_output.enterprise_value, comps_output.mid)
-            if _disp > 2.0:
+            if _disp > 2.5:
                 field_sources["Valuation Uncertainty"] = (
                     f"⚠ High uncertainty / low confidence ({_disp:.1f}x DCF vs comps)",
                     "valuation_engine",
@@ -458,7 +472,7 @@ class ValuationService:
         rec = recommendation.recommendation
         if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
             ratio = max(dcf_output.enterprise_value, comps_output.mid) / min(dcf_output.enterprise_value, comps_output.mid)
-            if ratio > 2.0:
+            if ratio > 2.5:
                 notes.append(
                     f"Recommendation guardrail: high valuation dispersion ({ratio:.1f}x DCF/comps) "
                     "→ downgraded SELL to HOLD."

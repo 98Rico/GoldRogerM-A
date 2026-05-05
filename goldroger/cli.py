@@ -361,6 +361,8 @@ def _metric_source_keys(metric: str) -> list[str]:
         "Upside": ["Upside", "Upside/Downside"],
         "WACC": ["WACC"],
         "Terminal Growth": ["Terminal Growth"],
+        "Blended Valuation": ["Blended EV Calculation", "Enterprise Value (blended)"],
+        "DCF-only Valuation": ["Blended EV Calculation", "Enterprise Value (blended)"],
     }
     return aliases.get(metric, [metric])
 
@@ -535,9 +537,12 @@ def print_result(result):
     if _pipeline_status:
         console.print(
             "[bold]Pipeline status:[/bold]\n"
+            f"  Core valuation: {_pipeline_status.get('core_valuation', 'N/A')}\n"
+            f"  Research enrichment: {_pipeline_status.get('research_enrichment', 'N/A')}\n"
             f"  Market analysis: {_pipeline_status.get('market_analysis', 'N/A')}\n"
             f"  Peers: {_pipeline_status.get('peers', 'N/A')}\n"
             f"  Valuation: {_pipeline_status.get('valuation', 'N/A')}\n"
+            f"  Thesis: {_pipeline_status.get('thesis', 'N/A')}\n"
             f"  Model signal: {_pipeline_status.get('model_signal', 'N/A')}\n"
             f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
             f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}"
@@ -663,7 +668,7 @@ def main():
     parser.add_argument("--excel", action="store_true", help="Generate Excel DCF workbook")
     parser.add_argument("--pptx", action="store_true", help="Generate PowerPoint deck")
     parser.add_argument("--outdir", default="outputs", help="Output directory for files")
-    parser.add_argument("--quick", action="store_true", help="Skip web search in pipeline (faster, uses training knowledge)")
+    parser.add_argument("--quick", action="store_true", help="Fast bounded pipeline (deterministic peers + short report; skips deep market research)")
     parser.add_argument("--interactive", "-i", action="store_true",
                         help="Interactively select data sources before analysis (private companies)")
     parser.add_argument(

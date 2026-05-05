@@ -532,3 +532,9 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Pipeline status semantics — final status now uses explicit `OK/SKIPPED_QUICK_MODE/TIMEOUT/FAILED/DEGRADED` stage outcomes
 ✔ Failure-safe rendering — `INCONCLUSIVE` outputs suppress target/bridge/fair-value style leakage in final display
 ✔ Debug-gated diagnostics — noisy raw parse diagnostics and deep peer traces are now behind `--debug`
+✔ Shared quick/full valuation core hardening — full mode now starts from deterministic core peers and keeps them even when enrichment fails
+✔ Timeout + cancellation tightening — added financial-stage timeout and best-effort future cancellation on timed-out parallel stages
+✔ Peer-scale filter fix — tiny out-of-scale peers are now dropped before comps aggregation for mega-cap targets
+✔ Pipeline status expansion — output now includes `core_valuation`, `research_enrichment`, and `thesis` stage states
+✔ Quick-mode scoring semantics refinement — quick-mode market-context skip applies light penalties instead of failure-like penalties
+✔ Quality tier calibration update — tiers are now `A:80+ / B:65+ / C:50+ / D:<50`

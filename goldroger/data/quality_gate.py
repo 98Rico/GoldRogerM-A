@@ -74,9 +74,15 @@ def assess_data_quality(
         score, has_estimated_inputs = _score_private(
             market_data, checks, warnings, score, has_estimated_inputs
         )
-    score, has_estimated_inputs = _score_market_context(
-        market_analysis, checks, warnings, score, has_estimated_inputs
-    )
+    if market_analysis_skipped_quick:
+        checks["market_context"] = "skipped_quick_mode"
+        warnings.append("Market analysis skipped in quick mode")
+        # Small penalty only: this is intentional behavior in quick mode.
+        score -= 5
+    else:
+        score, has_estimated_inputs = _score_market_context(
+            market_analysis, checks, warnings, score, has_estimated_inputs
+        )
 
     if proxy_growth_used:
         score -= 5
@@ -106,8 +112,6 @@ def assess_data_quality(
         warnings.append("Market analysis failed")
         checks["market_analysis"] = "failed"
     elif market_analysis_skipped_quick:
-        score -= 8
-        warnings.append("Market analysis skipped in quick mode")
         checks["market_analysis"] = "skipped_quick_mode"
         if score > 80:
             score = 80
@@ -238,11 +242,11 @@ def _score_market_context(
 
 
 def _tier(score: int) -> str:
-    if score >= 90:
+    if score >= 80:
         return "A"
-    if score >= 75:
+    if score >= 65:
         return "B"
-    if score >= 60:
+    if score >= 50:
         return "C"
     return "D"
 

@@ -148,6 +148,7 @@ class PeerMultiples:
     n_dropped_sector: int = 0     # peers dropped for sector mismatch
     n_dropped_no_data: int = 0    # peers dropped because yfinance returned nothing
     n_dropped_sanity: int = 0     # peers dropped for extreme multiples
+    n_dropped_scale: int = 0      # peers dropped for market-cap scale mismatch
 
 
 # ── Aggregation helpers ───────────────────────────────────────────────────────
@@ -406,6 +407,7 @@ def build_peer_multiples(
     min_similarity: float = 0.0,
     target_ebitda_margin: float | None = None,
     target_growth: float | None = None,
+    min_market_cap_ratio: float = 0.0,
 ) -> PeerMultiples:
     """
     Fetch market data for each peer ticker and compute validated multiples.
@@ -423,7 +425,7 @@ def build_peer_multiples(
         target_sector: sector string for the company being valued (free text OK)
     """
     peers: list[PeerData] = []
-    n_no_data = n_sector = n_sanity = 0
+    n_no_data = n_sector = n_sanity = n_scale = 0
 
     for ticker in peer_tickers:
         md = fetch_market_data(ticker)
@@ -438,6 +440,18 @@ def build_peer_multiples(
             if not _sectors_compatible(target_sector, md.sector):
                 n_sector += 1
                 continue
+
+        # Gate 2b — scale compatibility (mainly for mega-cap targets)
+        if (
+            min_market_cap_ratio > 0
+            and target_market_cap
+            and target_market_cap > 0
+            and md.market_cap
+            and md.market_cap > 0
+            and md.market_cap < (target_market_cap * min_market_cap_ratio)
+        ):
+            n_scale += 1
+            continue
 
         # Gate 3 — numeric sanity
         ev_ebitda = md.ev_ebitda_market
@@ -494,6 +508,7 @@ def build_peer_multiples(
             n_dropped_no_data=n_no_data,
             n_dropped_sector=n_sector,
             n_dropped_sanity=n_sanity,
+            n_dropped_scale=n_scale,
             source="sector_fallback",
         )
 
@@ -535,6 +550,7 @@ def build_peer_multiples(
         n_dropped_no_data=n_no_data,
         n_dropped_sector=n_sector,
         n_dropped_sanity=n_sanity,
+        n_dropped_scale=n_scale,
         source=("yfinance_peers" if len(peers) >= MIN_VALID_PEERS else "yfinance_peers_low_confidence"),
     )
 
