@@ -32,6 +32,7 @@ from goldroger.data.comparables import (
 )
 from goldroger.data.fetcher import MarketData, fetch_market_data, resolve_ticker
 from goldroger.data.private_quality import merge_private_market_data
+from goldroger.data.quality_gate import assess_data_quality
 from goldroger.utils.json_parser import normalise_revenue_string
 from goldroger.data.registry import DEFAULT_REGISTRY
 from goldroger.finance.core.scenarios import run_scenarios
@@ -534,6 +535,27 @@ def run_analysis(
 
     # ── 5. VALUATION ENGINE ───────────────────────────────────────────────
     t0 = _step("Valuation Engine")
+    quality = assess_data_quality(
+        company_type=company_type,
+        market_data=market_data,
+        financials=fin.model_dump(),
+    )
+    console.print(
+        f"  [bold]Data quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
+        + (" [yellow]limited-confidence mode[/yellow]" if quality.is_blocked else "")
+    )
+    for _warn in quality.warnings[:3]:
+        console.print(f"  [yellow]• {_warn}[/yellow]")
+    if quality.blockers:
+        for _blk in quality.blockers:
+            console.print(f"  [red]• {_blk}[/red]")
+    sources.add(
+        "Data Quality Score",
+        f"{quality.score}/100 (Tier {quality.tier})",
+        "quality_gate",
+        "verified",
+    )
+
     assumptions_dict = assumptions.model_dump()
     assumptions_dict["_assumption_source"] = "system"
     if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
@@ -907,6 +929,14 @@ def run_analysis(
         football_field=football_field,
         peer_comps=peer_comps_table,
         ic_score=ic_summary,
+        data_quality={
+            "score": quality.score,
+            "tier": quality.tier,
+            "is_blocked": quality.is_blocked,
+            "blockers": quality.blockers,
+            "warnings": quality.warnings,
+            "checks": quality.checks,
+        },
         sources_md=sources.to_markdown(),
     )
     fill_gaps(analysis, fund.sector or "")

@@ -79,6 +79,18 @@ In addition:
 - If you want to override them, use `--interactive` (manual user override is explicitly tagged and then allowed).
 - Trading comps are deterministic when market comps exist: if `market_data.ev_ebitda_market` is available, it is the fixed EV/EBITDA mid-anchor; peer inputs can only adjust spread (capped at ±25%).
 
+### Data Quality Gate
+
+Before valuation, Gold Roger now computes a deterministic data quality report:
+- `score` (0-100), `tier` (A/B/C/D), `blockers`, `warnings`, `checks`
+- Included in `AnalysisResult.data_quality`
+- Logged in `sources.md` as `Data Quality Score`
+
+Blocking policy:
+- Missing revenue triggers a blocker and limited-confidence mode warning
+- Public checks include: market data, market cap, beta, live EV/EBITDA
+- Private checks include: provider record presence and confidence level
+
 ### What the tool produces
 
 | Mode | Command | Outputs |
@@ -260,6 +272,15 @@ LBO growth-equity thresholds (`growth_equity_ev_rev: 12.0`, `growth_equity_ev_eb
 | **Bloomberg** | Global | ✅ Everything | License — stub ready |
 | **Capital IQ** | Global | ✅ Everything + deals | License — stub ready |
 
+### Credential Setup in UI/API
+
+The API/UI now support entering missing provider keys directly:
+- `GET /data-sources` → provider status/capabilities
+- `POST /settings/credentials` → set keyed provider env vars at runtime
+- Optional persistence to `.env` via `persist_to_env_file=true`
+
+The `/ui` page includes a **Data Source Credentials** panel for this workflow.
+
 **FX rates**: EUR/GBP/CHF/CAD fetched live via yfinance (`EURUSD=X` etc.) with hardcoded fallback.
 
 ### Interactive source selector (`--interactive`)
@@ -423,3 +444,5 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Wikipedia revenue signal — NLP signal 5 in private triangulation
 ✔ Hallucination firewall — no-revenue path in ReportWriterAgent blocks any financial figure generation
 ✔ EV/EBITDA comps anchor determinism — live market EV/EBITDA locks comps mid; peer ranges only adjust spread (±25% cap), with provenance in `sources.md`
+✔ Data quality gate — deterministic score/tier/blockers before valuation, included in result payload and `sources.md`
+✔ UI/API credential management — keyed providers can be configured from UI and persisted to `.env`

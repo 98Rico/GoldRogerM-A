@@ -25,6 +25,8 @@ Two modes:
 |-----------|--------|-------|
 | Full per-field provenance tracking | ✅ Done | `sources.md` logs all inputs — revenue, margins, beta, WACC, growth, EV — with source + confidence; WACC now correctly tagged `verified` when CAPM used |
 | EV/EBITDA comps anchor determinism | ✅ Done | `ValuationService` now locks comps mid to live `market_data.ev_ebitda_market`; peer ranges only affect spread (capped ±25%) |
+| Data quality gate (public + private) | ✅ Done | Deterministic `data_quality` score/tier with blockers/warnings now returned in analysis output and logged to `sources.md` |
+| UI credential setup for missing sources | ✅ Done | API + UI now expose keyed providers and allow runtime key entry with optional `.env` persistence |
 | Public company valuation (DCF + Comps + LBO) | ✅ Solid | yfinance, CAPM WACC, sector multiples |
 | Private company valuation — high-growth | ✅ Improved | DCF 20% / Comps 35% / Tx 45% weights |
 | Sector-calibrated growth + margin fallbacks | ✅ Done | `get_sector_rev_growth` / `get_sector_ebitda_margin` |
@@ -85,6 +87,31 @@ Two modes:
 
 **Status**: implemented and active.  
 **Remaining work**: add country-specific weighting profiles and confidence calibration by sector.
+
+#### 0.4 — Data quality gate and scorecard  ← **COMPLETED**
+
+**Status**: ✅ completed.
+
+**Implemented**:
+- New deterministic gate: `goldroger/data/quality_gate.py`
+- Analysis output now includes `data_quality` payload: score, tier, blockers, warnings, checks
+- `equity.py` logs the quality score in console and `sources.md`
+- Regression tests added: `tests/test_quality_gate.py`
+
+**Current policy**:
+- Missing revenue triggers a blocker (`is_blocked=true`) and limited-confidence warning mode
+- Public checks include market data presence, market cap, live EV/EBITDA, beta
+- Private checks include provider-record availability + confidence level weighting
+
+#### 0.5 — UI/API credential entry for all keyed providers  ← **COMPLETED**
+
+**Status**: ✅ completed.
+
+**Implemented**:
+- `GET /data-sources` returns provider capabilities/status (including missing-key status)
+- `POST /settings/credentials` accepts provider env vars and values, applies at runtime
+- Optional persistence to `.env` (`persist_to_env_file=true`)
+- `/ui` now includes a credentials panel to enter/update keys directly
 
 #### 0.2 — Crunchbase activation
 

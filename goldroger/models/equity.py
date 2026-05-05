@@ -124,4 +124,5 @@ class AnalysisResult(Model):
     football_field: Optional[FootballField] = None
     peer_comps: Optional[PeerCompsTable] = None
     ic_score: Optional[ICScoreSummary] = None
+    data_quality: Optional[dict] = None
     sources_md: Optional[str] = None

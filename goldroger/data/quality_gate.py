@@ -1,0 +1,155 @@
+"""
+Data quality gate for valuation readiness.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+from goldroger.data.fetcher import MarketData
+
+
+@dataclass
+class DataQualityReport:
+    score: int
+    tier: str
+    is_blocked: bool
+    blockers: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    checks: dict[str, str] = field(default_factory=dict)
+
+
+def assess_data_quality(
+    company_type: str,
+    market_data: Optional[MarketData],
+    financials: dict,
+) -> DataQualityReport:
+    score = 100
+    blockers: list[str] = []
+    warnings: list[str] = []
+    checks: dict[str, str] = {}
+
+    rev = _num(
+        (market_data.revenue_ttm if market_data else None)
+        or financials.get("revenue_current")
+    )
+    ebitda_margin = _num(
+        (market_data.ebitda_margin if market_data else None)
+        or financials.get("ebitda_margin")
+    )
+
+    if rev is None or rev <= 0:
+        score -= 45
+        blockers.append("Missing revenue")
+        checks["revenue"] = "missing"
+    else:
+        checks["revenue"] = "ok"
+
+    if ebitda_margin is None:
+        score -= 12
+        warnings.append("Missing EBITDA margin (fallback will be used)")
+        checks["ebitda_margin"] = "missing"
+    else:
+        if ebitda_margin > 1.0:
+            ebitda_margin = ebitda_margin / 100.0
+        if ebitda_margin < -0.5 or ebitda_margin > 0.8:
+            score -= 15
+            warnings.append("EBITDA margin outside sanity bounds")
+            checks["ebitda_margin"] = "out_of_bounds"
+        else:
+            checks["ebitda_margin"] = "ok"
+
+    if company_type == "public":
+        score = _score_public(market_data, checks, warnings, blockers, score)
+    else:
+        score = _score_private(market_data, checks, warnings, score)
+
+    score = max(0, min(100, score))
+    tier = _tier(score)
+    is_blocked = "Missing revenue" in blockers
+    return DataQualityReport(
+        score=score,
+        tier=tier,
+        is_blocked=is_blocked,
+        blockers=blockers,
+        warnings=warnings,
+        checks=checks,
+    )
+
+
+def _score_public(market_data, checks, warnings, blockers, score: int) -> int:
+    if market_data is None:
+        score -= 35
+        blockers.append("Missing market data")
+        checks["market_data"] = "missing"
+        return score
+
+    checks["market_data"] = "ok"
+
+    if market_data.market_cap is None or market_data.market_cap <= 0:
+        score -= 12
+        warnings.append("Missing market cap")
+        checks["market_cap"] = "missing"
+    else:
+        checks["market_cap"] = "ok"
+
+    if market_data.ev_ebitda_market is None:
+        score -= 8
+        warnings.append("Missing live EV/EBITDA multiple")
+        checks["ev_ebitda_market"] = "missing"
+    else:
+        checks["ev_ebitda_market"] = "ok"
+
+    if market_data.beta is None:
+        score -= 8
+        warnings.append("Missing beta (WACC fallback likely)")
+        checks["beta"] = "missing"
+    else:
+        checks["beta"] = "ok"
+
+    return score
+
+
+def _score_private(market_data, checks, warnings, score: int) -> int:
+    if market_data is None:
+        score -= 25
+        warnings.append("No registry/provider market data found")
+        checks["provider_record"] = "missing"
+        return score
+
+    checks["provider_record"] = "ok"
+    conf = (market_data.confidence or "inferred").lower()
+    if conf == "verified":
+        checks["confidence"] = "verified"
+    elif conf == "estimated":
+        score -= 8
+        checks["confidence"] = "estimated"
+    else:
+        score -= 15
+        checks["confidence"] = "inferred"
+        warnings.append("Private revenue confidence is inferred")
+    return score
+
+
+def _tier(score: int) -> str:
+    if score >= 85:
+        return "A"
+    if score >= 70:
+        return "B"
+    if score >= 50:
+        return "C"
+    return "D"
+
+
+def _num(v) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        s = str(v).strip().replace(",", "")
+        if s.endswith("%"):
+            return float(s[:-1]) / 100.0
+        return float(s)
+    except Exception:
+        return None

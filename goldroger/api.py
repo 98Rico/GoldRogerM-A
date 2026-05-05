@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -7,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from .data.registry import DEFAULT_REGISTRY
 from .exporters import generate_excel, generate_pptx
 from .orchestrator import run_analysis, run_ma_analysis, run_pipeline
 
@@ -32,9 +35,72 @@ class AnalyzeResponse(BaseModel):
     pptx_path: str | None = None
 
 
+class CredentialUpdateRequest(BaseModel):
+    values: dict[str, str] = Field(default_factory=dict)
+    persist_to_env_file: bool = True
+
+
+class CredentialUpdateResponse(BaseModel):
+    saved: list[str]
+    skipped: list[str]
+    persisted_to: str | None = None
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/data-sources")
+def data_sources() -> dict:
+    providers = [c.__dict__ for c in DEFAULT_REGISTRY.list_providers()]
+    return {"providers": providers}
+
+
+def _persist_env_values(values: dict[str, str]) -> str:
+    env_path = Path(".env")
+    content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    for key, value in values.items():
+        pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+        line = f"{key}={value}"
+        if pattern.search(content):
+            content = pattern.sub(line, content)
+        else:
+            if content and not content.endswith("\n"):
+                content += "\n"
+            content += line + "\n"
+    env_path.write_text(content, encoding="utf-8")
+    return str(env_path)
+
+
+@app.post("/settings/credentials", response_model=CredentialUpdateResponse)
+def settings_credentials(req: CredentialUpdateRequest) -> CredentialUpdateResponse:
+    allowed_env_vars = {
+        c.key_env_var
+        for c in DEFAULT_REGISTRY.list_providers()
+        if c.requires_key and c.key_env_var
+    }
+    saved: list[str] = []
+    skipped: list[str] = []
+    clean_values: dict[str, str] = {}
+    for key, value in req.values.items():
+        k = (key or "").strip()
+        v = (value or "").strip()
+        if not k or not v:
+            skipped.append(k or "<empty>")
+            continue
+        if k not in allowed_env_vars:
+            skipped.append(k)
+            continue
+        os.environ[k] = v
+        clean_values[k] = v
+        saved.append(k)
+
+    persisted_to = None
+    if req.persist_to_env_file and clean_values:
+        persisted_to = _persist_env_values(clean_values)
+
+    return CredentialUpdateResponse(saved=saved, skipped=skipped, persisted_to=persisted_to)
 
 
 @app.get("/ui", response_class=HTMLResponse)
@@ -139,6 +205,21 @@ def ui() -> str:
   </div>
 
   <div style="margin-top: 16px;" class="card">
+    <h3 style="margin-top:0;">Data Source Credentials</h3>
+    <p class="muted">Set missing provider keys here. Values are applied immediately; optionally persisted to <code>.env</code>.</p>
+    <div id="cred_list" class="row"></div>
+    <div class="row" style="margin-top: 12px;">
+      <div class="col">
+        <label><input type="checkbox" id="persist_env" checked /> Persist to .env</label>
+      </div>
+      <div class="col" style="display:flex; align-items:flex-end;">
+        <button id="saveCredsBtn">Save Credentials</button>
+      </div>
+    </div>
+    <div class="muted" id="cred_status"></div>
+  </div>
+
+  <div style="margin-top: 16px;" class="card">
     <div style="margin-bottom: 8px;">
       <span class="pill" id="status">idle</span>
       <span class="muted" id="hint"></span>
@@ -190,6 +271,59 @@ def ui() -> str:
 
     el("mode").addEventListener("change", setModeUI);
     setModeUI();
+
+    const loadProviders = async () => {
+      try {
+        const resp = await fetch("/data-sources");
+        const data = await resp.json();
+        const providers = data.providers || [];
+        const keyed = providers.filter(p => p.requires_key && p.key_env_var);
+        if (!keyed.length) {
+          el("cred_list").innerHTML = '<div class="col"><span class="muted">No keyed providers configured.</span></div>';
+          return;
+        }
+        el("cred_list").innerHTML = keyed.map((p, idx) => `
+          <div class="col">
+            <label>${p.display_name} (${p.key_env_var})</label>
+            <input type="password" id="cred_${idx}" data-env="${p.key_env_var}" placeholder="${p.status === 'active' ? 'Already configured (enter to replace)' : 'Enter API key'}" />
+            <div class="muted">${p.description}</div>
+          </div>
+        `).join("");
+      } catch (e) {
+        el("cred_status").textContent = "Failed to load providers: " + String(e);
+      }
+    };
+
+    el("saveCredsBtn").addEventListener("click", async () => {
+      const inputs = Array.from(document.querySelectorAll('#cred_list input[data-env]'));
+      const values = {};
+      for (const i of inputs) {
+        if (i.value && i.value.trim()) values[i.dataset.env] = i.value.trim();
+      }
+      if (!Object.keys(values).length) {
+        el("cred_status").textContent = "No credential values entered.";
+        return;
+      }
+      try {
+        const resp = await fetch("/settings/credentials", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            values,
+            persist_to_env_file: el("persist_env").checked
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "Failed to save credentials");
+        el("cred_status").textContent = `Saved: ${data.saved.join(", ")}${data.skipped.length ? ` | Skipped: ${data.skipped.join(", ")}` : ""}${data.persisted_to ? ` | Persisted: ${data.persisted_to}` : ""}`;
+        inputs.forEach(i => i.value = "");
+        loadProviders();
+      } catch (e) {
+        el("cred_status").textContent = "Credential save failed: " + String(e);
+      }
+    });
+
+    loadProviders();
 
     el("runBtn").addEventListener("click", async () => {
       el("runBtn").disabled = true;
