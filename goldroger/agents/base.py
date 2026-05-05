@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from datetime import date
 
 import httpx
 from dotenv import load_dotenv
@@ -210,6 +211,20 @@ def _execute_web_search(query: str) -> str:
     return "\n\n".join(parts) if parts else f"No data found for: {query}"
 
 
+def _sanitize_search_query(query: str) -> str:
+    q = (query or "").strip()
+    if not q:
+        return q
+    # Avoid stale-year anchoring unless explicitly historical.
+    if re.search(r"\b(historical|history|since|from 20\d{2})\b", q, flags=re.IGNORECASE):
+        return q
+    current_year = str(date.today().year)
+    q = re.sub(r"\b2023\b", "latest", q)
+    q = re.sub(r"\b2024\b", "latest", q)
+    q = re.sub(r"\b2025\b", "latest", q) if current_year not in {"2025"} else q
+    return q
+
+
 class BaseAgent:
     name: str = "BaseAgent"
     model_tier: str = "small"   # "small" or "large" — resolved per provider
@@ -268,7 +283,8 @@ class BaseAgent:
                     messages.append(self._llm.format_assistant_with_tools(response))
 
                     for tc in response.tool_calls:
-                        result = _execute_web_search(tc.arguments.get("query", ""))
+                        query = _sanitize_search_query(tc.arguments.get("query", ""))
+                        result = _execute_web_search(query)
                         messages.append(self._llm.format_tool_result(tc.id, result))
 
                     _rate_limit_wait()

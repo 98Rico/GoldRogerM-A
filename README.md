@@ -515,3 +515,9 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Explicit failed valuation state — when peers are unavailable and DCF sanity fails, recommendation is forced to `INCONCLUSIVE`
 ✔ No silent contradiction messaging — comps-upside interpretation is suppressed when comps are unavailable/zero-weight
 ✔ Data-quality reliability penalties — public quality scoring now penalizes missing/weak peers and market-analysis failures
+✔ Current-year query guardrails — market-search prompts now enforce latest/current-year scope and sanitize stale 2023/2024 query anchors
+✔ Hard agent timeout caps — market analysis and peer comps now fail fast at 30s (instead of long blocking runs)
+✔ Pipeline failure status block — final output now reports Market/Peers/Valuation status plus final recommendation state
+✔ Failure-safe target suppression — `INCONCLUSIVE` runs hide target/fair-value presentation and avoid false precision
+✔ Market-data consistency guardrail — when market analysis fails, market size/growth fields are forced to `Not available` (no contradictory inferred values)
+✔ Cleaner final presentation — shorter thesis output and less noisy contradictory messaging in failed/low-confidence runs

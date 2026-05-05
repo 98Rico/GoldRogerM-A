@@ -74,7 +74,9 @@ from ._shared import (
 from .fill_gaps import fill_gaps
 
 load_dotenv()
-_MAX_AGENT_SECONDS = 60
+_MARKET_ANALYSIS_TIMEOUT = 30
+_PEER_COMPS_TIMEOUT = 30
+_TX_COMPS_TIMEOUT = 45
 
 def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
     score = 0.0
@@ -585,7 +587,12 @@ def run_analysis(
         try:
             result = _parse_with_retry(
                 market_agent, company, company_type,
-                {"sector": fund.sector or "", "description": fund.description, "run_date": date.today().isoformat()},
+                {
+                    "sector": fund.sector or "",
+                    "description": fund.description,
+                    "run_date": date.today().isoformat(),
+                    "current_year": date.today().year,
+                },
                 MarketAnalysis, MarketAnalysis(),
                 fatal_on_fail=True,
             )
@@ -654,26 +661,26 @@ def run_analysis(
         _fut_fin = _pool.submit(_do_financials)
         _fut_tx = None if _skip_tx_comps else _pool.submit(_do_tx_comps)
         try:
-            mkt, _mkt_status = _fut_mkt.result(timeout=_MAX_AGENT_SECONDS)
+            mkt, _mkt_status = _fut_mkt.result(timeout=_MARKET_ANALYSIS_TIMEOUT)
             market_analysis_failed = (_mkt_status != "ok")
         except FutureTimeoutError:
             market_analysis_failed = True
             mkt = MarketAnalysis()
-            console.print(f"  [red]Market analysis failed: timeout > {_MAX_AGENT_SECONDS}s[/red]")
+            console.print(f"  [red]Market analysis failed: timeout > {_MARKET_ANALYSIS_TIMEOUT}s[/red]")
         try:
-            _peers_raw, _peers_err = _fut_peers.result(timeout=_MAX_AGENT_SECONDS)
+            _peers_raw, _peers_err = _fut_peers.result(timeout=_PEER_COMPS_TIMEOUT)
             peer_timeout_or_fail = bool(_peers_err)
         except FutureTimeoutError:
             _peers_raw, _peers_err = None, TimeoutError("peer timeout")
             peer_timeout_or_fail = True
-            console.print(f"  [red]Peer comparables failed: timeout > {_MAX_AGENT_SECONDS}s[/red]")
+            console.print(f"  [red]Peer comparables failed: timeout > {_PEER_COMPS_TIMEOUT}s[/red]")
         fin = _fut_fin.result()
         if _fut_tx is not None:
             try:
-                _tx_raw, _tx_err = _fut_tx.result(timeout=_MAX_AGENT_SECONDS)
+                _tx_raw, _tx_err = _fut_tx.result(timeout=_TX_COMPS_TIMEOUT)
             except FutureTimeoutError:
                 _tx_raw, _tx_err = None, TimeoutError("tx comps timeout")
-                console.print(f"  [yellow]Transaction comps timeout > {_MAX_AGENT_SECONDS}s — skipped.[/yellow]")
+                console.print(f"  [yellow]Transaction comps timeout > {_TX_COMPS_TIMEOUT}s — skipped.[/yellow]")
         else:
             _tx_raw, _tx_err = None, None
             console.rule("[bold cyan]Transaction Comps")
@@ -1003,11 +1010,14 @@ def run_analysis(
     blended_ev = result.blended.blended if result.blended else None
     rec = result.recommendation
     _dcf_sanity_fail = any("DCF likely miscalibrated" in str(n) for n in (result.notes or []))
+    valuation_failed = False
     if _peer_count == 0 and _dcf_sanity_fail:
         console.print("  [red]❌ Valuation failed: peer comps unavailable and DCF sanity check failed.[/red]")
         rec.recommendation = "INCONCLUSIVE"
         rec.intrinsic_price = None
         rec.upside_pct = None
+        valuation_failed = True
+        result.field_sources.pop("Fair Value Range", None)
         result.notes.append("Valuation status: FAILED — no peers + DCF sanity failure.")
 
     if not result.has_revenue:
@@ -1126,6 +1136,9 @@ def run_analysis(
         _rec = _raw_rec
     if _low_conviction and _rec in {"BUY", "SELL", "HOLD"}:
         _rec = f"{_rec} / LOW CONVICTION"
+    if valuation_failed:
+        _rec = "INCONCLUSIVE"
+        _target_price = None
 
     # Dump all per-field provenance from the valuation engine.
     # add_once deduplicates by metric name — equity.py may have already logged
@@ -1474,10 +1487,21 @@ def run_analysis(
             "blockers": quality.blockers,
             "warnings": quality.warnings,
             "checks": quality.checks,
+            "pipeline_status": {
+                "market_analysis": "FAILED" if market_analysis_failed else "OK",
+                "peers": "FAILED" if (_peer_count == 0 or peer_timeout_or_fail) else "OK",
+                "valuation": "FAILED" if valuation_failed else "OK",
+                "recommendation": _rec,
+            },
         },
         sources_md=sources.to_markdown(),
     )
     fill_gaps(analysis, fund.sector or "")
+    if market_analysis_failed:
+        analysis.market.market_size = "Not available"
+        analysis.market.market_growth = "Not available"
+        analysis.market.market_segment = "Not available"
+        analysis.market.key_trends = []
     _tam_v = analysis.market.market_size or "Not available"
     _mg_v = analysis.market.market_growth or "Not available"
     _tam_conf = "inferred" if "not available" in str(_tam_v).lower() else "estimated"

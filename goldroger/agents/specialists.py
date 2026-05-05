@@ -64,6 +64,7 @@ class SectorAnalystAgent(BaseAgent):
         sector = context.get("sector", "")
         business = context.get("business_model", "") or context.get("description", "")
         run_date = context.get("run_date", "")
+        current_year = context.get("current_year", CURRENT_YEAR)
         return f"""Research the market for "{company}"{f" in the {sector} sector" if sector else ""}.
 
 CRITICAL:
@@ -73,16 +74,19 @@ CRITICAL:
 
 Context about the company (may be incomplete): {business}
 Run date: {run_date or f"{CURRENT_YEAR}-01-01"}
+Current year: {current_year}
 
 Freshness rules:
 - Prefer sources published within last 180 days from run date.
 - Penalize/discard sources older than 6 months unless they are foundational industry datasets.
 - Include publication dates in source strings when available.
+- Use current-year or latest available data.
+- Do not generate 2023/2024-specific queries unless explicitly historical.
 
 Search for market size reports, industry analysis, and competitor profiles. Use queries like:
 - "{company} segment handbags personal luxury goods"
-- "personal luxury goods market size 2024"
-- "luxury leather goods market size 2024 CAGR"
+- "personal luxury goods market size latest"
+- "luxury leather goods market size latest CAGR"
 - "{company} competitors handbags"
 
 Return ONLY this JSON:
@@ -289,7 +293,7 @@ CRITICAL TIME RULES:
 
 Return ONLY this JSON:
 {{
-  "thesis": "3-4 paragraph investment thesis with specific evidence, numbers, and rationale. Reference competitive moat, financial trajectory, and valuation support.",
+  "thesis": "2 concise paragraphs investment thesis with specific evidence and rationale (max 1200 chars). Reference moat, trajectory, and valuation support.",
   "bull_case": "Specific bull scenario with 2-3 concrete drivers and outcome",
   "base_case": "Base scenario — most likely outcome with key assumptions",
   "bear_case": "Bear scenario with specific downside risks and triggers",

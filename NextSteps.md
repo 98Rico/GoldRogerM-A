@@ -331,5 +331,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 36 | Peer-quality calibration pass — tiered Apple-class peer policy, similarity-weighted comps with low-similarity filtering, mega-cap terminal-growth guardrail (3.0–3.5%), weak-peer quality downgrades, and peer-policy traceability in sources | ✅ |
 | 37 | Dynamic peer engine + graceful comps degradation — removed hardcoded peer fallback list, introduced staged dynamic peer search, economics-based similarity ranking/filtering, partial comps weighting (10/25/40%), DCF miscalibration sanity flag, and reduced-confidence banner when peers are expanded | ✅ |
 | 38 | Reliability regression hotfix — fail-fast 60s agent timeouts, fatal JSON parsing for market analysis, explicit `INCONCLUSIVE` failed-valuation state (no peers + DCF sanity fail), non-contradictory comps messaging, and stronger quality penalties for weak/missing peers | ✅ |
+| 39 | Temporal + fail-fast stabilization — stale-year query sanitization, 30s hard timeouts for market/peer agents, pipeline status reporting, `INCONCLUSIVE` target suppression, strict market-failure data consistency, and cleaner concise output formatting | ✅ |
 
 </details>

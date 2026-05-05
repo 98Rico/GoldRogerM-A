@@ -508,13 +508,17 @@ def print_result(result):
     # Header
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(v.recommendation or "", "white")
     console.print()
-    _target_display = v.target_price or v.implied_value  # per-share if public, EV if private
+    _target_display = "N/A" if (v.recommendation or "").upper().startswith("INCONCLUSIVE") else (v.target_price or v.implied_value)
     _fv_range = _source_value("Fair Value Range")
-    _ev_display = f" | Implied EV: {v.implied_value}" if v.target_price else ""
+    _ev_display = (
+        f" | Implied EV: {v.implied_value}"
+        if (v.target_price and not (v.recommendation or "").upper().startswith("INCONCLUSIVE"))
+        else ""
+    )
     _target_line = (
         f"Fair Value Range: {_value_with_source('Fair Value Range', _fv_range)} | "
         f"Point Estimate: {_value_with_source('Target', _target_display)}"
-        if _fv_range and v.target_price
+        if _fv_range and v.target_price and not (v.recommendation or "").upper().startswith("INCONCLUSIVE")
         else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
     )
     console.print(Panel(
@@ -526,6 +530,15 @@ def print_result(result):
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
     ))
+    _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
+    if _pipeline_status:
+        console.print(
+            "[bold]Pipeline status:[/bold]\n"
+            f"  Market analysis: {_pipeline_status.get('market_analysis', 'N/A')}\n"
+            f"  Peers: {_pipeline_status.get('peers', 'N/A')}\n"
+            f"  Valuation: {_pipeline_status.get('valuation', 'N/A')}\n"
+            f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}"
+        )
     _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
     _eq_bridge = src_map.get("Equity Value", {}).get("value")
     _nd_bridge = src_map.get("Net Debt", {}).get("value")
@@ -598,7 +611,10 @@ def print_result(result):
 
     # Thesis
     if t.thesis:
-        console.print(Panel(t.thesis, title="Investment Thesis", border_style="green"))
+        _thesis_txt = t.thesis
+        if len(_thesis_txt) > 1200:
+            _thesis_txt = _thesis_txt[:1200].rstrip() + "..."
+        console.print(Panel(_thesis_txt, title="Investment Thesis", border_style="green"))
 
     # Scenarios
     if t.bull_case or t.base_case or t.bear_case:
