@@ -4,6 +4,7 @@ from __future__ import annotations
 import re as _re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 
 from dotenv import load_dotenv
 
@@ -80,40 +81,67 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
     - 'Upcoming' only for future-dated events
     - stale events rewritten as recent-event context
     """
+    _today = date.today()
     if run_year is None:
-        run_year = time.gmtime().tm_year
-    run_month = time.gmtime().tm_mon
+        run_year = _today.year
+    run_month = _today.month
     run_q = ((run_month - 1) // 3) + 1
+    run_ym = run_year * 12 + run_month
+    month_map = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+        "october": 10, "nov": 11, "november": 11, "dec": 12, "déc": 12, "december": 12,
+    }
 
-    def _event_position(text: str) -> tuple[int | None, int | None]:
+    def _event_position(text: str) -> tuple[int | None, int | None, int | None]:
         y = None
         q = None
+        mth = None
         ys = _re.findall(r"\b(20\d{2})\b", text)
         if ys:
             y = int(ys[0])
         qm = _re.search(r"\bQ([1-4])\b", text, flags=_re.IGNORECASE)
         if qm:
             q = int(qm.group(1))
-        return y, q
+        mm = _re.search(
+            r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+            r"Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b",
+            text,
+            flags=_re.IGNORECASE,
+        )
+        if mm:
+            mth = month_map.get(mm.group(1).lower())
+        return y, q, mth
 
     out: list[str] = []
     for c in catalysts or []:
         txt = str(c or "").strip()
         if not txt:
             continue
-        y, q = _event_position(txt)
+        y, q, mth = _event_position(txt)
         is_upcoming_label = bool(_re.search(r"\b(upcoming|expected|will|next)\b", txt, flags=_re.IGNORECASE))
 
         stale = False
+        very_old = False
         if y is not None:
-            if y < run_year:
-                stale = True
-            elif y == run_year and q is not None and q < run_q:
-                stale = True
+            if mth is not None:
+                event_ym = y * 12 + mth
+            elif q is not None:
+                event_ym = y * 12 + (q * 3)
+            else:
+                event_ym = y * 12 + 12
+            delta_months = run_ym - event_ym
+            stale = delta_months > 0
+            very_old = delta_months > 6
+            # hard reject ancient stale catalysts from the catalysts section
+            if delta_months > 18:
+                continue
 
         if stale and is_upcoming_label:
             txt = _re.sub(r"\b(upcoming|expected|will|next)\b", "recent", txt, flags=_re.IGNORECASE)
-            txt = f"Recent event context: {txt}"
+        if very_old:
+            txt = f"Historical context: {txt}"
         elif stale and not txt.lower().startswith("recent"):
             txt = f"Recent event context: {txt}"
         out.append(txt)
@@ -537,7 +565,7 @@ def run_analysis(
         _t = _step("Market Analysis")
         result = _parse_with_retry(
             market_agent, company, company_type,
-            {"sector": fund.sector or "", "description": fund.description},
+            {"sector": fund.sector or "", "description": fund.description, "run_date": date.today().isoformat()},
             MarketAnalysis, MarketAnalysis(),
         )
         log.end_step("market_analysis", _t)
@@ -653,6 +681,17 @@ def run_analysis(
         try:
             peer_list = parse_peer_agent_output(_peers_raw)
             peer_tickers = resolve_peer_tickers(peer_list)
+            _is_mega_tech = bool(
+                market_data
+                and market_data.market_cap
+                and market_data.market_cap > _mega_cap_usd_m
+                and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
+            )
+            if _is_mega_tech:
+                _mandatory = ["MSFT", "GOOGL", "META", "AMZN", "AVGO"]
+                _self_ticker = (market_data.ticker or "").upper() if market_data else ""
+                _merged = [t for t in _mandatory if t != _self_ticker] + peer_tickers
+                peer_tickers = list(dict.fromkeys(_merged))
             if peer_tickers:
                 peer_multiples = build_peer_multiples(
                     peer_tickers, target_sector=_target_sector
@@ -668,6 +707,16 @@ def run_analysis(
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
                 if peer_multiples.n_peers > 0:
+                    if _is_mega_tech and peer_multiples.n_peers < 5:
+                        console.print(
+                            f"  [yellow]Peer set too small for mega-cap tech ({peer_multiples.n_peers}); "
+                            "using deterministic mega-cap set.[/yellow]"
+                        )
+                        _self_ticker = (market_data.ticker or "").upper() if market_data else ""
+                        _fallback_tickers = [t for t in _MEGA_CAP_TECH_FALLBACK_PEERS if t != _self_ticker]
+                        _fb = build_peer_multiples(_fallback_tickers, target_sector=_target_sector)
+                        if _fb and _fb.n_peers >= 3:
+                            peer_multiples = _fb
                     console.print(
                         f"  [cyan]{peer_multiples.n_peers} validated peers:[/cyan] "
                         + ", ".join(p.ticker for p in peer_multiples.peers[:6])
@@ -681,6 +730,20 @@ def run_analysis(
                                 if peer_multiples.ev_revenue_median else ""
                             )
                         )
+                    for _p in peer_multiples.peers[:8]:
+                        if _p.ev_ebitda:
+                            sources.add_once(
+                                f"Peer {_p.ticker} EV/EBITDA",
+                                f"{_p.ev_ebitda:.1f}x",
+                                "yfinance",
+                                "verified",
+                            )
+                    sources.add_once(
+                        "Peer set timestamp",
+                        date.today().isoformat(),
+                        "system_clock",
+                        "verified",
+                    )
                     peer_comps_table = PeerCompsTable(
                         peers=[
                             PeerComp(
@@ -1130,6 +1193,23 @@ def run_analysis(
                 f"{_fmt_ev(scenarios_out.bull.blended_ev)}"
             ),
         )
+        # Improve method-table integrity: provide low/high for DCF and add blended band.
+        for _m in val.methods:
+            if _m.name == "DCF":
+                _m.low = str(round(scenarios_out.bear.dcf_ev, 1))
+                _m.high = str(round(scenarios_out.bull.dcf_ev, 1))
+            elif _m.name.startswith("Trading Comps"):
+                _m.low = str(round(scenarios_out.bear.comps_ev_mid, 1))
+                _m.high = str(round(scenarios_out.bull.comps_ev_mid, 1))
+        val.methods.append(
+            ValuationMethod(
+                name="Blended Valuation",
+                low=str(round(scenarios_out.bear.blended_ev, 1)),
+                mid=str(round(blended_ev, 1)) if blended_ev else str(round(scenarios_out.base.blended_ev, 1)),
+                high=str(round(scenarios_out.bull.blended_ev, 1)),
+                weight=100,
+            )
+        )
         # Ensure base scenario reconciles with current method outputs and blend.
         if football_field.base:
             if result.dcf:
@@ -1230,6 +1310,8 @@ def run_analysis(
                     and not market_data.revenue_ttm
                 )
             ),
+            "run_date": date.today().isoformat(),
+            "recent_window_months": 6,
         },
         InvestmentThesis,
         InvestmentThesis(thesis="N/A"),

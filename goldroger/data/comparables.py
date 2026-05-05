@@ -158,6 +158,15 @@ def _percentile(values: list[float], pct: float) -> Optional[float]:
     return clean[max(0, min(idx, len(clean) - 1))]
 
 
+def _winsorize(values: list[float], p_low: float = 0.10, p_high: float = 0.90) -> list[float]:
+    clean = sorted(v for v in values if v and v > 0)
+    if len(clean) < 5:
+        return clean
+    lo = _percentile(clean, p_low) or clean[0]
+    hi = _percentile(clean, p_high) or clean[-1]
+    return [min(max(v, lo), hi) for v in clean]
+
+
 # ── Core functions ────────────────────────────────────────────────────────────
 
 def build_peer_multiples(
@@ -239,11 +248,25 @@ def build_peer_multiples(
             source="sector_fallback",
         )
 
-    ev_ebitdas = [p.ev_ebitda for p in peers if p.ev_ebitda]
-    ev_revenues = [p.ev_revenue for p in peers if p.ev_revenue]
+    ev_ebitdas_raw = [p.ev_ebitda for p in peers if p.ev_ebitda]
+    ev_revenues_raw = [p.ev_revenue for p in peers if p.ev_revenue]
+    ev_ebitdas = _winsorize(ev_ebitdas_raw)
+    ev_revenues = _winsorize(ev_revenues_raw)
     pes = [p.pe_ratio for p in peers if p.pe_ratio]
     margins = [p.ebitda_margin for p in peers if p.ebitda_margin]
     growths = [p.revenue_growth for p in peers if p.revenue_growth]
+
+    ev_ebitda_low = _percentile(ev_ebitdas, 0.25)
+    ev_ebitda_high = _percentile(ev_ebitdas, 0.75)
+    ev_revenue_low = _percentile(ev_revenues, 0.25)
+    ev_revenue_high = _percentile(ev_revenues, 0.75)
+
+    # Small peer sets create unstable percentile bands.
+    if len(ev_ebitdas) < 5:
+        med = _median(ev_ebitdas)
+        if med:
+            ev_ebitda_low = med * 0.85
+            ev_ebitda_high = med * 1.15
 
     return PeerMultiples(
         peers=peers,
@@ -252,10 +275,10 @@ def build_peer_multiples(
         pe_median=_median(pes),
         ebitda_margin_median=_median(margins),
         revenue_growth_median=_median(growths),
-        ev_ebitda_low=_percentile(ev_ebitdas, 0.25),
-        ev_ebitda_high=_percentile(ev_ebitdas, 0.75),
-        ev_revenue_low=_percentile(ev_revenues, 0.25),
-        ev_revenue_high=_percentile(ev_revenues, 0.75),
+        ev_ebitda_low=ev_ebitda_low,
+        ev_ebitda_high=ev_ebitda_high,
+        ev_revenue_low=ev_revenue_low,
+        ev_revenue_high=ev_revenue_high,
         n_peers=len(peers),
         n_dropped_no_data=n_no_data,
         n_dropped_sector=n_sector,

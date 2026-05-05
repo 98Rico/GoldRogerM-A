@@ -193,6 +193,13 @@ class ValuationService:
         field_sources["EBITDA Margin"] = (f"{ebitda_margin:.1%}", _rev_src, ebitda_confidence)
         field_sources["WACC"] = (f"{wacc:.2%}", "capm_model", wacc_confidence)
         field_sources["Terminal Growth"] = (f"{terminal_growth:.2%}", "sector_default", "inferred")
+        if base_revenue_y0 and base_revenue_y0 > 0 and revenue_series:
+            _modeled_g = (revenue_series[0] / base_revenue_y0) - 1.0
+            field_sources["Modeled Revenue Growth"] = (
+                f"{_modeled_g:+.1%}",
+                "valuation_model",
+                "inferred",
+            )
         if market_data and market_data.beta:
             field_sources["Beta (β)"] = (f"{market_data.beta:.3f}", _rev_src, "verified")
         if market_data and market_data.forward_revenue_growth is not None:
@@ -342,6 +349,27 @@ class ValuationService:
 
         # ── 8. Sensitivity matrix ─────────────────────────────────────────
         sensitivity = self._build_sensitivity(dcf_input, wacc, terminal_growth)
+        if (
+            sensitivity
+            and market_data
+            and market_data.shares_outstanding
+            and market_data.shares_outstanding > 0
+        ):
+            try:
+                _all = [v for row in sensitivity.ev_matrix for v in row]
+                if _all:
+                    _ev_lo = min(_all)
+                    _ev_hi = max(_all)
+                    _nd = market_data.net_debt or 0.0
+                    _px_lo = (_ev_lo - _nd) / market_data.shares_outstanding
+                    _px_hi = (_ev_hi - _nd) / market_data.shares_outstanding
+                    field_sources["Fair Value Range"] = (
+                        f"${min(_px_lo, _px_hi):.2f}–${max(_px_lo, _px_hi):.2f}",
+                        "valuation_sensitivity",
+                        "inferred",
+                    )
+            except Exception:
+                pass
 
         # ── 9. Data confidence ────────────────────────────────────────────
         if market_data:

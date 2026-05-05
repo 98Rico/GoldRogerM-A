@@ -7,5 +7,5 @@ def test_sanitize_stale_catalyst_rewrites_to_recent():
         run_year=2026,
     )
     assert out
-    assert out[0].startswith("Recent event context:")
+    assert out[0].startswith("Historical context:")
     assert "upcoming" not in out[0].lower()

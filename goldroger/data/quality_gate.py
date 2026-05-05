@@ -204,11 +204,11 @@ def _score_market_context(
 
 
 def _tier(score: int) -> str:
-    if score >= 85:
+    if score >= 90:
         return "A"
-    if score >= 70:
+    if score >= 75:
         return "B"
-    if score >= 50:
+    if score >= 60:
         return "C"
     return "D"
 

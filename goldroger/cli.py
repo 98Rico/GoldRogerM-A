@@ -349,6 +349,7 @@ def _metric_source_keys(metric: str) -> list[str]:
     aliases: dict[str, list[str]] = {
         "Revenue": ["Revenue", "Revenue TTM"],
         "Revenue Growth": ["Revenue Growth", "Forward Revenue Growth"],
+        "Modeled Revenue Growth": ["Modeled Revenue Growth"],
         "Gross Margin": ["Gross Margin"],
         "EBITDA Margin": ["EBITDA Margin"],
         "Net Margin": ["Net Margin"],
@@ -356,6 +357,7 @@ def _metric_source_keys(metric: str) -> list[str]:
         "TAM": ["TAM", "Market Size"],
         "Market Growth": ["Market Growth"],
         "Target": ["Implied Target Price", "Target Price", "Implied EV"],
+        "Fair Value Range": ["Fair Value Range"],
         "Upside": ["Upside", "Upside/Downside"],
         "WACC": ["WACC"],
         "Terminal Growth": ["Terminal Growth"],
@@ -496,16 +498,30 @@ def print_result(result):
         shown = _format_metric_value(metric, shown_raw)
         return f"{shown}{footnotes.tag(note)}"
 
+    def _source_value(metric: str) -> Optional[str]:
+        for key in _metric_source_keys(metric):
+            entry = src_map.get(key)
+            if entry and entry.get("value"):
+                return str(entry["value"])
+        return None
+
     # Header
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(v.recommendation or "", "white")
     console.print()
     _target_display = v.target_price or v.implied_value  # per-share if public, EV if private
+    _fv_range = _source_value("Fair Value Range")
     _ev_display = f" | Implied EV: {v.implied_value}" if v.target_price else ""
+    _target_line = (
+        f"Fair Value Range: {_value_with_source('Fair Value Range', _fv_range)} | "
+        f"Point Estimate: {_value_with_source('Target', _target_display)}"
+        if _fv_range and v.target_price
+        else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
+    )
     console.print(Panel(
         f"[bold]{f.company_name}[/] | {f.sector} | {f.headquarters}\n"
         f"{f.description}\n\n"
         f"Recommendation: [{rec_color}]{v.recommendation}[/] | "
-        f"Target: {_value_with_source('Target', _target_display)}{_ev_display} | "
+        f"{_target_line} | "
         f"Upside: {_value_with_source('Upside', v.upside_downside)}",
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
@@ -533,12 +549,14 @@ def print_result(result):
     for row in [
         ("Revenue", fin.revenue_current),
         ("Revenue Growth", fin.revenue_growth),
+        ("Modeled Revenue Growth", _source_value("Modeled Revenue Growth")),
         ("Gross Margin", fin.gross_margin),
         ("EBITDA Margin", fin.ebitda_margin),
         ("Net Margin", fin.net_margin),
         ("Free Cash Flow", fin.free_cash_flow),
         ("TAM", m.market_size),
         ("Market Growth", m.market_growth),
+        ("Terminal Growth", _source_value("Terminal Growth")),
     ]:
         kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
     console.print(kpi_table)
@@ -553,7 +571,7 @@ def print_result(result):
         val_table.add_column("Weight")
         for method in v.methods:
             if method.name.startswith("Trading Comps"):
-                source_metric = "EV/EBITDA (comps anchor)"
+                source_metric = "EV/EBITDA (peer median)"
             elif method.name.startswith("Transaction Comps"):
                 source_metric = "Transaction Comps"
             elif method.name == "DCF":

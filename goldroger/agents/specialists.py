@@ -63,6 +63,7 @@ class SectorAnalystAgent(BaseAgent):
     def _user_prompt(self, company: str, company_type: str, context: dict) -> str:
         sector = context.get("sector", "")
         business = context.get("business_model", "") or context.get("description", "")
+        run_date = context.get("run_date", "")
         return f"""Research the market for "{company}"{f" in the {sector} sector" if sector else ""}.
 
 CRITICAL:
@@ -71,6 +72,12 @@ CRITICAL:
 - Report your scope explicitly in market_segment.
 
 Context about the company (may be incomplete): {business}
+Run date: {run_date or f"{CURRENT_YEAR}-01-01"}
+
+Freshness rules:
+- Prefer sources published within last 180 days from run date.
+- Penalize/discard sources older than 6 months unless they are foundational industry datasets.
+- Include publication dates in source strings when available.
 
 Search for market size reports, industry analysis, and competitor profiles. Use queries like:
 - "{company} segment handbags personal luxury goods"
@@ -235,6 +242,8 @@ class ReportWriterAgent(BaseAgent):
         identity_note = context.get("identity_note", "")
         registry_facts = context.get("registry_facts", {}) or {}
         strict_registry_mode = bool(context.get("strict_registry_mode", False))
+        run_date = context.get("run_date", "")
+        recent_window_months = context.get("recent_window_months", 6)
         rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated"
         margin_line = f"  EBITDA Margin: {ebitda_margin}\n" if ebitda_margin else ""
         has_revenue = (
@@ -262,6 +271,7 @@ class ReportWriterAgent(BaseAgent):
 Recommendation context: {rec} with {upside} upside/downside.{revenue_lock}
 Identity context: {identity_note}
 Verified registry facts: {registry_facts}
+Run date: {run_date}
 
 CRITICAL IDENTITY RULE:
 - Do NOT confuse this company with similarly named companies.
@@ -270,6 +280,12 @@ CRITICAL IDENTITY RULE:
 - If SIC code descriptions are provided, use them as the primary business classification baseline.
 - If filing history/director metadata is provided, reference only those verified facts and avoid extrapolating unsupported operational claims.
 {"- STRICT REGISTRY MODE: Do NOT name specific competitors, products, fundraising events, partnerships, TAM figures, or growth percentages unless explicitly present in verified registry facts/context. Keep statements generic and evidence-bounded." if strict_registry_mode else ""}
+
+CRITICAL TIME RULES:
+- Do NOT describe events before {run_date} as upcoming.
+- "Recent" means within the last {recent_window_months} months only.
+- Older events must be marked as historical context or excluded.
+- Every catalyst must include an explicit month/year or quarter/year marker.
 
 Return ONLY this JSON:
 {{

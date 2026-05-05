@@ -486,3 +486,7 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Recommendation guardrails — high method dispersion or resilient fundamentals can cap SELL to HOLD
 ✔ Real-peer comps first — removed market-anchor ±25%; comps now use peer P25/Median/P75 when available
 ✔ Conviction scaling — weak-comps/high-dispersion cases are surfaced as low-conviction recommendations
+✔ Catalyst freshness policy — upcoming=future only, recent=<=6 months, older items rewritten as historical context
+✔ Fair-value presentation — output now shows fair value range + point estimate
+✔ Football-field cleanup — DCF/comps/blended low-mid-high rows are now shown consistently
+✔ Peer robustness — mega-cap tech runs with mandatory platform peers and small-set safeguards
