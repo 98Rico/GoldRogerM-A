@@ -199,13 +199,13 @@ def _duckduckgo_search(query: str, max_results: int = 5) -> str:
         return f"(DuckDuckGo error: {exc})"
 
 
-def _execute_web_search(query: str) -> str:
+def _execute_web_search(query: str, max_results: int = 5) -> str:
     """Combine Yahoo Finance and DuckDuckGo results."""
     parts: list[str] = []
     yf = _yahoo_finance_data(query)
     if yf.strip() and not yf.startswith("(Yahoo"):
         parts.append(f"=== Yahoo Finance ===\n{yf}")
-    ddg = _duckduckgo_search(query)
+    ddg = _duckduckgo_search(query, max_results=max_results)
     if ddg.strip() and not ddg.startswith("(Duck"):
         parts.append(f"=== Web Search ===\n{ddg}")
     return "\n\n".join(parts) if parts else f"No data found for: {query}"
@@ -229,7 +229,7 @@ class BaseAgent:
     name: str = "BaseAgent"
     model_tier: str = "small"   # "small" or "large" — resolved per provider
     max_tokens: int = 2048
-    max_retries: int = 3
+    max_retries: int = 2
     max_tool_rounds: int = _cfg.agent.max_tool_rounds
     use_tools: bool = True      # False for synthesis-only agents
 
@@ -266,8 +266,15 @@ class BaseAgent:
 
         tools = [WEB_SEARCH_TOOL] if self.use_tools else None
         model = self._llm.resolve_model(self.model_tier)
+        quick_mode = bool(context.get("quick_mode", False))
+        effective_retries = 1 if quick_mode else self.max_retries
+        effective_tool_rounds = 1 if quick_mode else self.max_tool_rounds
+        max_queries = int(context.get("max_queries", 5 if quick_mode else 8))
+        max_results = int(context.get("max_results", 3 if quick_mode else 5))
+        seen_queries: set[str] = set()
+        queries_used = 0
 
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(effective_retries + 1):
             try:
                 _rate_limit_wait()
                 response = self._llm.complete(
@@ -278,13 +285,21 @@ class BaseAgent:
                 )
 
                 tool_rounds = 0
-                while response.wants_tool and tool_rounds < self.max_tool_rounds:
+                while response.wants_tool and tool_rounds < effective_tool_rounds:
                     tool_rounds += 1
                     messages.append(self._llm.format_assistant_with_tools(response))
 
                     for tc in response.tool_calls:
                         query = _sanitize_search_query(tc.arguments.get("query", ""))
-                        result = _execute_web_search(query)
+                        if not query or query in seen_queries:
+                            result = f"Skipped duplicate/empty query: {query}"
+                        elif queries_used >= max_queries:
+                            result = f"Query budget reached ({max_queries})."
+                        else:
+                            seen_queries.add(query)
+                            queries_used += 1
+                            # Override ddg result depth via lightweight query suffix convention.
+                            result = _execute_web_search(query, max_results=max_results)
                         messages.append(self._llm.format_tool_result(tc.id, result))
 
                     _rate_limit_wait()
@@ -300,7 +315,7 @@ class BaseAgent:
             except Exception as exc:
                 exc_str = str(exc).lower()
                 is_rate_limit = "429" in str(exc) or "rate_limit" in exc_str or "rate limit" in exc_str
-                if attempt < self.max_retries:
+                if attempt < effective_retries:
                     wait = 60 if is_rate_limit else 2 ** attempt
                     print(f"[{self.name}] Attempt {attempt + 1} failed: {exc} — retrying in {wait}s...")
                     time.sleep(wait)

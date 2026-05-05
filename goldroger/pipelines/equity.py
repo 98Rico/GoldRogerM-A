@@ -77,6 +77,7 @@ load_dotenv()
 _MARKET_ANALYSIS_TIMEOUT = 30
 _PEER_COMPS_TIMEOUT = 30
 _TX_COMPS_TIMEOUT = 45
+_REPORT_WRITER_TIMEOUT = 20
 
 def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
     score = 0.0
@@ -219,6 +220,7 @@ def run_analysis(
     data_sources: list[str] | None = None,
     country_hint: str = "",
     company_identifier: str = "",
+    quick_mode: bool = False,
 ) -> AnalysisResult:
     log = new_run(company, company_type)
     client = _client(llm)
@@ -584,6 +586,11 @@ def run_analysis(
 
     def _do_market():
         _t = _step("Market Analysis")
+        if quick_mode:
+            console.print("  [dim]Quick mode: skipping deep market analysis.[/dim]")
+            log.end_step("market_analysis", _t)
+            _done("Market Analysis", _t)
+            return MarketAnalysis(), "skipped"
         try:
             result = _parse_with_retry(
                 market_agent, company, company_type,
@@ -592,6 +599,9 @@ def run_analysis(
                     "description": fund.description,
                     "run_date": date.today().isoformat(),
                     "current_year": date.today().year,
+                    "quick_mode": quick_mode,
+                    "max_queries": 5,
+                    "max_results": 3,
                 },
                 MarketAnalysis, MarketAnalysis(),
                 fatal_on_fail=True,
@@ -612,6 +622,9 @@ def run_analysis(
                 "sector": fund.sector or "",
                 "description": fund.description or "",
                 "revenue_usd_m": _peer_rev,
+                "quick_mode": quick_mode,
+                "max_queries": 5,
+                "max_results": 3,
             })
             result = (raw, None)
         except Exception as e:
@@ -630,7 +643,7 @@ def run_analysis(
         else:
             f = _parse_with_retry(
                 fin_agent, company, company_type,
-                {"sector": fund.sector or "", "description": fund.description},
+                {"sector": fund.sector or "", "description": fund.description, "quick_mode": quick_mode},
                 Financials, _fin_fallback(),
             )
             # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
@@ -646,6 +659,9 @@ def run_analysis(
             raw = tx_agent.run(company, company_type, {
                 "sector": fund.sector or "",
                 "current_year": str(datetime.date.today().year),
+                "quick_mode": quick_mode,
+                "max_queries": 5,
+                "max_results": 3,
             })
             result = (raw, None)
         except Exception as e:
@@ -662,7 +678,7 @@ def run_analysis(
         _fut_tx = None if _skip_tx_comps else _pool.submit(_do_tx_comps)
         try:
             mkt, _mkt_status = _fut_mkt.result(timeout=_MARKET_ANALYSIS_TIMEOUT)
-            market_analysis_failed = (_mkt_status != "ok")
+            market_analysis_failed = (_mkt_status == "failed")
         except FutureTimeoutError:
             market_analysis_failed = True
             mkt = MarketAnalysis()
@@ -1407,53 +1423,67 @@ def run_analysis(
 
     # ── 6. THESIS ─────────────────────────────────────────────────────────
     t0 = _step("Investment Thesis")
-    thesis = _parse_with_retry(
-        thesis_agent, company, company_type,
-        {
-            "sector": fund.sector or "",
-            "valuation": val.implied_value,
-            "recommendation": val.recommendation,
-            "upside": val.upside_downside,
-            "wacc": result.wacc_used,
-            "market": mkt.market_size,
-            "verified_revenue": (
-                str(market_data.revenue_ttm)
-                if market_data and market_data.revenue_ttm
-                else fin.revenue_current or "unknown"
-            ),
-            "revenue_confidence": (
-                market_data.confidence if market_data and market_data.revenue_ttm else "estimated"
-            ),
-            "ebitda_margin": (
-                f"{market_data.ebitda_margin:.1%}"
-                if market_data and market_data.ebitda_margin is not None
-                else fin.ebitda_margin or ""
-            ),
-            "company_identifier": company_identifier,
-            "country_hint": country_hint or "",
-            "identity_note": (
-                f"Confirmed legal entity: {fund.company_name} "
-                f"(Companies House #{company_identifier}, {country_hint or 'unknown country'})"
-                if company_identifier else f"Confirmed legal entity: {fund.company_name}"
-            ),
-            "registry_facts": (
-                market_data.additional_metadata if market_data and isinstance(market_data.additional_metadata, dict) else {}
-            ),
-            "strict_registry_mode": (
-                bool(
-                    company_type == "private"
-                    and company_identifier
-                    and market_data
-                    and market_data.data_source == "companies_house"
-                    and not market_data.revenue_ttm
-                )
-            ),
-            "run_date": date.today().isoformat(),
-            "recent_window_months": 6,
-        },
-        InvestmentThesis,
-        InvestmentThesis(thesis="N/A"),
-    )
+    _thesis_ctx = {
+        "sector": fund.sector or "",
+        "valuation": val.implied_value,
+        "recommendation": val.recommendation,
+        "upside": val.upside_downside,
+        "wacc": result.wacc_used,
+        "market": mkt.market_size,
+        "verified_revenue": (
+            str(market_data.revenue_ttm)
+            if market_data and market_data.revenue_ttm
+            else fin.revenue_current or "unknown"
+        ),
+        "revenue_confidence": (
+            market_data.confidence if market_data and market_data.revenue_ttm else "estimated"
+        ),
+        "ebitda_margin": (
+            f"{market_data.ebitda_margin:.1%}"
+            if market_data and market_data.ebitda_margin is not None
+            else fin.ebitda_margin or ""
+        ),
+        "company_identifier": company_identifier,
+        "country_hint": country_hint or "",
+        "identity_note": (
+            f"Confirmed legal entity: {fund.company_name} "
+            f"(Companies House #{company_identifier}, {country_hint or 'unknown country'})"
+            if company_identifier else f"Confirmed legal entity: {fund.company_name}"
+        ),
+        "registry_facts": (
+            market_data.additional_metadata if market_data and isinstance(market_data.additional_metadata, dict) else {}
+        ),
+        "strict_registry_mode": (
+            bool(
+                company_type == "private"
+                and company_identifier
+                and market_data
+                and market_data.data_source == "companies_house"
+                and not market_data.revenue_ttm
+            )
+        ),
+        "run_date": date.today().isoformat(),
+        "recent_window_months": 6,
+        "quick_mode": quick_mode,
+    }
+    try:
+        with ThreadPoolExecutor(max_workers=1) as _tp:
+            _fut_thesis = _tp.submit(
+                _parse_with_retry,
+                thesis_agent, company, company_type, _thesis_ctx,
+                InvestmentThesis, InvestmentThesis(thesis="N/A"),
+            )
+            thesis = _fut_thesis.result(timeout=_REPORT_WRITER_TIMEOUT)
+    except FutureTimeoutError:
+        console.print(f"  [yellow]Investment thesis timeout > {_REPORT_WRITER_TIMEOUT}s — using short fallback.[/yellow]")
+        thesis = InvestmentThesis(
+            thesis=f"{company}: quick summary only. Full thesis unavailable due to timeout.",
+            bull_case="Upside depends on execution and market conditions.",
+            base_case="Base case assumes stable operations and gradual growth.",
+            bear_case="Downside risk from execution, demand, or pricing pressure.",
+            catalysts=["Next earnings/filing update", "Product/strategy update", "Macro/regulatory change"],
+            key_questions=["What is verified growth?", "How durable are margins?", "What valuation anchor is most reliable?"],
+        )
     thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
     log.end_step("thesis", t0)
     _done("Investment Thesis", t0)
@@ -1492,6 +1522,15 @@ def run_analysis(
                 "peers": "FAILED" if (_peer_count == 0 or peer_timeout_or_fail) else "OK",
                 "valuation": "FAILED" if valuation_failed else "OK",
                 "recommendation": _rec,
+            },
+            "timings_s": {
+                "market_data": log.step_times.get("market_data"),
+                "fundamentals": log.step_times.get("fundamentals"),
+                "market_analysis": log.step_times.get("market_analysis"),
+                "financials": log.step_times.get("financials"),
+                "valuation": log.step_times.get("valuation"),
+                "thesis": log.step_times.get("thesis"),
+                "total": round(time.time() - log.started_at, 2),
             },
         },
         sources_md=sources.to_markdown(),

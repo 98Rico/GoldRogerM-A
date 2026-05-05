@@ -539,6 +539,17 @@ def print_result(result):
             f"  Valuation: {_pipeline_status.get('valuation', 'N/A')}\n"
             f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}"
         )
+    _timings = (getattr(result, "data_quality", {}) or {}).get("timings_s", {})
+    if _timings:
+        console.print(
+            "[bold]Timing:[/bold]\n"
+            f"  Market data: {_timings.get('market_data', 'N/A')}s\n"
+            f"  Market analysis: {_timings.get('market_analysis', 'N/A')}s\n"
+            f"  Peers/financials: {_timings.get('financials', 'N/A')}s\n"
+            f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"
+            f"  Report: {_timings.get('thesis', 'N/A')}s\n"
+            f"  Total: {_timings.get('total', 'N/A')}s"
+        )
     _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
     _eq_bridge = src_map.get("Equity Value", {}).get("value")
     _nd_bridge = src_map.get("Net Debt", {}).get("value")
@@ -735,7 +746,8 @@ def main():
         else:
             result = run_analysis(confirmed_company, args.type, llm=args.llm, siren=args.siren,
                                    interactive=args.interactive, data_sources=selected_sources,
-                                   country_hint=country_hint, company_identifier=company_identifier)
+                                   country_hint=country_hint, company_identifier=company_identifier,
+                                   quick_mode=args.quick)
             print_result(result)
 
         if args.output:

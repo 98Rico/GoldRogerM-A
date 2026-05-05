@@ -521,3 +521,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Failure-safe target suppression — `INCONCLUSIVE` runs hide target/fair-value presentation and avoid false precision
 ✔ Market-data consistency guardrail — when market analysis fails, market size/growth fields are forced to `Not available` (no contradictory inferred values)
 ✔ Cleaner final presentation — shorter thesis output and less noisy contradictory messaging in failed/low-confidence runs
+✔ Quick-mode speed lane — `--quick` now skips deep market analysis and enforces bounded agent behavior
+✔ Bounded tool-search budgets — per-agent query deduplication + caps (`max_queries`, `max_results`) to prevent runaway web-search loops
+✔ Retry throttling in quick mode — reduced LLM retries/tool rounds for faster degraded output instead of long retry chains
+✔ End-to-end latency controls — explicit 30s caps for market/peer stages and 20s cap for report writer
+✔ Timing diagnostics in output — final report now prints per-stage timings and total runtime for regression tracking

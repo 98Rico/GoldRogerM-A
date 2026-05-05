@@ -248,6 +248,7 @@ class ReportWriterAgent(BaseAgent):
         strict_registry_mode = bool(context.get("strict_registry_mode", False))
         run_date = context.get("run_date", "")
         recent_window_months = context.get("recent_window_months", 6)
+        quick_mode = bool(context.get("quick_mode", False))
         rev_conf_label = "verified from filings" if rev_confidence == "verified" else "estimated"
         margin_line = f"  EBITDA Margin: {ebitda_margin}\n" if ebitda_margin else ""
         has_revenue = (
@@ -308,7 +309,9 @@ Return ONLY this JSON:
     "Question 3"
   ],
   "sources": ["Title — https://example.com", "Title — https://example.com"]
-}}"""
+}}
+
+{"QUICK MODE OVERRIDE: keep each section short; thesis as 3 bullets max, catalysts max 3, key_questions max 3." if quick_mode else ""}"""
 
 
 # ── Transaction comps agent ──────────────────────────────────────────────────
