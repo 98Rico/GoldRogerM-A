@@ -15,6 +15,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -22,6 +23,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from .data.fetcher import resolve_ticker
 from .data.registry import DEFAULT_REGISTRY
 from .data.source_selector import provider_table
 from .exporters import generate_excel, generate_pptx
@@ -76,6 +78,45 @@ def _fetch_company_suggestions(query: str, company_type: str, country_hint: str 
                 return out[:7]
     except Exception:
         pass
+    # Public fallback: use internal ticker resolver and direct ticker heuristic.
+    if company_type == "public":
+        rows: list[dict] = []
+        try:
+            t = resolve_ticker(q)
+            if t:
+                rows.append(
+                    {
+                        "display_name": q.upper(),
+                        "symbol": t.upper(),
+                        "quote_type": "EQUITY",
+                        "exchange": "",
+                        "region": "",
+                        "source": "resolve_ticker_fallback",
+                        "country_hint": country_hint or "",
+                        "identifier": "",
+                    }
+                )
+        except Exception:
+            pass
+        # If input already looks like a ticker, offer it directly.
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9.\-]{0,9}", q):
+            sym = q.upper()
+            if not any((r.get("symbol") or "").upper() == sym for r in rows):
+                rows.append(
+                    {
+                        "display_name": sym,
+                        "symbol": sym,
+                        "quote_type": "EQUITY",
+                        "exchange": "",
+                        "region": "",
+                        "source": "ticker_input_fallback",
+                        "country_hint": country_hint or "",
+                        "identifier": "",
+                    }
+                )
+        if rows:
+            return rows
+
     out = [{
         "display_name": q,
         "symbol": "",
@@ -265,12 +306,113 @@ def _confirm_company_or_abort(company: str, company_type: str, country_hint: str
         console.print("[yellow]Selection out of range. Try again.[/]")
 
 
+def _parse_sources_md(sources_md: Optional[str]) -> dict[str, dict[str, str]]:
+    """
+    Parse SourcesLog markdown table into:
+      metric -> {"value": str, "source": str, "confidence": str, "url": str}
+    """
+    if not sources_md:
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for line in sources_md.splitlines():
+        if not line.startswith("|"):
+            continue
+        if line.startswith("| Metric |") or line.startswith("|--------|"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        # Expected split shape with leading/trailing pipes:
+        # ["", metric, value, source, confidence, ""]
+        if len(parts) < 6:
+            continue
+        metric = parts[1]
+        if not metric:
+            continue
+        value = parts[2]
+        source_raw = parts[3]
+        conf_raw = parts[4]
+        url = ""
+        m = re.search(r"\(\[link\]\(([^)]+)\)\)", source_raw)
+        if m:
+            url = m.group(1).strip()
+            source_raw = re.sub(r"\s*\(\[link\]\([^)]+\)\)", "", source_raw).strip()
+        confidence = re.sub(r"^[^a-zA-Z]+", "", conf_raw).strip() or "unknown"
+        out[metric] = {
+            "value": value,
+            "source": source_raw or "unknown",
+            "confidence": confidence,
+            "url": url,
+        }
+    return out
+
+
+def _metric_source_keys(metric: str) -> list[str]:
+    aliases: dict[str, list[str]] = {
+        "Revenue": ["Revenue", "Revenue TTM"],
+        "Revenue Growth": ["Revenue Growth", "Forward Revenue Growth"],
+        "Gross Margin": ["Gross Margin"],
+        "EBITDA Margin": ["EBITDA Margin"],
+        "Net Margin": ["Net Margin"],
+        "Free Cash Flow": ["Free Cash Flow"],
+        "TAM": ["TAM", "Market Size"],
+        "Market Growth": ["Market Growth"],
+        "Target": ["Target Price", "Implied EV"],
+        "Upside": ["Upside", "Upside/Downside"],
+        "WACC": ["WACC"],
+        "Terminal Growth": ["Terminal Growth"],
+    }
+    return aliases.get(metric, [metric])
+
+
+def _infer_source_note(metric: str, value: str, src_map: dict[str, dict[str, str]]) -> str:
+    for key in _metric_source_keys(metric):
+        entry = src_map.get(key)
+        if entry:
+            note = f"{metric}: {entry['source']} ({entry['confidence']})"
+            if entry.get("url"):
+                note += f" — {entry['url']}"
+            return note
+    txt = (value or "").lower()
+    if "[sector avg]" in txt or "[sector benchmark]" in txt:
+        return f"{metric}: sector benchmarks (inferred)"
+    if "[estimated]" in txt:
+        return f"{metric}: model estimate (estimated)"
+    if "[no verified source]" in txt:
+        return f"{metric}: no verified primary source available"
+    if value in {"N/A", "—", ""}:
+        return f"{metric}: not available"
+    return f"{metric}: analysis output (source not logged)"
+
+
+class _Footnotes:
+    def __init__(self) -> None:
+        self._idx: dict[str, int] = {}
+        self._items: list[str] = []
+
+    def tag(self, note: str) -> str:
+        if not note:
+            return ""
+        if note not in self._idx:
+            self._idx[note] = len(self._items) + 1
+            self._items.append(note)
+        return f" (S{self._idx[note]})"
+
+    def items(self) -> list[str]:
+        return self._items
+
+
 def print_result(result):
     f = result.fundamentals
     m = result.market
     fin = result.financials
     v = result.valuation
     t = result.thesis
+    src_map = _parse_sources_md(getattr(result, "sources_md", None))
+    footnotes = _Footnotes()
+
+    def _value_with_source(metric: str, value: Optional[str]) -> str:
+        shown = value or "N/A"
+        note = _infer_source_note(metric, shown, src_map)
+        return f"{shown}{footnotes.tag(note)}"
 
     # Header
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(v.recommendation or "", "white")
@@ -281,8 +423,8 @@ def print_result(result):
         f"[bold]{f.company_name}[/] | {f.sector} | {f.headquarters}\n"
         f"{f.description}\n\n"
         f"Recommendation: [{rec_color}]{v.recommendation}[/] | "
-        f"Target: {_target_display}{_ev_display} | "
-        f"Upside: {v.upside_downside}",
+        f"Target: {_value_with_source('Target', _target_display)}{_ev_display} | "
+        f"Upside: {_value_with_source('Upside', v.upside_downside)}",
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
     ))
@@ -301,7 +443,7 @@ def print_result(result):
         ("TAM", m.market_size),
         ("Market Growth", m.market_growth),
     ]:
-        kpi_table.add_row(row[0], row[1] or "N/A")
+        kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
     console.print(kpi_table)
 
     # Valuation methods
@@ -313,11 +455,28 @@ def print_result(result):
         val_table.add_column("High")
         val_table.add_column("Weight")
         for method in v.methods:
+            if method.name.startswith("Trading Comps"):
+                source_metric = "EV/EBITDA (comps anchor)"
+            elif method.name.startswith("Transaction Comps"):
+                source_metric = "Transaction Comps"
+            elif method.name == "DCF":
+                source_metric = "WACC"
+            else:
+                source_metric = method.name
+            method_note = footnotes.tag(_infer_source_note(source_metric, method.mid or "", src_map))
             val_table.add_row(
-                method.name, method.low or "—", method.mid or "—",
-                method.high or "—", f"{method.weight}%" if method.weight else "—"
+                method.name,
+                f"{(method.low or '—')}{method_note if method.low else ''}",
+                f"{(method.mid or '—')}{method_note if method.mid else ''}",
+                f"{(method.high or '—')}{method_note if method.high else ''}",
+                (f"{method.weight}%{method_note}" if method.weight is not None else "—"),
             )
         console.print(val_table)
+
+    if footnotes.items():
+        console.print("\n[bold]Value Sources[/]")
+        for i, note in enumerate(footnotes.items(), start=1):
+            console.print(f"  (S{i}) {note}")
 
     # Thesis
     if t.thesis:

@@ -320,5 +320,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 25 | CLI source control (`--sources`, `--list-sources`) + auto-skip missing credentials + deterministic WACC/TG guardrail | ✅ |
 | 26 | Deterministic private revenue merge + stricter transaction comp acceptance + tests | ✅ |
 | 27 | Full per-field provenance — `sources.md` logs all financial inputs with source + confidence; `SourcesLog.add_once()` deduplication; WACC correctly tagged `verified` when CAPM used | ✅ |
+| 28 | CLI footnote provenance — rendered `(S#)` markers for displayed values + source legend (source/confidence/url) | ✅ |
 
 </details>

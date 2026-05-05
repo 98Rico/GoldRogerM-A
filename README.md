@@ -469,3 +469,4 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Data quality gate — deterministic score/tier/blockers before valuation, included in result payload and `sources.md`
 ✔ UI/API credential management — keyed providers can be configured from UI and persisted to `.env`
 ✔ Mandatory company confirmation — explicit pre-run company selection with a “None of these companies” path
+✔ CLI value footnotes — every displayed KPI/valuation value now includes a `(S#)` marker with a source/confidence legend (and URL when available)
