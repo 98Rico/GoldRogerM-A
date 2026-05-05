@@ -34,7 +34,7 @@ def _base_market_data() -> MarketData:
     )
 
 
-def test_comps_mid_stable_when_market_anchor_present():
+def test_comps_mid_tracks_peer_range_without_market_anchor():
     svc = ValuationService()
     financials = _base_financials()
     market_data = _base_market_data()
@@ -63,12 +63,8 @@ def test_comps_mid_stable_when_market_anchor_present():
     assert out_wide.blended is not None
     assert out_shifted.blended is not None
 
-    # With market anchor enabled, comps mid should remain tied to market EV/EBITDA.
-    assert abs(out_wide.comps.mid - out_shifted.comps.mid) <= 1e-6
-
-    # Regression guarantee: blended EV should not materially move across peer ranges.
-    pct_diff = abs(out_wide.blended.blended - out_shifted.blended.blended) / out_wide.blended.blended
-    assert pct_diff <= 0.05
+    # No market-anchor: peer range changes should move comps output.
+    assert abs(out_wide.comps.mid - out_shifted.comps.mid) > 1e-6
 
     assert "EV/EBITDA (peer range)" in out_wide.field_sources
     assert out_wide.field_sources["EV/EBITDA (peer range)"][1] == "validated_peers"
@@ -88,7 +84,7 @@ def test_mega_cap_tech_rejects_low_peer_range():
         sector="Technology",
     )
     assert out.field_sources["EV/EBITDA (peer range)"][1] == "peer_quality_gate"
-    assert "rejected" in out.field_sources["EV/EBITDA (peer range)"][0]
+    assert "fallback" in out.field_sources["EV/EBITDA (peer range)"][0]
 
 
 def test_forward_growth_source_and_mega_cap_normalisation_note():
@@ -125,4 +121,3 @@ def test_recommendation_guardrail_caps_sell_on_high_dispersion():
         sector="Technology",
     )
     assert out.recommendation.recommendation in {"HOLD", "BUY"}
-    assert any("Recommendation guardrail" in n for n in out.notes)

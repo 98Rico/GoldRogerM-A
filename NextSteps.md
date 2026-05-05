@@ -324,5 +324,6 @@ Architecture already has `DataRegistry` + `DataProvider` ABC. Adding a new sourc
 | 29 | Valuation credibility hardening — market-context quality penalties, verified forward growth precedence, zero-weight method hiding, mega-cap tech peer-range gate, standardized CLI formatting | ✅ |
 | 30 | IC-grade credibility pass — skip tx comps for mega-caps, deterministic mega-cap peer fallback, EV→equity bridge provenance, mega-cap growth normalization, base football-field reconciliation | ✅ |
 | 31 | Tier-1 credibility blockers — time-aware catalyst guardrail, 90-cap on estimated/proxy quality, peer premium/discount interpretation notes, recommendation conviction guardrails | ✅ |
+| 32 | Real-comps enforcement — removed market-anchor ±25%, switched to peer P25/Median/P75 comps logic, tightened stale catalyst rewriting and low-conviction signaling | ✅ |
 
 </details>

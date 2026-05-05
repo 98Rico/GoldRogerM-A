@@ -284,19 +284,17 @@ class ValuationService:
         )
 
         if market_data and market_data.ev_ebitda_market:
-            _peer_low = _peer_high = None
-            _peer_range = comps_field_sources.get("EV/EBITDA (peer range)")
-            if _peer_range:
-                _txt = str(_peer_range[0])
-                _nums = __import__("re").findall(r"([0-9]+(?:\.[0-9]+)?)x", _txt)
-                if len(_nums) >= 2:
-                    _peer_low, _peer_high = float(_nums[0]), float(_nums[1])
-            if _peer_low is not None and _peer_high is not None and _peer_high > 0:
-                _peer_med = (_peer_low + _peer_high) / 2.0
-                _delta = ((market_data.ev_ebitda_market / _peer_med) - 1.0) * 100.0
+            _peer_median = None
+            _pm = comps_field_sources.get("EV/EBITDA (peer median)")
+            if _pm:
+                _nums = __import__("re").findall(r"([0-9]+(?:\.[0-9]+)?)x", str(_pm[0]))
+                if _nums:
+                    _peer_median = float(_nums[0])
+            if _peer_median and _peer_median > 0:
+                _delta = ((market_data.ev_ebitda_market / _peer_median) - 1.0) * 100.0
                 _stance = "premium" if _delta >= 0 else "discount"
                 notes.append(
-                    f"Implied vs peer median: {market_data.ev_ebitda_market:.1f}x vs {_peer_med:.1f}x "
+                    f"Implied vs peer median: {market_data.ev_ebitda_market:.1f}x vs {_peer_median:.1f}x "
                     f"→ {abs(_delta):.1f}% {_stance}."
                 )
                 if _delta >= 0:
@@ -408,67 +406,72 @@ class ValuationService:
     # ── Comps paths ───────────────────────────────────────────────────────────
 
     def _standard_comps(self, revenue, ebitda, market_data, sector_m, assumptions, notes, sector=""):
-        ev_ebitda_low, _, ev_ebitda_high = sector_m.ev_ebitda
+        ev_ebitda_low, ev_ebitda_mid, ev_ebitda_high = sector_m.ev_ebitda
         comps_field_sources: dict = {}
         comps_range = assumptions.get("ev_ebitda_range")
+        peer_median = self._f(assumptions.get("ev_ebitda_median"), None)
 
-        if market_data and market_data.ev_ebitda_market:
-            implied = market_data.ev_ebitda_market
-            width = implied * 0.25  # default: ±25% around market anchor
-            if comps_range and len(comps_range) == 2:
-                peer_low, peer_high = sorted((float(comps_range[0]), float(comps_range[1])))
-                # Mega-cap tech quality gate:
-                # reject low-multiple peer bands (e.g. 8x–12x) that are not credible
-                # for Apple/Microsoft/NVIDIA-scale companies.
-                if self._reject_peer_range_for_mega_cap_tech(peer_low, peer_high, market_data, sector):
-                    notes.append(
-                        f"Peer range {peer_low:.1f}x–{peer_high:.1f}x rejected by mega-cap tech gate; "
-                        f"using market-anchor ±25% around {implied:.1f}x."
-                    )
-                    comps_field_sources["EV/EBITDA (peer range)"] = (
-                        f"{peer_low:.1f}x–{peer_high:.1f}x (rejected)",
-                        "peer_quality_gate",
-                        "inferred",
-                    )
-                else:
-                    peer_dev = max(abs(peer_low - implied), abs(peer_high - implied))
-                    width = min(max(peer_dev, 0.0), implied * 0.25)
-                    notes.append(
-                        f"Comps mid fixed to live EV/EBITDA {implied:.1f}x; "
-                        f"peer range {peer_low:.1f}x–{peer_high:.1f}x used for spread (capped ±25%)."
-                    )
-                    comps_field_sources["EV/EBITDA (peer range)"] = (
-                        f"{peer_low:.1f}x–{peer_high:.1f}x",
-                        "validated_peers",
-                        "estimated",
-                    )
-            else:
-                notes.append(f"Comps anchored to live EV/EBITDA of {implied:.1f}x (±25% range).")
+        if comps_range and len(comps_range) == 2:
+            ev_ebitda_low, ev_ebitda_high = sorted((float(comps_range[0]), float(comps_range[1])))
+            if peer_median is None:
+                peer_median = (ev_ebitda_low + ev_ebitda_high) / 2.0
+            # Mega-cap tech quality gate:
+            # reject low-multiple peer bands (e.g. 8x–12x) that are not credible
+            # for Apple/Microsoft/NVIDIA-scale companies.
+            if self._reject_peer_range_for_mega_cap_tech(ev_ebitda_low, ev_ebitda_high, market_data, sector):
+                # deterministic fallback band around sector mid if peer set is clearly bad
+                ev_ebitda_low, ev_ebitda_mid, ev_ebitda_high = sector_m.ev_ebitda
+                notes.append(
+                    "Peer range rejected by mega-cap tech gate; using sector-table peer fallback "
+                    f"{ev_ebitda_low:.1f}x/{ev_ebitda_mid:.1f}x/{ev_ebitda_high:.1f}x."
+                )
                 comps_field_sources["EV/EBITDA (peer range)"] = (
-                    f"{(implied * 0.75):.1f}x–{(implied * 1.25):.1f}x",
-                    "market_anchor_band",
+                    f"{ev_ebitda_low:.1f}x–{ev_ebitda_high:.1f}x (fallback)",
+                    "peer_quality_gate",
+                    "inferred",
+                )
+                comps_field_sources["EV/EBITDA (peer median)"] = (
+                    f"{ev_ebitda_mid:.1f}x",
+                    "sector_table",
+                    "inferred",
+                )
+            else:
+                ev_ebitda_mid = float(peer_median)
+                comps_field_sources["EV/EBITDA (peer range)"] = (
+                    f"{ev_ebitda_low:.1f}x–{ev_ebitda_high:.1f}x",
+                    "validated_peers",
                     "verified",
                 )
-            ev_ebitda_low = max(0.1, implied - width)
-            ev_ebitda_high = implied + width
-            comps_field_sources["EV/EBITDA (comps anchor)"] = (
-                f"{implied:.1f}x",
-                market_data.data_source or "yfinance",
-                "verified",
-            )
-        elif comps_range and len(comps_range) == 2:
-            ev_ebitda_low, ev_ebitda_high = sorted((float(comps_range[0]), float(comps_range[1])))
+                comps_field_sources["EV/EBITDA (peer median)"] = (
+                    f"{ev_ebitda_mid:.1f}x",
+                    "validated_peers",
+                    "verified",
+                )
+                notes.append(
+                    f"Comps from validated peers: P25 {ev_ebitda_low:.1f}x / "
+                    f"Median {ev_ebitda_mid:.1f}x / P75 {ev_ebitda_high:.1f}x EV/EBITDA."
+                )
+        else:
+            # last-resort deterministic sector table
+            ev_ebitda_low, ev_ebitda_mid, ev_ebitda_high = sector_m.ev_ebitda
             comps_field_sources["EV/EBITDA (peer range)"] = (
                 f"{ev_ebitda_low:.1f}x–{ev_ebitda_high:.1f}x",
-                "validated_peers",
-                "estimated",
+                "sector_table",
+                "inferred",
+            )
+            comps_field_sources["EV/EBITDA (peer median)"] = (
+                f"{ev_ebitda_mid:.1f}x",
+                "sector_table",
+                "inferred",
             )
             notes.append(
-                f"Comps from validated peers: {ev_ebitda_low:.1f}x–{ev_ebitda_high:.1f}x EV/EBITDA."
+                f"Comps fallback: sector-table EV/EBITDA {ev_ebitda_low:.1f}x/{ev_ebitda_mid:.1f}x/{ev_ebitda_high:.1f}x."
             )
 
-        comps = compute_comps(
-            CompsInput(metric_value=ebitda, multiple_range=(ev_ebitda_low, ev_ebitda_high))
+        comps = CompsOutput(
+            low=ebitda * ev_ebitda_low,
+            mid=ebitda * ev_ebitda_mid,
+            high=ebitda * ev_ebitda_high,
         )
         # Cap tx_multiple to 1.5× the sector's high-end EV/Revenue bound.
         # LLM-sourced M&A data can return outlier multiples (e.g. 22x for a single

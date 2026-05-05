@@ -76,18 +76,45 @@ _MEGA_CAP_TECH_FALLBACK_PEERS = ["MSFT", "GOOGL", "NVDA", "AMZN", "META"]
 
 
 def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> list[str]:
-    """Rewrite stale 'upcoming' catalysts into recent-events phrasing."""
+    """Enforce time-aware catalyst labels:
+    - 'Upcoming' only for future-dated events
+    - stale events rewritten as recent-event context
+    """
     if run_year is None:
         run_year = time.gmtime().tm_year
+    run_month = time.gmtime().tm_mon
+    run_q = ((run_month - 1) // 3) + 1
+
+    def _event_position(text: str) -> tuple[int | None, int | None]:
+        y = None
+        q = None
+        ys = _re.findall(r"\b(20\d{2})\b", text)
+        if ys:
+            y = int(ys[0])
+        qm = _re.search(r"\bQ([1-4])\b", text, flags=_re.IGNORECASE)
+        if qm:
+            q = int(qm.group(1))
+        return y, q
+
     out: list[str] = []
     for c in catalysts or []:
         txt = str(c or "").strip()
         if not txt:
             continue
-        years = [int(y) for y in _re.findall(r"\b(20\d{2})\b", txt)]
-        stale = any(y < run_year for y in years)
-        if stale:
+        y, q = _event_position(txt)
+        is_upcoming_label = bool(_re.search(r"\b(upcoming|expected|will|next)\b", txt, flags=_re.IGNORECASE))
+
+        stale = False
+        if y is not None:
+            if y < run_year:
+                stale = True
+            elif y == run_year and q is not None and q < run_q:
+                stale = True
+
+        if stale and is_upcoming_label:
             txt = _re.sub(r"\b(upcoming|expected|will|next)\b", "recent", txt, flags=_re.IGNORECASE)
+            txt = f"Recent event context: {txt}"
+        elif stale and not txt.lower().startswith("recent"):
             txt = f"Recent event context: {txt}"
         out.append(txt)
     return out
@@ -810,8 +837,10 @@ def run_analysis(
             peer_multiples.ev_ebitda_low,
             peer_multiples.ev_ebitda_high,
         ]
+        if peer_multiples.ev_ebitda_median:
+            assumptions_dict["ev_ebitda_median"] = peer_multiples.ev_ebitda_median
         console.print(
-            f"  [cyan]Comps anchored to {peer_multiples.n_peers} real peers: "
+            f"  [cyan]Comps from {peer_multiples.n_peers} real peers (P25–P75): "
             f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
         )
 
@@ -922,6 +951,9 @@ def run_analysis(
     _ev_str = _fmt_ev_human(blended_ev) if blended_ev else "N/A"
     _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
+    _low_conviction = any("dispersion" in str(n).lower() for n in (result.notes or []))
+    if peer_multiples and peer_multiples.n_peers < 3:
+        _low_conviction = True
     if company_type == "private" and result.has_revenue and blended_ev and _rev_float and _rev_float > 0:
         _entry_ev_rev = blended_ev / _rev_float
         _, _sm_mid, _sm_high = _sm.ev_revenue
@@ -937,6 +969,8 @@ def run_analysis(
         _rec = "NEUTRAL"
     else:
         _rec = _raw_rec
+    if _low_conviction and _rec in {"BUY", "SELL", "HOLD"}:
+        _rec = f"{_rec} / LOW CONVICTION"
 
     # Dump all per-field provenance from the valuation engine.
     # add_once deduplicates by metric name — equity.py may have already logged

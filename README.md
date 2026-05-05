@@ -484,3 +484,5 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Quality score credibility cap — any estimated/proxy input caps data quality at 90
 ✔ Comps interpretation layer — output now states implied premium/discount vs peer median with rationale hooks
 ✔ Recommendation guardrails — high method dispersion or resilient fundamentals can cap SELL to HOLD
+✔ Real-peer comps first — removed market-anchor ±25%; comps now use peer P25/Median/P75 when available
+✔ Conviction scaling — weak-comps/high-dispersion cases are surfaced as low-conviction recommendations
