@@ -303,6 +303,7 @@ class ValuationService:
         )
         _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
         if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
+            peer_quality = str(assumptions.get("peer_quality") or "normal").lower()
             if insufficient_comps:
                 weights = {"dcf": 1.0, "comps": 0.0, "transactions": 0.0}
                 notes.append(
@@ -312,14 +313,18 @@ class ValuationService:
             elif 1 <= peer_count < 3:
                 weights = {"dcf": 0.90, "comps": 0.10, "transactions": 0.0}
                 notes.append("Mega-cap partial comps mode: 1-2 peers → DCF 90% / comps 10%.")
-            elif 3 <= peer_count < 5:
-                weights = {"dcf": 0.75, "comps": 0.25, "transactions": 0.0}
-                notes.append("Mega-cap partial comps mode: 3-4 peers → DCF 75% / comps 25%.")
             else:
-                weights = {"dcf": 0.6, "comps": 0.4, "transactions": 0.0}
+                if peer_quality == "strong":
+                    weights = {"dcf": 0.50, "comps": 0.50, "transactions": 0.0}
+                elif peer_quality == "normal":
+                    weights = {"dcf": 0.60, "comps": 0.40, "transactions": 0.0}
+                elif peer_quality == "mixed":
+                    weights = {"dcf": 0.65, "comps": 0.35, "transactions": 0.0}
+                else:
+                    weights = {"dcf": 0.75, "comps": 0.25, "transactions": 0.0}
                 notes.append(
-                    f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap): "
-                    "tx comps excluded — weights DCF 60% / Comps 40%."
+                    f"Mega-cap peer-quality weighting ({peer_quality}): "
+                    f"DCF {weights['dcf']:.0%} / Comps {weights['comps']:.0%}."
                 )
         if dcf_conservative and weights.get("comps", 0.0) > 0:
             # Reduce DCF influence when DCF looks structurally conservative vs peer economics.
@@ -425,7 +430,7 @@ class ValuationService:
             )
         if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
             _disp = max(dcf_output.enterprise_value, comps_output.mid) / min(dcf_output.enterprise_value, comps_output.mid)
-            if _disp > 2.5:
+            if _disp > 2.0:
                 field_sources["Valuation Uncertainty"] = (
                     f"⚠ High uncertainty / low confidence ({_disp:.1f}x DCF vs comps)",
                     "valuation_engine",
@@ -500,7 +505,7 @@ class ValuationService:
         rec = recommendation.recommendation
         if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
             ratio = max(dcf_output.enterprise_value, comps_output.mid) / min(dcf_output.enterprise_value, comps_output.mid)
-            if ratio > 2.5:
+            if ratio > 2.0:
                 notes.append(
                     f"Recommendation guardrail: high valuation dispersion ({ratio:.1f}x DCF/comps) "
                     "→ downgraded SELL to HOLD."
@@ -526,6 +531,8 @@ class ValuationService:
         comps_field_sources: dict = {}
         comps_range = assumptions.get("ev_ebitda_range")
         peer_median = self._f(assumptions.get("ev_ebitda_median"), None)
+        peer_raw_median = self._f(assumptions.get("ev_ebitda_raw_median"), None)
+        peer_weighted = self._f(assumptions.get("ev_ebitda_weighted"), None)
         is_mega_cap = bool(
             market_data and market_data.market_cap
             and market_data.market_cap > (_cfg.lbo.mega_cap_skip_usd_bn * 1000)
@@ -581,9 +588,32 @@ class ValuationService:
                     "validated_peers",
                     "verified",
                 )
+                if peer_raw_median is not None:
+                    comps_field_sources["EV/EBITDA (peer raw median)"] = (
+                        f"{peer_raw_median:.1f}x",
+                        "validated_peers",
+                        "verified",
+                    )
+                if peer_weighted is not None:
+                    comps_field_sources["EV/EBITDA (peer weighted)"] = (
+                        f"{peer_weighted:.1f}x",
+                        "validated_peers",
+                        "verified",
+                    )
+                comps_field_sources["EV/EBITDA (peer applied)"] = (
+                    f"{ev_ebitda_mid:.1f}x",
+                    "valuation_policy",
+                    "verified",
+                )
                 notes.append(
                     f"Comps from validated peers: P25 {ev_ebitda_low:.1f}x / "
-                    f"Median {ev_ebitda_mid:.1f}x / P75 {ev_ebitda_high:.1f}x EV/EBITDA."
+                    f"Raw {peer_raw_median:.1f}x / Weighted {peer_weighted:.1f}x / "
+                    f"Applied {ev_ebitda_mid:.1f}x / P75 {ev_ebitda_high:.1f}x EV/EBITDA."
+                    if (peer_raw_median is not None and peer_weighted is not None)
+                    else (
+                        f"Comps from validated peers: P25 {ev_ebitda_low:.1f}x / "
+                        f"Applied {ev_ebitda_mid:.1f}x / P75 {ev_ebitda_high:.1f}x EV/EBITDA."
+                    )
                 )
         else:
             if is_mega_cap:

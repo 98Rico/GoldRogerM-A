@@ -534,6 +534,7 @@ def print_result(result):
         border_style="cyan",
     ))
     _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
+    _dq = (getattr(result, "data_quality", {}) or {})
     if _pipeline_status:
         console.print(
             "[bold]Pipeline status:[/bold]\n"
@@ -546,6 +547,16 @@ def print_result(result):
             f"  Model signal: {_pipeline_status.get('model_signal', 'N/A')}\n"
             f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
             f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}"
+        )
+    _core_q = _dq.get("core_data_quality_score")
+    _r_q = _dq.get("research_enrichment_quality_score")
+    _r_lbl = _dq.get("research_enrichment_quality_label")
+    if (_core_q is not None) or (_r_q is not None):
+        console.print(
+            "[bold]Quality Split:[/bold]\n"
+            f"  Core data quality: {(_core_q if _core_q is not None else 'N/A')}/100\n"
+            f"  Research enrichment quality: {(_r_q if _r_q is not None else _r_lbl or 'N/A')}\n"
+            f"  Valuation confidence: {_pipeline_status.get('confidence', 'N/A') if _pipeline_status else 'N/A'}"
         )
     _timings = (getattr(result, "data_quality", {}) or {}).get("timings_s", {})
     if _timings:

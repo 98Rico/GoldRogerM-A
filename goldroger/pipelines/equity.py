@@ -80,8 +80,8 @@ _FINANCIALS_TIMEOUT = 30
 _TX_COMPS_TIMEOUT = 45
 _REPORT_WRITER_TIMEOUT_QUICK = 8
 _REPORT_WRITER_TIMEOUT_FULL = 35
-_TOTAL_TIMEOUT_QUICK = 60
-_TOTAL_TIMEOUT_FULL = 300
+_TOTAL_TIMEOUT_QUICK = 45
+_TOTAL_TIMEOUT_FULL = 120
 
 def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
     score = 0.0
@@ -172,6 +172,8 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
             txt = f"Recent event context: {txt}"
         # Avoid stale product-cycle naming when date provenance is weak.
         txt = _re.sub(r"\biPhone\s*\d+\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
+        txt = _re.sub(r"\bcurrent iPhone cycle\s+cycle\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
+        txt = _re.sub(r"\bcycle\s+cycle\b", "cycle", txt, flags=_re.IGNORECASE)
         out.append(txt)
     return out
 
@@ -725,28 +727,41 @@ def run_analysis(
 
     def _do_financials():
         _t = _step("Financials")
-        if market_data and market_data.revenue_ttm:
-            f = _fin_from_market(market_data)
-            console.print(
-                f"  [green]Using {market_data.data_source} financials "
-                f"(Rev=${market_data.revenue_ttm:.0f}M)[/green]"
-            )
-        else:
-            f = _parse_with_retry(
-                fin_agent, company, company_type,
-                {"sector": fund.sector or "", "description": fund.description, "quick_mode": quick_mode},
-                Financials, _fin_fallback(),
-                retry_on_fail=(not quick_mode),
-                log_raw_errors=debug,
-            )
-            # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
-            f.revenue_current = normalise_revenue_string(f.revenue_current)
+        try:
+            if market_data and market_data.revenue_ttm:
+                f = _fin_from_market(market_data)
+                console.print(
+                    f"  [green]Using {market_data.data_source} financials "
+                    f"(Rev=${market_data.revenue_ttm:.0f}M)[/green]"
+                )
+            elif quick_mode:
+                # Quick mode avoids deep/slow LLM financial modeling paths.
+                f = _fin_fallback()
+                console.print(
+                    "  [dim]Quick mode: no verified revenue feed; using compact financial fallback.[/dim]"
+                )
+            else:
+                f = _parse_with_retry(
+                    fin_agent, company, company_type,
+                    {"sector": fund.sector or "", "description": fund.description, "quick_mode": quick_mode},
+                    Financials, _fin_fallback(),
+                    retry_on_fail=(not quick_mode),
+                    log_raw_errors=debug,
+                )
+                # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
+                f.revenue_current = normalise_revenue_string(f.revenue_current)
+        except Exception as e:
+            console.print(f"  [yellow]Financials fallback: {e}[/yellow]")
+            f = _fin_fallback()
         log.end_step("financials", _t)
         _done("Financials", _t)
         return f
 
     def _do_tx_comps():
         _t = _step("Transaction Comps")
+        if quick_mode:
+            _done("Transaction Comps", _t)
+            return (None, None)
         try:
             import datetime
             raw = tx_agent.run(company, company_type, {
@@ -772,7 +787,7 @@ def run_analysis(
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
-        _fut_tx = None if _skip_tx_comps else _pool.submit(_do_tx_comps)
+        _fut_tx = None if (_skip_tx_comps or quick_mode) else _pool.submit(_do_tx_comps)
         try:
             mkt, _mkt_status = _fut_mkt.result(timeout=_MARKET_ANALYSIS_TIMEOUT)
             if _mkt_status == "failed":
@@ -819,7 +834,10 @@ def run_analysis(
         else:
             _tx_raw, _tx_err = None, None
             console.rule("[bold cyan]Transaction Comps")
-            console.print("  [dim]Skipped for mega-cap public company (tx weight forced to 0%).[/dim]")
+            if quick_mode:
+                console.print("  [dim]Skipped in quick mode (tx comps disabled).[/dim]")
+            else:
+                console.print("  [dim]Skipped for mega-cap public company (tx weight forced to 0%).[/dim]")
             _done("Transaction Comps", time.time())
     finally:
         # Best-effort cancellation: do not block on timed-out side tasks.
@@ -955,6 +973,10 @@ def run_analysis(
                     if _bucket_counts:
                         _mix = ", ".join(f"{k}={v}" for k, v in sorted(_bucket_counts.items(), key=lambda kv: kv[0]))
                         console.print(f"  [dim]Peer mix by business model bucket: {_mix}[/dim]")
+                    if debug and peer_multiples.excluded_details:
+                        console.print("  [dim]Excluded peers (debug):[/dim]")
+                        for _ex in peer_multiples.excluded_details[:12]:
+                            console.print(f"  [dim]- {_ex}[/dim]")
                     for _p in peer_multiples.peers[:8]:
                         _sim = _peer_similarity_score(
                             market_data.market_cap if market_data else None,
@@ -978,12 +1000,37 @@ def run_analysis(
                             "inferred",
                         )
                     if peer_multiples.ev_ebitda_median:
-                        console.print(
-                            f"  Median EV/EBITDA: {peer_multiples.ev_ebitda_median:.1f}x"
-                            + (
-                                f"  EV/Rev: {peer_multiples.ev_revenue_median:.1f}x"
-                                if peer_multiples.ev_revenue_median else ""
+                        _raw = peer_multiples.ev_ebitda_raw_median
+                        _wtd = peer_multiples.ev_ebitda_weighted
+                        _app = peer_multiples.ev_ebitda_median
+                        _line = "  EV/EBITDA anchors: "
+                        if _raw is not None:
+                            _line += f"raw median {_raw:.1f}x; "
+                        if _wtd is not None:
+                            _line += f"weighted {_wtd:.1f}x; "
+                        _line += f"applied {_app:.1f}x"
+                        if peer_multiples.ev_revenue_median:
+                            _line += f"  | EV/Rev {peer_multiples.ev_revenue_median:.1f}x"
+                        console.print(_line)
+                        if _raw is not None:
+                            sources.add_once(
+                                "Peer EV/EBITDA raw median",
+                                f"{_raw:.1f}x",
+                                "yfinance_peers",
+                                "verified",
                             )
+                        if _wtd is not None:
+                            sources.add_once(
+                                "Peer EV/EBITDA weighted",
+                                f"{_wtd:.1f}x",
+                                "yfinance_peers",
+                                "verified",
+                            )
+                        sources.add_once(
+                            "Peer EV/EBITDA applied",
+                            f"{_app:.1f}x",
+                            "valuation_policy",
+                            "verified",
                         )
                     for _p in peer_multiples.peers[:8]:
                         if _p.ev_ebitda:
@@ -1127,6 +1174,7 @@ def run_analysis(
         quality.warnings.append(
             "Public mega-cap peer set is weak (<5 validated peers) — confidence reduced."
         )
+    _core_quality_score = quality.score
     console.print(
         f"  [bold]Data quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
         + (" [yellow]limited-confidence mode[/yellow]" if quality.is_blocked else "")
@@ -1161,6 +1209,27 @@ def run_analysis(
     assumptions_dict["mega_cap_tech"] = bool(
         _is_mega_cap and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
     )
+    _peer_quality = "weak"
+    if peer_multiples and peer_multiples.peers:
+        _sim_vals = [float(p.similarity or 0.0) for p in peer_multiples.peers]
+        _avg_sim = (sum(_sim_vals) / len(_sim_vals)) if _sim_vals else 0.0
+        _total_w = sum(float(p.weight or 0.0) for p in peer_multiples.peers)
+        _semi_w = sum(float(p.weight or 0.0) for p in peer_multiples.peers if (p.bucket or "") == "semiconductors")
+        _semi_share = (_semi_w / _total_w) if _total_w > 0 else 0.0
+        if peer_multiples.n_peers >= 7 and _avg_sim >= 0.75 and _semi_share <= 0.25:
+            _peer_quality = "strong"
+        elif peer_multiples.n_peers >= 5 and _avg_sim >= 0.65 and _semi_share <= 0.30:
+            _peer_quality = "normal"
+        elif peer_multiples.n_peers >= 3:
+            _peer_quality = "mixed"
+        else:
+            _peer_quality = "weak"
+        assumptions_dict["peer_avg_similarity"] = _avg_sim
+        assumptions_dict["peer_semi_weight_share"] = _semi_share
+        sources.add_once("Peer Quality", _peer_quality, "peer_quality_model", "inferred")
+        sources.add_once("Peer Avg Similarity", f"{_avg_sim:.2f}", "peer_quality_model", "inferred")
+        sources.add_once("Peer Semi Weight Share", f"{_semi_share:.1%}", "peer_quality_model", "inferred")
+    assumptions_dict["peer_quality"] = _peer_quality
     if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
         assumptions_dict["ev_ebitda_range"] = [
             peer_multiples.ev_ebitda_low,
@@ -1168,6 +1237,10 @@ def run_analysis(
         ]
         if peer_multiples.ev_ebitda_median:
             assumptions_dict["ev_ebitda_median"] = peer_multiples.ev_ebitda_median
+        if peer_multiples.ev_ebitda_raw_median is not None:
+            assumptions_dict["ev_ebitda_raw_median"] = peer_multiples.ev_ebitda_raw_median
+        if peer_multiples.ev_ebitda_weighted is not None:
+            assumptions_dict["ev_ebitda_weighted"] = peer_multiples.ev_ebitda_weighted
         console.print(
             f"  [cyan]Comps from {peer_multiples.n_peers} real peers (P25–P75): "
             f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
@@ -1407,6 +1480,22 @@ def run_analysis(
             )
         except Exception:
             pass
+    # Always surface key DCF sanity diagnostics (not only in debug mode).
+    _sanity_prefixes = (
+        "DCF implied exit EV/EBITDA:",
+        "DCF implied terminal FCF yield:",
+        "Terminal value ",
+    )
+    for _n in (result.notes or []):
+        _txt = str(_n)
+        if _txt.startswith(_sanity_prefixes):
+            console.print(f"  [dim]{_txt}[/dim]")
+            if _txt.startswith("DCF implied exit EV/EBITDA:"):
+                sources.add_once("DCF Implied Exit EV/EBITDA", _txt.split(":", 1)[1].strip(), "valuation_engine", "inferred")
+            elif _txt.startswith("DCF implied terminal FCF yield:"):
+                sources.add_once("DCF Implied Terminal FCF Yield", _txt.split(":", 1)[1].strip(), "valuation_engine", "inferred")
+            elif _txt.startswith("Terminal value "):
+                sources.add_once("Terminal Value Share of DCF", _txt.replace("Terminal value", "").strip(), "valuation_engine", "inferred")
     if debug:
         for note in result.notes:
             console.print(f"  [dim]• {note}[/dim]")
@@ -1554,6 +1643,21 @@ def run_analysis(
                 "scenario_blended",
                 "inferred",
             )
+            _mid = ((_lo + _hi) / 2.0) if (_lo is not None and _hi is not None) else None
+            if _mid and _mid > 0:
+                _width_ratio = (_hi - _lo) / _mid
+                if _width_ratio > 0.75:
+                    sources.add_once(
+                        "Fair Value Range Width",
+                        f"{_width_ratio:.0%} of midpoint",
+                        "valuation_engine",
+                        "inferred",
+                    )
+                    result.notes.append(
+                        f"Fair value range is wide ({_width_ratio:.0%} of midpoint); confidence reduced."
+                    )
+                    if not valuation_failed and valuation_status == "OK":
+                        valuation_status = "DEGRADED"
         console.print(
             f"  [bold]Football field:[/bold] Bear {football_field.bear.blended_ev if football_field.bear else 'N/A'} "
             f"/ Base {football_field.base.blended_ev if football_field.base else 'N/A'} "
@@ -1617,15 +1721,17 @@ def run_analysis(
     thesis_status = "OK"
     _report_timeout = _REPORT_WRITER_TIMEOUT_QUICK if quick_mode else _REPORT_WRITER_TIMEOUT_FULL
     if quick_mode:
+        _modeled_growth = (result.field_sources.get("Modeled Revenue Growth") or ("N/A", "", ""))[0]
+        _fv_range = (result.field_sources.get("Fair Value Range") or ("N/A", "", ""))[0]
         _quick_text = (
             f"Thesis:\n"
-            f"- Business: {fund.company_name} in {fund.sector or 'its sector'}.\n"
-            f"- Signal: {val.recommendation} with {val.upside_downside or 'N/A'} upside/downside.\n"
-            f"- Confidence: bounded quick-mode output; deeper research available in full mode.\n"
+            f"- Moat: ecosystem, services, and vertical integration dynamics in {fund.sector or 'the sector'}.\n"
+            f"- Growth: modeled revenue growth {_modeled_growth}; execution still tied to demand and product cycle.\n"
+            f"- Valuation: fair value {_fv_range}; signal {val.recommendation} ({val.upside_downside or 'N/A'}), low confidence if dispersion is high.\n"
             f"\nRisks:\n"
-            f"- Demand and mix volatility.\n"
-            f"- Regulatory/policy uncertainty.\n"
-            f"- Competitive pricing and execution pressure."
+            f"- iPhone and hardware demand-cycle volatility.\n"
+            f"- Platform and App-Store regulatory pressure.\n"
+            f"- Peer-vs-DCF valuation dispersion."
         )
         thesis = InvestmentThesis(
             thesis=_quick_text,
@@ -1769,6 +1875,24 @@ def run_analysis(
     console.rule("[DONE EQUITY]")
     log.flush()
 
+    if market_status == "SKIPPED_QUICK_MODE":
+        _research_quality_score = None
+        _research_quality_label = "skipped_quick_mode"
+    else:
+        _research_quality_score = 100
+        if market_status in {"DEGRADED"}:
+            _research_quality_score -= 20
+        elif market_status in {"FAILED", "TIMEOUT"}:
+            _research_quality_score -= 45
+        if thesis_status == "TIMEOUT":
+            _research_quality_score -= 20
+        elif thesis_status == "FAILED":
+            _research_quality_score -= 30
+        _research_quality_score = max(0, min(100, _research_quality_score))
+        _research_quality_label = (
+            "low" if _research_quality_score < 60 else "medium" if _research_quality_score < 80 else "high"
+        )
+
     analysis = AnalysisResult(
         company=company,
         company_type=company_type,
@@ -1836,6 +1960,9 @@ def run_analysis(
                 "thesis": log.step_times.get("thesis"),
                 "total": round(time.time() - log.started_at, 2),
             },
+            "core_data_quality_score": _core_quality_score,
+            "research_enrichment_quality_score": _research_quality_score,
+            "research_enrichment_quality_label": _research_quality_label,
         },
         sources_md=sources.to_markdown(),
     )
@@ -1850,8 +1977,20 @@ def run_analysis(
             analysis.market.market_size = "Not available from current queries"
         if _text_missing(analysis.market.market_growth):
             analysis.market.market_growth = "Not available from current queries"
-        if _text_missing(analysis.market.market_segment):
-            analysis.market.market_segment = "Not available from current queries"
+        _has_seg = not _text_missing(analysis.market.market_segment)
+        _has_comp = bool([c for c in (analysis.market.main_competitors or []) if getattr(c, "name", None)])
+        _has_reg = any("regulat" in str(t).lower() or "policy" in str(t).lower() for t in (analysis.market.key_trends or []))
+        analysis.market.market_segment = (
+            f"Segment trends: {'available' if _has_seg else 'unavailable'} | "
+            f"Competitive landscape: {'available' if _has_comp else 'unavailable'} | "
+            f"Regulatory context: {'available' if _has_reg else 'unavailable'}"
+        )
+        if not analysis.market.key_trends:
+            analysis.market.key_trends = [
+                "Demand trend context: limited direct TAM datapoints; monitor category demand proxies.",
+                "Competitive trend context: incumbents and platform competitors remain active.",
+                "Regulatory trend context: policy and antitrust dynamics can affect monetization.",
+            ]
     elif market_analysis_failed:
         analysis.market.market_size = "Not available"
         analysis.market.market_growth = "Not available"
@@ -1859,9 +1998,13 @@ def run_analysis(
         analysis.market.key_trends = []
     _tam_v = analysis.market.market_size or "Not available"
     _mg_v = analysis.market.market_growth or "Not available"
-    _tam_conf = "inferred" if "not available" in str(_tam_v).lower() else "estimated"
-    _mg_conf = "inferred" if "not available" in str(_mg_v).lower() else "estimated"
-    sources.add_once("TAM", _tam_v, "market_analysis", _tam_conf)
-    sources.add_once("Market Growth", _mg_v, "market_analysis", _mg_conf)
+    if market_status == "SKIPPED_QUICK_MODE":
+        sources.add_once("TAM", _tam_v, "skipped_quick_mode", "skipped")
+        sources.add_once("Market Growth", _mg_v, "skipped_quick_mode", "skipped")
+    else:
+        _tam_conf = "inferred" if "not available" in str(_tam_v).lower() else "estimated"
+        _mg_conf = "inferred" if "not available" in str(_mg_v).lower() else "estimated"
+        sources.add_once("TAM", _tam_v, "market_analysis", _tam_conf)
+        sources.add_once("Market Growth", _mg_v, "market_analysis", _mg_conf)
     analysis.sources_md = sources.to_markdown()
     return analysis

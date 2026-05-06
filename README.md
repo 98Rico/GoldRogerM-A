@@ -544,3 +544,6 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Full-mode enrichment semantics — market analysis can now be marked `DEGRADED` when TAM/growth context is missing
 ✔ Quick/full thesis fallback overhaul — quick mode now uses deterministic short thesis, and full timeout fallback uses structured thesis/risks/catalysts
 ✔ DCF conservative guardrail — mega-cap tech DCF now flags low implied exit multiples vs peer floor and can shift blend weight from DCF to comps
+✔ Quick-mode LLM hard-skip for slow paths — `--quick` now skips transaction comps entirely and avoids deep financial-model LLM calls when no verified revenue feed is available
+✔ Quick-mode crash-proof financial fallback — network/API failures in financial modeling now degrade to deterministic fallback instead of breaking the run
+✔ Wide fair-value-range confidence flag — scenario range width >75% of midpoint is now surfaced explicitly and degrades valuation confidence
