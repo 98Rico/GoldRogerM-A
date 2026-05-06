@@ -27,6 +27,7 @@ def assess_data_quality(
     proxy_growth_used: bool = False,
     peer_count: int = 0,
     market_analysis_failed: bool = False,
+    market_analysis_degraded: bool = False,
     market_analysis_skipped_quick: bool = False,
     dcf_sanity_failed: bool = False,
 ) -> DataQualityReport:
@@ -111,10 +112,14 @@ def assess_data_quality(
         score -= 15
         warnings.append("Market analysis failed")
         checks["market_analysis"] = "failed"
+    elif market_analysis_degraded:
+        score -= 8
+        warnings.append("Market analysis degraded (no usable TAM/growth context)")
+        checks["market_analysis"] = "degraded"
     elif market_analysis_skipped_quick:
         checks["market_analysis"] = "skipped_quick_mode"
-        if score > 80:
-            score = 80
+        if score > 75:
+            score = 75
     if dcf_sanity_failed:
         score -= 12
         warnings.append("DCF sanity check failed")

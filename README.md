@@ -538,3 +538,9 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Pipeline status expansion — output now includes `core_valuation`, `research_enrichment`, and `thesis` stage states
 ✔ Quick-mode scoring semantics refinement — quick-mode market-context skip applies light penalties instead of failure-like penalties
 ✔ Quality tier calibration update — tiers are now `A:80+ / B:65+ / C:50+ / D:<50`
+✔ Peer-composition hygiene — peer engine now classifies business-model buckets and caps semiconductor overrepresentation for non-semi targets
+✔ Similarity-weighted comps refinement — bucket-adjusted similarity weights now drive comps central tendency, with stable small-set median behavior
+✔ Peer auditability — CLI now prints a peer table with bucket, market cap, EV/EBITDA, similarity, weight, and include reason
+✔ Full-mode enrichment semantics — market analysis can now be marked `DEGRADED` when TAM/growth context is missing
+✔ Quick/full thesis fallback overhaul — quick mode now uses deterministic short thesis, and full timeout fallback uses structured thesis/risks/catalysts
+✔ DCF conservative guardrail — mega-cap tech DCF now flags low implied exit multiples vs peer floor and can shift blend weight from DCF to comps

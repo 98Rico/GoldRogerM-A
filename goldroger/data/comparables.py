@@ -119,6 +119,9 @@ class PeerData:
     revenue_growth: Optional[float] = None
     market_cap: Optional[float] = None
     sector: Optional[str] = None
+    industry: Optional[str] = None
+    bucket: Optional[str] = None
+    include_reason: Optional[str] = None
     similarity: Optional[float] = None
     weight: Optional[float] = None
 
@@ -149,6 +152,7 @@ class PeerMultiples:
     n_dropped_no_data: int = 0    # peers dropped because yfinance returned nothing
     n_dropped_sanity: int = 0     # peers dropped for extreme multiples
     n_dropped_scale: int = 0      # peers dropped for market-cap scale mismatch
+    n_dropped_bucket: int = 0     # peers dropped by bucket-balance policy
 
 
 # ── Aggregation helpers ───────────────────────────────────────────────────────
@@ -172,11 +176,12 @@ def _percentile(values: list[float], pct: float) -> Optional[float]:
 
 
 def _winsorize(values: list[float], p_low: float = 0.10, p_high: float = 0.90) -> list[float]:
-    clean = sorted(v for v in values if v and v > 0)
+    clean = [v for v in values if v and v > 0]
     if len(clean) < 5:
         return clean
-    lo = _percentile(clean, p_low) or clean[0]
-    hi = _percentile(clean, p_high) or clean[-1]
+    ordered = sorted(clean)
+    lo = _percentile(ordered, p_low) or ordered[0]
+    hi = _percentile(ordered, p_high) or ordered[-1]
     return [min(max(v, lo), hi) for v in clean]
 
 
@@ -264,6 +269,74 @@ def _econ_similarity(
     return max(0.0, min(1.0, (base * 0.85) + (growth_similarity * 0.15)))
 
 
+def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
+    s = f"{sector or ''} {industry or ''} {name or ''}".lower()
+    if any(k in s for k in ("semiconductor", "chip", "foundry", "memory", "gpu", "fabless")):
+        return "semiconductors"
+    if any(k in s for k in (
+        "internet content", "internet retail", "interactive media",
+        "communication services", "platform", "search", "social media",
+        "cloud", "application software", "software infrastructure",
+    )):
+        return "ecosystem/platform"
+    if any(k in s for k in (
+        "software", "it services", "consulting", "enterprise services",
+        "managed services", "saas",
+    )):
+        return "software/services"
+    if any(k in s for k in (
+        "consumer electronics", "hardware", "computer", "smartphone",
+        "pc", "devices", "peripherals", "wearable",
+    )):
+        return "consumer hardware"
+    return "other"
+
+
+def _target_profile(target_sector: str, target_industry: str) -> str:
+    t = f"{target_sector or ''} {target_industry or ''}".lower()
+    if any(k in t for k in ("semiconductor", "chip", "foundry", "memory", "gpu", "fabless")):
+        return "semiconductor"
+    if any(k in t for k in ("consumer electronics", "hardware", "devices", "smartphone", "pc")) and "tech" in t:
+        return "ecosystem_consumer_tech"
+    if any(k in t for k in ("software", "internet", "platform", "communication services", "cloud")):
+        return "platform_software"
+    return "general_tech"
+
+
+def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
+    if profile == "semiconductor":
+        return {
+            "semiconductors": 1.00,
+            "ecosystem/platform": 0.70,
+            "software/services": 0.60,
+            "consumer hardware": 0.60,
+            "other": 0.50,
+        }.get(bucket, 0.50)
+    if profile == "ecosystem_consumer_tech":
+        return {
+            "ecosystem/platform": 1.00,
+            "consumer hardware": 0.95,
+            "software/services": 0.85,
+            "semiconductors": 0.45,
+            "other": 0.55,
+        }.get(bucket, 0.55)
+    if profile == "platform_software":
+        return {
+            "ecosystem/platform": 1.00,
+            "software/services": 0.95,
+            "consumer hardware": 0.65,
+            "semiconductors": 0.60,
+            "other": 0.55,
+        }.get(bucket, 0.55)
+    return {
+        "ecosystem/platform": 0.90,
+        "software/services": 0.85,
+        "consumer hardware": 0.80,
+        "semiconductors": 0.70,
+        "other": 0.60,
+    }.get(bucket, 0.60)
+
+
 def _search_yahoo_tickers(query: str, limit: int = 12) -> list[str]:
     if not query.strip():
         return []
@@ -336,6 +409,7 @@ def find_peers_dynamic(
 def find_peers_deterministic_quick(
     target_md: MarketData | None,
     target_sector: str,
+    target_industry: str = "",
     target_peers: int = 12,
 ) -> list[str]:
     """
@@ -348,7 +422,7 @@ def find_peers_deterministic_quick(
     meta = target_md.additional_metadata if isinstance(target_md.additional_metadata, dict) else {}
     sector_key = str(meta.get("sector_key") or "").strip()
     industry_key = str(meta.get("industry_key") or "").strip()
-    cache_key = f"quick_peers:{sector_key}:{industry_key}:{target_sector}"
+    cache_key = f"quick_peers:{sector_key}:{industry_key}:{target_sector}:{target_industry}"
     cached = peer_universe_cache.get(cache_key)
     if cached is not None:
         return list(cached)
@@ -386,9 +460,29 @@ def find_peers_deterministic_quick(
     except Exception:
         pass
 
+    # For non-semiconductor mega-cap tech, broaden into adjacent platform sectors
+    # so semis do not dominate the peer set.
+    _profile = _target_profile(target_sector, target_industry)
+    _is_mega_cap = bool(target_md.market_cap and target_md.market_cap > 500_000)
+    if _is_mega_cap and _profile in {"ecosystem_consumer_tech", "platform_software"}:
+        try:
+            comms = yf.Sector("communication-services")
+            candidates.extend(_extract_symbols(getattr(comms, "top_companies", None)))
+        except Exception:
+            pass
+        try:
+            cyc = yf.Sector("consumer-cyclical")
+            candidates.extend(_extract_symbols(getattr(cyc, "top_companies", None)))
+        except Exception:
+            pass
+
     # Deterministic fallback: narrow yahoo-finance endpoint query (not LLM/web-search agent).
     if len(set(candidates)) < 5:
         candidates.extend(_search_yahoo_tickers(f"{target_sector} equities", limit=20))
+    if _is_mega_cap and _profile in {"ecosystem_consumer_tech", "platform_software"}:
+        candidates.extend(_search_yahoo_tickers("internet platform mega cap equities", limit=12))
+        candidates.extend(_search_yahoo_tickers("communication services mega cap equities", limit=12))
+        candidates.extend(_search_yahoo_tickers("consumer hardware mega cap equities", limit=12))
 
     # Deduplicate, remove self ticker, and cap.
     self_ticker = (target_md.ticker or "").upper().strip()
@@ -403,6 +497,7 @@ def find_peers_deterministic_quick(
 def build_peer_multiples(
     peer_tickers: list[str],
     target_sector: str = "",
+    target_industry: str = "",
     target_market_cap: float | None = None,
     min_similarity: float = 0.0,
     target_ebitda_margin: float | None = None,
@@ -425,7 +520,8 @@ def build_peer_multiples(
         target_sector: sector string for the company being valued (free text OK)
     """
     peers: list[PeerData] = []
-    n_no_data = n_sector = n_sanity = n_scale = 0
+    n_no_data = n_sector = n_sanity = n_scale = n_bucket = 0
+    profile = _target_profile(target_sector, target_industry)
 
     for ticker in peer_tickers:
         md = fetch_market_data(ticker)
@@ -484,9 +580,25 @@ def build_peer_multiples(
             target_growth=target_growth,
             peer_growth=(md.forward_revenue_growth or md.revenue_growth_yoy),
         )
+        _industry = ""
+        if isinstance(md.additional_metadata, dict):
+            _industry = str(md.additional_metadata.get("industry") or "")
+        _bucket = _classify_peer_bucket(md.sector or "", _industry, md.company_name or "")
+        _b_weight = _bucket_weight_for_profile(profile, _bucket)
         if _sim < min_similarity:
             n_sector += 1
             continue
+        if _sim < 0.35:
+            n_sector += 1
+            continue
+
+        include_reason = "adjacent: sector/size fit"
+        if profile == "semiconductor" and _bucket == "semiconductors":
+            include_reason = "core: same semiconductor profile"
+        elif _bucket in {"ecosystem/platform", "consumer hardware", "software/services"}:
+            include_reason = "core: business model aligned"
+        elif _bucket == "semiconductors" and profile != "semiconductor":
+            include_reason = "adjacent: semiconductor exposure"
         peers.append(PeerData(
             name=md.company_name,
             ticker=ticker,
@@ -497,9 +609,24 @@ def build_peer_multiples(
             revenue_growth=md.forward_revenue_growth or md.revenue_growth_yoy,
             market_cap=md.market_cap,
             sector=md.sector,
+            industry=_industry,
+            bucket=_bucket,
+            include_reason=include_reason,
             similarity=_sim,
-            weight=max(_sim, 0.01),
+            weight=max(_sim * _b_weight, 0.01),
         ))
+
+    # Bucket-balance policy for non-semi tech: avoid semiconductor-dominated peer sets.
+    if peers and profile in {"ecosystem_consumer_tech", "platform_software", "general_tech"}:
+        semis = [p for p in peers if p.bucket == "semiconductors"]
+        non_semis = [p for p in peers if p.bucket != "semiconductors"]
+        if semis and len(semis) > max(2, int(0.35 * len(peers))):
+            keep_n = max(2, int(0.35 * len(peers)))
+            semis_sorted = sorted(semis, key=lambda p: (p.weight or 0.0), reverse=True)
+            semis_keep = semis_sorted[:keep_n]
+            semis_drop = semis_sorted[keep_n:]
+            peers = non_semis + semis_keep
+            n_bucket += len(semis_drop)
 
     # No validated peers.
     if len(peers) == 0:
@@ -509,6 +636,7 @@ def build_peer_multiples(
             n_dropped_sector=n_sector,
             n_dropped_sanity=n_sanity,
             n_dropped_scale=n_scale,
+            n_dropped_bucket=n_bucket,
             source="sector_fallback",
         )
 
@@ -535,10 +663,27 @@ def build_peer_multiples(
             ev_ebitda_low = med * 0.85
             ev_ebitda_high = med * 1.15
 
+    if len(ev_ebitdas) < 5:
+        _ev_ebitda_central = _median(ev_ebitdas)
+    else:
+        _ev_ebitda_central = (
+            _weighted_percentile(ev_ebitdas, ev_ebitda_w, 0.50)
+            or _weighted_mean(ev_ebitdas, ev_ebitda_w)
+            or _median(ev_ebitdas)
+        )
+    if len(ev_revenues) < 5:
+        _ev_revenue_central = _median(ev_revenues)
+    else:
+        _ev_revenue_central = (
+            _weighted_percentile(ev_revenues, ev_revenue_w, 0.50)
+            or _weighted_mean(ev_revenues, ev_revenue_w)
+            or _median(ev_revenues)
+        )
+
     return PeerMultiples(
         peers=peers,
-        ev_ebitda_median=_weighted_mean(ev_ebitdas, ev_ebitda_w) or _median(ev_ebitdas),
-        ev_revenue_median=_weighted_mean(ev_revenues, ev_revenue_w) or _median(ev_revenues),
+        ev_ebitda_median=_ev_ebitda_central,
+        ev_revenue_median=_ev_revenue_central,
         pe_median=_median(pes),
         ebitda_margin_median=_median(margins),
         revenue_growth_median=_median(growths),
@@ -551,6 +696,7 @@ def build_peer_multiples(
         n_dropped_sector=n_sector,
         n_dropped_sanity=n_sanity,
         n_dropped_scale=n_scale,
+        n_dropped_bucket=n_bucket,
         source=("yfinance_peers" if len(peers) >= MIN_VALID_PEERS else "yfinance_peers_low_confidence"),
     )
 

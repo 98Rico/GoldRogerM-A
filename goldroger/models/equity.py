@@ -86,10 +86,15 @@ class FootballField(Model):
 class PeerComp(Model):
     name: str
     ticker: str
+    bucket: Optional[str] = None
+    market_cap: Optional[str] = None
     ev_ebitda: Optional[str] = None
     ev_revenue: Optional[str] = None
     ebitda_margin: Optional[str] = None
     revenue_growth: Optional[str] = None
+    similarity: Optional[str] = None
+    weight: Optional[str] = None
+    include_reason: Optional[str] = None
 
 
 class PeerCompsTable(Model):

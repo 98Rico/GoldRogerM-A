@@ -78,7 +78,8 @@ _MARKET_ANALYSIS_TIMEOUT = 30
 _PEER_COMPS_TIMEOUT = 30
 _FINANCIALS_TIMEOUT = 30
 _TX_COMPS_TIMEOUT = 45
-_REPORT_WRITER_TIMEOUT = 20
+_REPORT_WRITER_TIMEOUT_QUICK = 8
+_REPORT_WRITER_TIMEOUT_FULL = 35
 _TOTAL_TIMEOUT_QUICK = 60
 _TOTAL_TIMEOUT_FULL = 300
 
@@ -173,6 +174,69 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
         txt = _re.sub(r"\biPhone\s*\d+\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
         out.append(txt)
     return out
+
+
+def _text_missing(v) -> bool:
+    if v is None:
+        return True
+    s = str(v).strip().lower()
+    if not s:
+        return True
+    return any(tok in s for tok in ("n/a", "not available", "unknown", "none", "unavailable"))
+
+
+def _quality_tier(score: int) -> str:
+    if score >= 80:
+        return "A"
+    if score >= 65:
+        return "B"
+    if score >= 50:
+        return "C"
+    return "D"
+
+
+def _fallback_catalysts(company: str, sector: str) -> list[str]:
+    _s = (sector or "").lower()
+    if "tech" in _s or "software" in _s:
+        return [
+            f"{company}: next earnings release and forward guidance update",
+            f"{company}: current product/AI feature adoption commentary",
+            f"{company}: regulatory and platform-policy developments",
+        ]
+    if "energy" in _s:
+        return [
+            f"{company}: next regulatory tariff/price-cap update",
+            f"{company}: customer growth and margin update at next filing",
+            f"{company}: power/commodity hedging and supply update",
+        ]
+    return [
+        f"{company}: next earnings/filing update",
+        f"{company}: product/strategy execution update",
+        f"{company}: macro and regulatory developments",
+    ]
+
+
+def _build_fallback_thesis(company: str, sector: str, recommendation: str, reason: str) -> InvestmentThesis:
+    cats = _fallback_catalysts(company, sector)
+    thesis = (
+        f"Thesis:\n"
+        f"- Moat: {company} retains strategic advantages in {sector or 'its sector'}.\n"
+        f"- Growth: near-term trajectory depends on execution and demand resilience.\n"
+        f"- Valuation: signal currently {recommendation} with reduced confidence ({reason}).\n"
+        f"\nRisks:\n"
+        f"- Demand: cyclical or customer-mix pressure.\n"
+        f"- Regulation: policy/antitrust/compliance constraints.\n"
+        f"- Competition: share shifts and pricing intensity."
+    )
+    return InvestmentThesis(
+        thesis=thesis,
+        catalysts=cats,
+        key_questions=[
+            "What is the highest-confidence valuation anchor today?",
+            "Which assumption drives most of the downside risk?",
+            "What near-term datapoint would change conviction?",
+        ],
+    )
 
 
 def _country_hint_from_market_data(market_data: MarketData | None) -> str:
@@ -632,6 +696,11 @@ def run_analysis(
                 tickers = find_peers_deterministic_quick(
                     target_md=market_data,
                     target_sector=fund.sector or "",
+                    target_industry=(
+                        str((market_data.additional_metadata or {}).get("industry") or "")
+                        if market_data and isinstance(market_data.additional_metadata, dict)
+                        else ""
+                    ),
                     target_peers=12,
                 )
                 result = ({"mode": "quick_deterministic", "tickers": tickers}, None)
@@ -713,6 +782,11 @@ def run_analysis(
                 market_status = "SKIPPED_QUICK_MODE"
             else:
                 market_status = "OK"
+                if (
+                    _text_missing(mkt.market_size)
+                    and _text_missing(mkt.market_growth)
+                ):
+                    market_status = "DEGRADED"
         except FutureTimeoutError:
             market_analysis_failed = True
             market_status = "TIMEOUT"
@@ -790,6 +864,9 @@ def run_analysis(
     # Post-process peer results (yfinance calls — sequential is fine)
     # target_sector comes from Fundamentals agent output for sector validation
     _target_sector = fund.sector or "" if fund else ""
+    _target_industry = ""
+    if market_data and isinstance(market_data.additional_metadata, dict):
+        _target_industry = str(market_data.additional_metadata.get("industry") or "")
     peer_comps_table: PeerCompsTable | None = None
     peer_multiples: PeerMultiples | None = None
     # Always start from deterministic peer engine; full-mode LLM results can only enrich.
@@ -797,6 +874,7 @@ def run_analysis(
         _deterministic_base = find_peers_deterministic_quick(
             target_md=market_data,
             target_sector=_target_sector,
+            target_industry=_target_industry,
             target_peers=16,
         )
     except Exception:
@@ -834,6 +912,7 @@ def run_analysis(
                 peer_multiples = build_peer_multiples(
                     peer_tickers,
                     target_sector=_target_sector,
+                    target_industry=_target_industry,
                     target_market_cap=(market_data.market_cap if market_data else None),
                     min_similarity=(0.5 if _is_mega_tech else 0.0),
                     target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
@@ -850,6 +929,8 @@ def run_analysis(
                     drops.append(f"{peer_multiples.n_dropped_sanity} bad multiples")
                 if peer_multiples.n_dropped_scale:
                     drops.append(f"{peer_multiples.n_dropped_scale} too small for scale")
+                if peer_multiples.n_dropped_bucket:
+                    drops.append(f"{peer_multiples.n_dropped_bucket} dropped by bucket balance")
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
                 if peer_multiples.n_peers > 0:
@@ -867,6 +948,13 @@ def run_analysis(
                         + ", ".join(p.ticker for p in peer_multiples.peers[:6])
                         + drop_note
                     )
+                    _bucket_counts: dict[str, int] = {}
+                    for _p in peer_multiples.peers:
+                        _b = _p.bucket or "other"
+                        _bucket_counts[_b] = _bucket_counts.get(_b, 0) + 1
+                    if _bucket_counts:
+                        _mix = ", ".join(f"{k}={v}" for k, v in sorted(_bucket_counts.items(), key=lambda kv: kv[0]))
+                        console.print(f"  [dim]Peer mix by business model bucket: {_mix}[/dim]")
                     for _p in peer_multiples.peers[:8]:
                         _sim = _peer_similarity_score(
                             market_data.market_cap if market_data else None,
@@ -916,10 +1004,15 @@ def run_analysis(
                             PeerComp(
                                 name=p.name,
                                 ticker=p.ticker,
+                                bucket=p.bucket,
+                                market_cap=(f"${p.market_cap/1000:.1f}B" if p.market_cap else None),
                                 ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
                                 ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
                                 ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
                                 revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
+                                similarity=f"{(p.similarity or 0):.2f}",
+                                weight=f"{(p.weight or 0):.2f}",
+                                include_reason=p.include_reason,
                             )
                             for p in peer_multiples.peers
                         ],
@@ -1003,6 +1096,7 @@ def run_analysis(
         ),
         peer_count=(peer_multiples.n_peers if peer_multiples else 0),
         market_analysis_failed=market_analysis_failed,
+        market_analysis_degraded=(market_status == "DEGRADED"),
         market_analysis_skipped_quick=(market_status == "SKIPPED_QUICK_MODE"),
     )
     _is_mega_cap_quality = bool(
@@ -1521,15 +1615,39 @@ def run_analysis(
     # ── 6. THESIS ─────────────────────────────────────────────────────────
     t0 = _step("Investment Thesis")
     thesis_status = "OK"
-    if (time.time() - _run_started) > _total_budget_s:
+    _report_timeout = _REPORT_WRITER_TIMEOUT_QUICK if quick_mode else _REPORT_WRITER_TIMEOUT_FULL
+    if quick_mode:
+        _quick_text = (
+            f"Thesis:\n"
+            f"- Business: {fund.company_name} in {fund.sector or 'its sector'}.\n"
+            f"- Signal: {val.recommendation} with {val.upside_downside or 'N/A'} upside/downside.\n"
+            f"- Confidence: bounded quick-mode output; deeper research available in full mode.\n"
+            f"\nRisks:\n"
+            f"- Demand and mix volatility.\n"
+            f"- Regulatory/policy uncertainty.\n"
+            f"- Competitive pricing and execution pressure."
+        )
+        thesis = InvestmentThesis(
+            thesis=_quick_text,
+            catalysts=_sanitize_catalysts(_fallback_catalysts(company, fund.sector or ""))[:3],
+            key_questions=[
+                "What metric would move conviction most next quarter?",
+                "How robust is margin durability vs peers?",
+                "What catalyst could change the recommendation?",
+            ],
+        )
+        log.end_step("thesis", t0)
+        _done("Investment Thesis", t0)
+    elif (time.time() - _run_started) > _total_budget_s:
         thesis_status = "TIMEOUT"
         console.print(
             f"  [yellow]Global runtime budget exceeded ({_total_budget_s}s) — using short fallback thesis.[/yellow]"
         )
-        thesis = InvestmentThesis(
-            thesis=f"{company}: quick summary only. Full thesis unavailable due to runtime budget.",
-            catalysts=["Next earnings/filing update", "Operational milestone", "Regulatory/macro update"],
-            key_questions=["What valuation anchor is strongest?", "What is the biggest data gap?", "What changes recommendation?"],
+        thesis = _build_fallback_thesis(
+            company=company,
+            sector=fund.sector or "",
+            recommendation=val.recommendation or "HOLD",
+            reason="global runtime budget reached",
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -1592,33 +1710,26 @@ def run_analysis(
                         log_raw_errors=debug,
                     )
                 )
-                thesis = _fut_thesis.result(timeout=_REPORT_WRITER_TIMEOUT)
+                thesis = _fut_thesis.result(timeout=_report_timeout)
         except FutureTimeoutError:
             thesis_status = "TIMEOUT"
-            console.print(f"  [yellow]Investment thesis timeout > {_REPORT_WRITER_TIMEOUT}s — using short fallback.[/yellow]")
-            thesis = InvestmentThesis(
-                thesis=f"{company}: quick summary only. Full thesis unavailable due to timeout.",
-                bull_case="Upside depends on execution and market conditions.",
-                base_case="Base case assumes stable operations and gradual growth.",
-                bear_case="Downside risk from execution, demand, or pricing pressure.",
-                catalysts=["Next earnings/filing update", "Product/strategy update", "Macro/regulatory change"],
-                key_questions=["What is verified growth?", "How durable are margins?", "What valuation anchor is most reliable?"],
+            console.print(f"  [yellow]Investment thesis timeout > {_report_timeout}s — using structured fallback.[/yellow]")
+            thesis = _build_fallback_thesis(
+                company=company,
+                sector=fund.sector or "",
+                recommendation=val.recommendation or "HOLD",
+                reason="thesis timeout",
             )
         except Exception as _th_err:
             thesis_status = "FAILED"
             console.print(f"  [yellow]Investment thesis failed: {_th_err}[/yellow]")
-            thesis = InvestmentThesis(
-                thesis=f"{company}: quick summary unavailable due to model failure.",
-                catalysts=["Operational update", "Regulatory update", "Funding/earnings update"],
-                key_questions=["What data is verified?", "What peer anchor is robust?", "What key diligence gap remains?"],
+            thesis = _build_fallback_thesis(
+                company=company,
+                sector=fund.sector or "",
+                recommendation=val.recommendation or "HOLD",
+                reason="thesis generation failure",
             )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
-        if quick_mode:
-            thesis.catalysts = (thesis.catalysts or [])[:3]
-            thesis.key_questions = (thesis.key_questions or [])[:3]
-            thesis.bull_case = None
-            thesis.base_case = None
-            thesis.bear_case = None
         log.end_step("thesis", t0)
         _done("Investment Thesis", t0)
 
@@ -1629,6 +1740,31 @@ def run_analysis(
             football_field.base.narrative = thesis.base_case[:200]
         if football_field.bull and thesis.bull_case:
             football_field.bull.narrative = thesis.bull_case[:200]
+
+    # Final confidence adjustments after enrichment stage completes.
+    if valuation_status == "DEGRADED":
+        quality.score = max(0, quality.score - 6)
+        quality.warnings.append("Valuation degraded (high dispersion or weak method agreement)")
+    if thesis_status == "TIMEOUT":
+        quality.score = max(0, quality.score - 6)
+        quality.warnings.append("Thesis generation timed out")
+        quality.checks["thesis"] = "timeout"
+    elif thesis_status == "FAILED":
+        quality.score = max(0, quality.score - 10)
+        quality.warnings.append("Thesis generation failed")
+        quality.checks["thesis"] = "failed"
+    else:
+        quality.checks["thesis"] = "ok"
+    if market_status == "DEGRADED":
+        quality.score = max(0, quality.score - 4)
+    quality.score = max(0, min(100, quality.score))
+    quality.tier = _quality_tier(quality.score)
+    sources.add(
+        "Data Quality Score",
+        f"{quality.score}/100 (Tier {quality.tier})",
+        "quality_gate",
+        "verified",
+    )
 
     console.rule("[DONE EQUITY]")
     log.flush()
@@ -1673,7 +1809,7 @@ def run_analysis(
                         if market_status == "SKIPPED_QUICK_MODE"
                         else (
                             "DEGRADED"
-                            if market_status in {"FAILED", "TIMEOUT"} or thesis_status in {"FAILED", "TIMEOUT"}
+                            if market_status in {"FAILED", "TIMEOUT", "DEGRADED"} or thesis_status in {"FAILED", "TIMEOUT"}
                             else "OK"
                         )
                     )
@@ -1682,7 +1818,12 @@ def run_analysis(
                 "recommendation": _rec,
                 "confidence": (
                     "Low"
-                    if valuation_status in {"FAILED", "DEGRADED"} or peers_status in {"FAILED", "TIMEOUT", "DEGRADED"}
+                    if (
+                        valuation_status in {"FAILED", "DEGRADED"}
+                        or peers_status in {"FAILED", "TIMEOUT", "DEGRADED"}
+                        or market_status in {"FAILED", "TIMEOUT", "DEGRADED"}
+                        or thesis_status in {"FAILED", "TIMEOUT"}
+                    )
                     else "Medium"
                 ),
             },
@@ -1704,6 +1845,13 @@ def run_analysis(
         analysis.market.market_growth = "Not available in quick mode"
         analysis.market.market_segment = "Not available in quick mode"
         analysis.market.key_trends = []
+    elif market_status == "DEGRADED":
+        if _text_missing(analysis.market.market_size):
+            analysis.market.market_size = "Not available from current queries"
+        if _text_missing(analysis.market.market_growth):
+            analysis.market.market_growth = "Not available from current queries"
+        if _text_missing(analysis.market.market_segment):
+            analysis.market.market_segment = "Not available from current queries"
     elif market_analysis_failed:
         analysis.market.market_size = "Not available"
         analysis.market.market_growth = "Not available"

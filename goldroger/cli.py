@@ -593,6 +593,30 @@ def print_result(result):
         kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
     console.print(kpi_table)
 
+    # Peer table (auditability)
+    if result.peer_comps and result.peer_comps.peers:
+        peer_table = Table(title="Peer Set (Top Validated Peers)", show_header=True, header_style="bold cyan")
+        peer_table.add_column("Ticker")
+        peer_table.add_column("Name")
+        peer_table.add_column("Bucket")
+        peer_table.add_column("MCap")
+        peer_table.add_column("EV/EBITDA")
+        peer_table.add_column("Similarity")
+        peer_table.add_column("Weight")
+        peer_table.add_column("Include Reason")
+        for p in result.peer_comps.peers:
+            peer_table.add_row(
+                p.ticker or "—",
+                p.name or "—",
+                p.bucket or "—",
+                p.market_cap or "—",
+                p.ev_ebitda or "—",
+                p.similarity or "—",
+                p.weight or "—",
+                p.include_reason or "—",
+            )
+        console.print(peer_table)
+
     # Valuation methods
     if v.methods and not _is_inconclusive:
         val_table = Table(title="Valuation Football Field", show_header=True, header_style="bold yellow")

@@ -234,6 +234,7 @@ class ValuationService:
             base_revenue=base_revenue_y0,
         )
         dcf_output = compute_dcf(dcf_input)
+        dcf_conservative = False
         # DCF sanity diagnostics
         try:
             _y5_ebitda = revenue_series[-1] * ebitda_margin if revenue_series else 0.0
@@ -243,6 +244,19 @@ class ValuationService:
                 notes.append(f"DCF implied exit EV/EBITDA: {_implied_exit:.1f}x.")
                 if assumptions.get("mega_cap_tech") and _implied_exit < 15.0:
                     notes.append("DCF sanity flag: implied exit multiple appears low for mega-cap tech.")
+                _peer_rng = assumptions.get("ev_ebitda_range")
+                if (
+                    assumptions.get("mega_cap_tech")
+                    and isinstance(_peer_rng, (list, tuple))
+                    and len(_peer_rng) == 2
+                ):
+                    _peer_low = float(min(_peer_rng[0], _peer_rng[1]))
+                    if _peer_low > 0 and _implied_exit < (_peer_low * 0.60):
+                        dcf_conservative = True
+                        notes.append(
+                            f"DCF conservative vs peer floor: implied exit {_implied_exit:.1f}x "
+                            f"vs peer low {_peer_low:.1f}x."
+                        )
             if _y5_fcf and dcf_output.enterprise_value > 0:
                 _fcf_yield = _y5_fcf / dcf_output.enterprise_value
                 notes.append(f"DCF implied terminal FCF yield: {_fcf_yield:.1%}.")
@@ -306,6 +320,18 @@ class ValuationService:
                 notes.append(
                     f"Mega-cap (>${_cfg.lbo.mega_cap_skip_usd_bn:.0f}B MCap): "
                     "tx comps excluded — weights DCF 60% / Comps 40%."
+                )
+        if dcf_conservative and weights.get("comps", 0.0) > 0:
+            # Reduce DCF influence when DCF looks structurally conservative vs peer economics.
+            shift = min(0.15, max(0.0, weights.get("dcf", 0.0) - 0.45))
+            if shift > 0:
+                weights = {
+                    "dcf": max(0.0, weights.get("dcf", 0.0) - shift),
+                    "comps": min(1.0, weights.get("comps", 0.0) + shift),
+                    "transactions": weights.get("transactions", 0.0),
+                }
+                notes.append(
+                    f"DCF conservative adjustment: shifted {shift:.0%} weight from DCF to comps."
                 )
         w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
         notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")
@@ -405,7 +431,9 @@ class ValuationService:
                     "valuation_engine",
                     "inferred",
                 )
-                notes.append(f"⚠ High uncertainty / low confidence: DCF vs comps gap {_disp:.1f}x.")
+                notes.append(
+                    f"High valuation dispersion: DCF and comps differ materially ({_disp:.1f}x); confidence reduced."
+                )
 
         # ── 8. Sensitivity matrix ─────────────────────────────────────────
         sensitivity = self._build_sensitivity(dcf_input, wacc, terminal_growth)
