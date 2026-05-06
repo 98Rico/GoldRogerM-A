@@ -932,10 +932,12 @@ def run_analysis(
                     target_sector=_target_sector,
                     target_industry=_target_industry,
                     target_market_cap=(market_data.market_cap if market_data else None),
-                    min_similarity=(0.5 if _is_mega_tech else 0.0),
+                    min_similarity=(0.40 if _is_mega_tech else 0.0),
                     target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
                     target_growth=(market_data.forward_revenue_growth if market_data else None),
-                    min_market_cap_ratio=(0.05 if _is_mega_tech else 0.0),
+                    min_market_cap_ratio=(0.04 if _is_mega_tech else 0.0),
+                    min_valuation_peers=((3 if quick_mode else 5) if _is_mega_tech else 3),
+                    max_return_peers=(8 if quick_mode else 10),
                 )
                 # Log validation summary
                 drops: list[str] = []
@@ -951,21 +953,29 @@ def run_analysis(
                     drops.append(f"{peer_multiples.n_dropped_bucket} dropped by bucket balance")
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
-                if peer_multiples.n_peers > 0:
+                if peer_multiples.n_valuation_peers > 0:
                     if peers_status in {"FAILED", "TIMEOUT"}:
                         peers_status = "DEGRADED"
-                    if peers_status == "OK" and peer_multiples.n_peers < 5:
+                    if peers_status == "OK" and peer_multiples.n_valuation_peers < 5:
                         peers_status = "DEGRADED"
-                    if _is_mega_tech and peer_multiples.n_peers < 5:
+                    if _is_mega_tech and peer_multiples.n_valuation_peers < 5:
                         console.print(
                             f"  [yellow]Peer set expanded (adjacent/global stages used): "
-                            f"{peer_multiples.n_peers} validated peers; confidence reduced.[/yellow]"
+                            f"{peer_multiples.n_valuation_peers} valuation peers "
+                            f"({peer_multiples.n_qualitative_peers} qualitative); confidence reduced.[/yellow]"
                         )
-                    console.print(
-                        f"  [cyan]{peer_multiples.n_peers} validated peers (top 6 shown):[/cyan] "
-                        + ", ".join(p.ticker for p in peer_multiples.peers[:6])
-                        + drop_note
-                    )
+                    _show_n = min(6, peer_multiples.n_peers)
+                    _shown = ", ".join(p.ticker for p in peer_multiples.peers[:_show_n])
+                    if peer_multiples.n_peers > _show_n:
+                        console.print(
+                            f"  [cyan]{peer_multiples.n_peers} validated peers, top {_show_n} shown:[/cyan] "
+                            + _shown + drop_note
+                        )
+                    else:
+                        console.print(
+                            f"  [cyan]{peer_multiples.n_peers} validated peers:[/cyan] "
+                            + _shown + drop_note
+                        )
                     _bucket_counts: dict[str, int] = {}
                     for _p in peer_multiples.peers:
                         _b = _p.bucket or "other"
@@ -978,20 +988,15 @@ def run_analysis(
                         for _ex in peer_multiples.excluded_details[:12]:
                             console.print(f"  [dim]- {_ex}[/dim]")
                     for _p in peer_multiples.peers[:8]:
-                        _sim = _peer_similarity_score(
-                            market_data.market_cap if market_data else None,
-                            _p.market_cap,
-                            _target_sector,
-                            _p.sector or "",
-                        )
+                        _sim = float(_p.similarity or 0.0)
                         if debug:
                             _mcap_b = (_p.market_cap / 1000.0) if _p.market_cap else None
                             _mcap_txt = f"{_mcap_b:.1f}B" if _mcap_b is not None else "N/A"
                             console.print(
                                 f"  [dim]Peer {_p.ticker}: EV/EBITDA={_p.ev_ebitda:.1f}x "
-                                f"MCap={_mcap_txt} (similarity {_sim:.2f}, included)[/dim]"
+                                f"MCap={_mcap_txt} (similarity {_sim:.2f}, role={_p.role or 'n/a'})[/dim]"
                                 if _p.ev_ebitda
-                                else f"  [dim]Peer {_p.ticker}: MCap={_mcap_txt} similarity {_sim:.2f} (included)[/dim]"
+                                else f"  [dim]Peer {_p.ticker}: MCap={_mcap_txt} similarity {_sim:.2f} role={_p.role or 'n/a'}[/dim]"
                             )
                         sources.add_once(
                             f"Peer {_p.ticker} Similarity",
@@ -1052,6 +1057,7 @@ def run_analysis(
                                 name=p.name,
                                 ticker=p.ticker,
                                 bucket=p.bucket,
+                                role=p.role,
                                 market_cap=(f"${p.market_cap/1000:.1f}B" if p.market_cap else None),
                                 ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
                                 ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
@@ -1080,13 +1086,13 @@ def run_analysis(
                 else:
                     peers_status = "FAILED"
                     console.print(
-                        f"  [yellow]Peer comps: fewer than 3 validated peers{drop_note} "
+                        f"  [yellow]Peer comps: no usable valuation peers{drop_note} "
                         f"— confidence reduced[/yellow]"
                     )
-                    if _is_mega_tech and peer_multiples and peer_multiples.n_peers < 5:
+                    if _is_mega_tech and peer_multiples and peer_multiples.n_valuation_peers < 5:
                         console.print(
                             f"  [yellow]Insufficient comps for mega-cap policy: "
-                            f"{peer_multiples.n_peers} validated peers (<5).[/yellow]"
+                            f"{peer_multiples.n_valuation_peers} valuation peers (<5).[/yellow]"
                         )
         except Exception as e:
             peers_status = "FAILED"
@@ -1141,7 +1147,7 @@ def run_analysis(
             and market_data.forward_revenue_growth is not None
             and market_data.forward_revenue_1y is None
         ),
-        peer_count=(peer_multiples.n_peers if peer_multiples else 0),
+        peer_count=(peer_multiples.n_valuation_peers if peer_multiples else 0),
         market_analysis_failed=market_analysis_failed,
         market_analysis_degraded=(market_status == "DEGRADED"),
         market_analysis_skipped_quick=(market_status == "SKIPPED_QUICK_MODE"),
@@ -1152,7 +1158,7 @@ def run_analysis(
         and market_data.market_cap
         and market_data.market_cap > _mega_cap_usd_m
     )
-    _peer_count = peer_multiples.n_peers if peer_multiples else 0
+    _peer_count = peer_multiples.n_valuation_peers if peer_multiples else 0
     if _is_mega_cap_quality and _peer_count < 1:
         if quality.score > 75:
             quality.score = 75
@@ -1204,23 +1210,24 @@ def run_analysis(
         _is_mega_cap and _peer_count < 1
     )
     assumptions_dict["low_confidence_comps"] = bool(
-        _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5
+        _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_valuation_peers < 5
     )
     assumptions_dict["mega_cap_tech"] = bool(
         _is_mega_cap and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
     )
     _peer_quality = "weak"
     if peer_multiples and peer_multiples.peers:
-        _sim_vals = [float(p.similarity or 0.0) for p in peer_multiples.peers]
+        _valuation_only = [p for p in peer_multiples.peers if p.ev_ebitda is not None]
+        _sim_vals = [float(p.similarity or 0.0) for p in _valuation_only]
         _avg_sim = (sum(_sim_vals) / len(_sim_vals)) if _sim_vals else 0.0
-        _total_w = sum(float(p.weight or 0.0) for p in peer_multiples.peers)
-        _semi_w = sum(float(p.weight or 0.0) for p in peer_multiples.peers if (p.bucket or "") == "semiconductors")
+        _total_w = sum(float(p.weight or 0.0) for p in _valuation_only)
+        _semi_w = sum(float(p.weight or 0.0) for p in _valuation_only if (p.bucket or "") == "semiconductors_infrastructure")
         _semi_share = (_semi_w / _total_w) if _total_w > 0 else 0.0
-        if peer_multiples.n_peers >= 7 and _avg_sim >= 0.75 and _semi_share <= 0.25:
+        if peer_multiples.n_valuation_peers >= 8 and _avg_sim >= 0.75 and _semi_share <= 0.25:
             _peer_quality = "strong"
-        elif peer_multiples.n_peers >= 5 and _avg_sim >= 0.65 and _semi_share <= 0.30:
+        elif peer_multiples.n_valuation_peers >= 5 and _avg_sim >= 0.65 and _semi_share <= 0.30:
             _peer_quality = "normal"
-        elif peer_multiples.n_peers >= 3:
+        elif peer_multiples.n_valuation_peers >= 3:
             _peer_quality = "mixed"
         else:
             _peer_quality = "weak"
@@ -1242,18 +1249,19 @@ def run_analysis(
         if peer_multiples.ev_ebitda_weighted is not None:
             assumptions_dict["ev_ebitda_weighted"] = peer_multiples.ev_ebitda_weighted
         console.print(
-            f"  [cyan]Comps from {peer_multiples.n_peers} real peers (P25–P75): "
+            f"  [cyan]Comps from {peer_multiples.n_valuation_peers} valuation peers "
+            f"({peer_multiples.n_qualitative_peers} qualitative) (P25–P75): "
             f"{peer_multiples.ev_ebitda_low:.1f}x–{peer_multiples.ev_ebitda_high:.1f}x EV/EBITDA[/cyan]"
         )
-        if _is_mega_cap and peer_multiples.n_peers < 5:
+        if _is_mega_cap and peer_multiples.n_valuation_peers < 5:
             console.print("  [yellow]⚠ Peer set expanded beyond core comparables; valuation confidence reduced.[/yellow]")
     elif assumptions_dict.get("insufficient_comps"):
         console.print(
             "  [yellow]Comps unavailable: no validated peers after expansion.[/yellow]"
         )
-    elif _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5:
+    elif _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_valuation_peers < 5:
         console.print(
-            f"  [yellow]Low-confidence comps: {peer_multiples.n_peers} validated peers (target 5–7).[/yellow]"
+            f"  [yellow]Low-confidence comps: {peer_multiples.n_valuation_peers} valuation peers (target 5–7).[/yellow]"
         )
 
     # Policy: do not anchor valuation inputs to LLM-sourced transaction comps.
@@ -1268,7 +1276,14 @@ def run_analysis(
     )
     blended_ev = result.blended.blended if result.blended else None
     rec = result.recommendation
-    _dcf_sanity_fail = any("DCF likely miscalibrated" in str(n) for n in (result.notes or []))
+    _dcf_sanity_fail = any(
+        any(tok in str(n) for tok in (
+            "DCF likely miscalibrated",
+            "DCF sanity flag: implied exit multiple appears low",
+            "DCF conservative vs peer floor",
+        ))
+        for n in (result.notes or [])
+    )
     valuation_failed = False
     if _dcf_sanity_fail:
         quality.score = max(0, quality.score - 12)
@@ -1391,9 +1406,9 @@ def run_analysis(
     _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
     _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
-    if peer_multiples and peer_multiples.n_peers < 3:
+    if peer_multiples and peer_multiples.n_valuation_peers < 3:
         _low_conviction = True
-    if _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_peers < 5:
+    if _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_valuation_peers < 5:
         _low_conviction = True
     if company_type == "private" and result.has_revenue and blended_ev and _rev_float and _rev_float > 0:
         _entry_ev_rev = blended_ev / _rev_float
@@ -1432,7 +1447,7 @@ def run_analysis(
     if peer_multiples and peer_multiples.ev_ebitda_median:
         sources.add(
             "Peer EV/EBITDA median",
-            f"{peer_multiples.ev_ebitda_median:.1f}x ({peer_multiples.n_peers} peers)",
+            f"{peer_multiples.ev_ebitda_median:.1f}x ({peer_multiples.n_valuation_peers} valuation peers)",
             "yfinance_peers", "verified",
         )
 
@@ -1847,6 +1862,17 @@ def run_analysis(
         if football_field.bull and thesis.bull_case:
             football_field.bull.narrative = thesis.bull_case[:200]
 
+    if thesis and val:
+        _fv_src = result.field_sources.get("Fair Value Range")
+        _fv_txt = _fv_src[0] if _fv_src and _fv_src[0] else "N/A"
+        _pt_txt = val.target_price or "N/A"
+        _canon = (
+            f"Valuation reference (canonical): fair value {_fv_txt}; "
+            f"point estimate {_pt_txt}; recommendation {val.recommendation or 'N/A'}."
+        )
+        if _canon not in (thesis.thesis or ""):
+            thesis.thesis = f"{_canon}\n\n{thesis.thesis or ''}".strip()
+
     # Final confidence adjustments after enrichment stage completes.
     if valuation_status == "DEGRADED":
         quality.score = max(0, quality.score - 6)
@@ -1881,9 +1907,13 @@ def run_analysis(
     else:
         _research_quality_score = 100
         if market_status in {"DEGRADED"}:
-            _research_quality_score -= 20
-        elif market_status in {"FAILED", "TIMEOUT"}:
             _research_quality_score -= 45
+        elif market_status in {"FAILED", "TIMEOUT"}:
+            _research_quality_score -= 60
+        if _text_missing(mkt.market_size):
+            _research_quality_score -= 10
+        if _text_missing(mkt.market_growth):
+            _research_quality_score -= 10
         if thesis_status == "TIMEOUT":
             _research_quality_score -= 20
         elif thesis_status == "FAILED":
@@ -1892,6 +1922,45 @@ def run_analysis(
         _research_quality_label = (
             "low" if _research_quality_score < 60 else "medium" if _research_quality_score < 80 else "high"
         )
+
+    if ic_summary and ic_summary.ic_score:
+        try:
+            _ic_raw = float(str(ic_summary.ic_score).split("/", 1)[0])
+            _ic_penalty = 0.0
+            if valuation_status == "DEGRADED":
+                _ic_penalty += 8
+            elif valuation_status == "FAILED":
+                _ic_penalty += 20
+            if peers_status in {"FAILED", "TIMEOUT"}:
+                _ic_penalty += 8
+            elif peers_status == "DEGRADED":
+                _ic_penalty += 5
+            if quality.score < 60:
+                _ic_penalty += 6
+            if _dcf_sanity_fail:
+                _ic_penalty += 6
+            _ic_final = max(0.0, _ic_raw - _ic_penalty)
+            ic_summary.ic_score = f"{_ic_final:.0f}/100"
+            if _ic_final < 45:
+                ic_summary.recommendation = "WATCH"
+            if ic_summary.rationale:
+                ic_summary.rationale += (
+                    f" Confidence-adjusted IC score after valuation reliability checks: {ic_summary.ic_score}."
+                )
+        except Exception:
+            pass
+
+    _confidence_reasons: list[str] = []
+    if peer_multiples and peer_multiples.n_valuation_peers < (3 if quick_mode else 5):
+        _confidence_reasons.append("weak valuation peer count")
+    if valuation_status == "DEGRADED":
+        _confidence_reasons.append("high DCF/comps dispersion or method disagreement")
+    if _dcf_sanity_fail:
+        _confidence_reasons.append("conservative/degraded DCF sanity")
+    if market_status in {"FAILED", "TIMEOUT", "DEGRADED"}:
+        _confidence_reasons.append("limited market context")
+    if thesis_status in {"FAILED", "TIMEOUT"}:
+        _confidence_reasons.append("thesis generation degraded")
 
     analysis = AnalysisResult(
         company=company,
@@ -1950,6 +2019,11 @@ def run_analysis(
                     )
                     else "Medium"
                 ),
+                "confidence_reason": (
+                    "; ".join(_confidence_reasons)
+                    if _confidence_reasons
+                    else "valuation inputs and enrichment are consistent"
+                ),
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),
@@ -2002,9 +2076,21 @@ def run_analysis(
         sources.add_once("TAM", _tam_v, "skipped_quick_mode", "skipped")
         sources.add_once("Market Growth", _mg_v, "skipped_quick_mode", "skipped")
     else:
-        _tam_conf = "inferred" if "not available" in str(_tam_v).lower() else "estimated"
-        _mg_conf = "inferred" if "not available" in str(_mg_v).lower() else "estimated"
-        sources.add_once("TAM", _tam_v, "market_analysis", _tam_conf)
-        sources.add_once("Market Growth", _mg_v, "market_analysis", _mg_conf)
+        _tam_unavail = "not available" in str(_tam_v).lower()
+        _mg_unavail = "not available" in str(_mg_v).lower()
+        _tam_conf = "inferred" if _tam_unavail else "estimated"
+        _mg_conf = "inferred" if _mg_unavail else "estimated"
+        sources.add_once(
+            "TAM",
+            _tam_v,
+            ("market_analysis_unavailable" if _tam_unavail else "market_analysis"),
+            _tam_conf,
+        )
+        sources.add_once(
+            "Market Growth",
+            _mg_v,
+            ("market_analysis_unavailable" if _mg_unavail else "market_analysis"),
+            _mg_conf,
+        )
     analysis.sources_md = sources.to_markdown()
     return analysis

@@ -242,7 +242,8 @@ class ValuationService:
             if _y5_ebitda and dcf_output.enterprise_value > 0:
                 _implied_exit = dcf_output.enterprise_value / _y5_ebitda
                 notes.append(f"DCF implied exit EV/EBITDA: {_implied_exit:.1f}x.")
-                if assumptions.get("mega_cap_tech") and _implied_exit < 15.0:
+                if assumptions.get("mega_cap_tech") and _implied_exit < 12.0:
+                    dcf_conservative = True
                     notes.append("DCF sanity flag: implied exit multiple appears low for mega-cap tech.")
                 _peer_rng = assumptions.get("ev_ebitda_range")
                 if (
@@ -268,6 +269,18 @@ class ValuationService:
                 f"Terminal value {dcf_output.terminal_value_pct:.0%} of EV — "
                 "highly sensitive to terminal assumptions."
             )
+        else:
+            notes.append(f"Terminal value {dcf_output.terminal_value_pct:.0%} of EV.")
+        try:
+            if dcf_output.free_cash_flows and len(dcf_output.free_cash_flows) >= 2:
+                _fcf0 = dcf_output.free_cash_flows[0]
+                _fcfN = dcf_output.free_cash_flows[-1]
+                _n = len(dcf_output.free_cash_flows) - 1
+                if _fcf0 > 0 and _fcfN > 0 and _n > 0:
+                    _fcf_cagr = (_fcfN / _fcf0) ** (1 / _n) - 1.0
+                    notes.append(f"Projected FCF CAGR: {_fcf_cagr:.1%}.")
+        except Exception:
+            pass
 
         # ── 4. Comps & transactions ───────────────────────────────────────
         ebitda = revenue_current * ebitda_margin
@@ -314,14 +327,21 @@ class ValuationService:
                 weights = {"dcf": 0.90, "comps": 0.10, "transactions": 0.0}
                 notes.append("Mega-cap partial comps mode: 1-2 peers → DCF 90% / comps 10%.")
             else:
-                if peer_quality == "strong":
-                    weights = {"dcf": 0.50, "comps": 0.50, "transactions": 0.0}
-                elif peer_quality == "normal":
-                    weights = {"dcf": 0.60, "comps": 0.40, "transactions": 0.0}
-                elif peer_quality == "mixed":
-                    weights = {"dcf": 0.65, "comps": 0.35, "transactions": 0.0}
+                if peer_count <= 4:
+                    if peer_quality in {"strong", "normal"}:
+                        weights = {"dcf": 0.75, "comps": 0.25, "transactions": 0.0}
+                    else:
+                        weights = {"dcf": 0.80, "comps": 0.20, "transactions": 0.0}
+                elif peer_count <= 7:
+                    if peer_quality == "strong":
+                        weights = {"dcf": 0.60, "comps": 0.40, "transactions": 0.0}
+                    else:
+                        weights = {"dcf": 0.65, "comps": 0.35, "transactions": 0.0}
                 else:
-                    weights = {"dcf": 0.75, "comps": 0.25, "transactions": 0.0}
+                    if peer_quality == "strong":
+                        weights = {"dcf": 0.50, "comps": 0.50, "transactions": 0.0}
+                    else:
+                        weights = {"dcf": 0.55, "comps": 0.45, "transactions": 0.0}
                 notes.append(
                     f"Mega-cap peer-quality weighting ({peer_quality}): "
                     f"DCF {weights['dcf']:.0%} / Comps {weights['comps']:.0%}."
@@ -367,26 +387,23 @@ class ValuationService:
             ebitda_margin=ebitda_margin,
         )
 
-        if (
-            market_data
-            and market_data.ev_ebitda_market
-            and comps_field_sources.get("EV/EBITDA (peer median)", ("", "", ""))[1] == "validated_peers"
-            and not assumptions.get("low_confidence_comps")
-        ):
-            _peer_median = None
-            _pm = comps_field_sources.get("EV/EBITDA (peer median)")
-            if _pm:
-                _nums = __import__("re").findall(r"([0-9]+(?:\.[0-9]+)?)x", str(_pm[0]))
+        if market_data and market_data.ev_ebitda_market:
+            _peer_applied = None
+            _pa = comps_field_sources.get("EV/EBITDA (peer applied)")
+            if _pa:
+                _nums = __import__("re").findall(r"([0-9]+(?:\.[0-9]+)?)x", str(_pa[0]))
                 if _nums:
-                    _peer_median = float(_nums[0])
-            if _peer_median and _peer_median > 0:
-                _delta = ((market_data.ev_ebitda_market / _peer_median) - 1.0) * 100.0
+                    _peer_applied = float(_nums[0])
+            if _peer_applied and _peer_applied > 0:
+                _delta = ((market_data.ev_ebitda_market / _peer_applied) - 1.0) * 100.0
                 _stance = "premium" if _delta >= 0 else "discount"
                 notes.append(
-                    f"Implied vs peer median: {market_data.ev_ebitda_market:.1f}x vs {_peer_median:.1f}x "
-                    f"→ {abs(_delta):.1f}% {_stance}."
+                    f"Live EV/EBITDA check: live {market_data.ev_ebitda_market:.1f}x vs "
+                    f"applied peers {_peer_applied:.1f}x → {abs(_delta):.1f}% {_stance}."
                 )
-                if _delta >= 0:
+                if assumptions.get("low_confidence_comps") or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}:
+                    notes.append("Peer multiple comparison is low-confidence reference due to degraded peer set.")
+                elif _delta >= 0:
                     notes.append(
                         "Premium rationale to test: margin durability, FCF conversion, and balance-sheet quality."
                     )

@@ -11,7 +11,14 @@ from goldroger.data.comparables import (
 from goldroger.data.fetcher import MarketData
 
 
-def _md(ticker: str, sector: str, ev_ebitda: float = 12.0, ev_revenue: float = 2.0) -> MarketData:
+def _md(
+    ticker: str,
+    sector: str,
+    ev_ebitda: float | None = 12.0,
+    ev_revenue: float | None = 2.0,
+    market_cap: float | None = 200_000.0,
+    industry: str = "Software - Infrastructure",
+) -> MarketData:
     return MarketData(
         ticker=ticker,
         company_name=f"{ticker} Corp",
@@ -19,6 +26,8 @@ def _md(ticker: str, sector: str, ev_ebitda: float = 12.0, ev_revenue: float = 2
         ev_ebitda_market=ev_ebitda,
         ev_revenue_market=ev_revenue,
         ebitda_margin=0.20,
+        market_cap=market_cap,
+        additional_metadata={"industry": industry},
         confidence="verified",
         data_source="yfinance",
     )
@@ -138,6 +147,46 @@ def test_median_computed_correctly():
         result = build_peer_multiples(["P1", "P2", "P3", "P4"])
     assert round(float(result.ev_ebitda_median or 0.0), 2) == 12.5
     assert result.n_peers == 4
+
+
+def test_missing_ev_ebitda_peer_is_qualitative_only():
+    peers = [
+        _md("CORE1", "Technology", ev_ebitda=20.0, industry="Consumer Electronics"),
+        _md("CORE2", "Technology", ev_ebitda=22.0, industry="Software - Infrastructure"),
+        _md("QUAL1", "Technology", ev_ebitda=None, ev_revenue=9.0, industry="Software - Infrastructure"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["CORE1", "CORE2", "QUAL1"],
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+        )
+    assert result.n_peers == 3
+    assert result.n_valuation_peers == 2
+    assert result.n_qualitative_peers == 1
+    q = [p for p in result.peers if p.ticker == "QUAL1"][0]
+    assert q.role == "qualitative peer only"
+    assert (q.weight or 0.0) == 0.0
+
+
+def test_controlled_relaxation_restores_minimum_valuation_peers():
+    # One strong core peer + two adjacent candidates below strict similarity floor.
+    peers = [
+        _md("CORE", "Technology", ev_ebitda=24.0, market_cap=2_500_000.0, industry="Consumer Electronics"),
+        _md("ADJ1", "Technology", ev_ebitda=18.0, market_cap=350_000.0, industry="Semiconductors"),
+        _md("ADJ2", "Technology", ev_ebitda=19.0, market_cap=380_000.0, industry="Semiconductors"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["CORE", "ADJ1", "ADJ2"],
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+            target_market_cap=3_000_000.0,
+            min_similarity=0.85,  # deliberately strict
+            min_market_cap_ratio=0.05,
+            min_valuation_peers=2,
+        )
+    assert result.n_valuation_peers >= 2
 
 
 # ── resolve_peer_tickers ──────────────────────────────────────────────────────

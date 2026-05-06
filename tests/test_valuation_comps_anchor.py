@@ -123,3 +123,81 @@ def test_recommendation_guardrail_caps_sell_on_high_dispersion():
         sector="Technology",
     )
     assert out.recommendation.recommendation in {"HOLD", "BUY"}
+
+
+def test_mega_cap_weight_rules_follow_peer_count_buckets():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+
+    out_2 = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 2,
+            "peer_quality": "weak",
+            "ev_ebitda_range": [20.0, 28.0],
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert out_2.weights_used["comps"] <= 0.10
+
+    out_3 = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 3,
+            "peer_quality": "mixed",
+            "ev_ebitda_range": [20.0, 28.0],
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert 0.20 <= out_3.weights_used["comps"] <= 0.25
+
+    out_6 = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 6,
+            "peer_quality": "normal",
+            "ev_ebitda_range": [20.0, 28.0],
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert 0.35 <= out_6.weights_used["comps"] <= 0.40
+
+    out_9 = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 9,
+            "peer_quality": "strong",
+            "ev_ebitda_range": [20.0, 28.0],
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert 0.40 <= out_9.weights_used["comps"] <= 0.50
+
+
+def test_live_multiple_vs_applied_peer_multiple_note_present():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 6,
+            "peer_quality": "normal",
+            "ev_ebitda_range": [20.0, 28.0],
+            "ev_ebitda_median": 24.0,
+            "ev_ebitda_weighted": 24.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert any("Live EV/EBITDA check:" in n for n in out.notes)

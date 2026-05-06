@@ -547,3 +547,11 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Quick-mode LLM hard-skip for slow paths — `--quick` now skips transaction comps entirely and avoids deep financial-model LLM calls when no verified revenue feed is available
 ✔ Quick-mode crash-proof financial fallback — network/API failures in financial modeling now degrade to deterministic fallback instead of breaking the run
 ✔ Wide fair-value-range confidence flag — scenario range width >75% of midpoint is now surfaced explicitly and degrades valuation confidence
+✔ Apple-like archetype refinement — added `consumer_hardware_ecosystem` classification and controlled peer-relaxation order to avoid over-filtered 2-peer runs
+✔ Valuation-peer integrity — peers without EV/EBITDA are marked `qualitative peer only`, excluded from valuation peer minimums, and forced to zero valuation weight
+✔ Peer role transparency — runtime peer table now includes explicit role labels (`core valuation`, `adjacent valuation`, `qualitative only`)
+✔ Comps-weight guardrails by usable peer count — mega-cap blend now follows strict peer-count buckets (1–2 peers: ~10% comps; 3–4: ~20–25%; 5–7: ~35–40%; 8+: up to 50%)
+✔ Live-vs-applied multiple check — valuation notes now report live EV/EBITDA vs applied peer EV/EBITDA premium/discount and label low-confidence references
+✔ DCF diagnostics expansion — valuation notes now include terminal value share and projected FCF CAGR, and low implied exit multiples (<12x for mega-cap tech) trigger conservative flags
+✔ Unavailable market-context provenance — missing full-mode TAM/market-growth now logs `market_analysis_unavailable` instead of generic inferred tags
+✔ Canonical valuation consistency in thesis — thesis now prepends a canonical fair-value/point-estimate reference from the same valuation object used in the headline

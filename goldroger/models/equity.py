@@ -87,6 +87,7 @@ class PeerComp(Model):
     name: str
     ticker: str
     bucket: Optional[str] = None
+    role: Optional[str] = None
     market_cap: Optional[str] = None
     ev_ebitda: Optional[str] = None
     ev_revenue: Optional[str] = None

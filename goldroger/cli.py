@@ -513,13 +513,17 @@ def print_result(result):
     console.print()
     _target_display = "N/A" if _is_inconclusive else (v.target_price or v.implied_value)
     _fv_range = _source_value("Fair Value Range")
+    _fv_width = _source_value("Fair Value Range Width")
     _ev_display = (
         f" | Implied EV: {v.implied_value}"
         if (v.target_price and not _is_inconclusive)
         else ""
     )
+    _fv_label = _value_with_source("Fair Value Range", _fv_range)
+    if _fv_width:
+        _fv_label = f"{_fv_label} [wide; low confidence]"
     _target_line = (
-        f"Fair Value Range: {_value_with_source('Fair Value Range', _fv_range)} | "
+        f"Fair Value Range: {_fv_label} | "
         f"Point Estimate: {_value_with_source('Target', _target_display)}"
         if _fv_range and v.target_price and not _is_inconclusive
         else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
@@ -546,8 +550,13 @@ def print_result(result):
             f"  Thesis: {_pipeline_status.get('thesis', 'N/A')}\n"
             f"  Model signal: {_pipeline_status.get('model_signal', 'N/A')}\n"
             f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
-            f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}"
+            f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}\n"
+            f"  Confidence reason: {_pipeline_status.get('confidence_reason', 'N/A')}"
         )
+        _ms = str(_pipeline_status.get("model_signal", "N/A"))
+        _fr = str(_pipeline_status.get("recommendation", "N/A"))
+        if _ms not in {"N/A", ""} and _fr not in {"N/A", ""} and _ms != _fr:
+            console.print(f"[dim]Model signal vs final recommendation: {_ms} → {_fr} (guardrails/confidence applied).[/dim]")
     _core_q = _dq.get("core_data_quality_score")
     _r_q = _dq.get("research_enrichment_quality_score")
     _r_lbl = _dq.get("research_enrichment_quality_label")
@@ -610,6 +619,7 @@ def print_result(result):
         peer_table.add_column("Ticker")
         peer_table.add_column("Name")
         peer_table.add_column("Bucket")
+        peer_table.add_column("Role")
         peer_table.add_column("MCap")
         peer_table.add_column("EV/EBITDA")
         peer_table.add_column("Similarity")
@@ -620,6 +630,7 @@ def print_result(result):
                 p.ticker or "—",
                 p.name or "—",
                 p.bucket or "—",
+                p.role or "—",
                 p.market_cap or "—",
                 p.ev_ebitda or "—",
                 p.similarity or "—",
