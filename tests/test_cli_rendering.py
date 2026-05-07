@@ -33,7 +33,7 @@ def test_pipeline_status_block_is_normalized_and_compact():
         }
     )
     assert "Research: PARTIAL" in block
-    assert "Peers: DEGRADED" in block
+    assert "Peers: PEERS_FAILED" in block
     assert "Valuation: LOW_CONFIDENCE" in block
     assert "Recommendation: HOLD / LOW CONVICTION" in block
     assert "Research source: fallback | Research depth: limited | Market data source-backed: no" in block
@@ -43,6 +43,7 @@ def test_pipeline_status_block_is_normalized_and_compact():
 def test_status_normalizers():
     assert _normalize_research_status("skipped_quick_mode") == "SKIPPED_QUICK_MODE"
     assert _normalize_research_status("degraded") == "PARTIAL"
+    assert _normalize_research_status("partial_fallback") == "PARTIAL_FALLBACK"
     assert _normalize_valuation_status("ok", "Low") == "LOW_CONFIDENCE"
     assert _normalize_valuation_status("failed", "Medium") == "FAILED"
 
@@ -58,3 +59,20 @@ def test_pipeline_status_preserves_ok_adjacent_peer_state():
         }
     )
     assert "Peers: OK_ADJACENT" in block
+
+
+def test_pipeline_status_partial_fallback_line_is_rendered():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "PARTIAL_FALLBACK",
+            "peers": "ADJACENT_COMPS_LOW_DIVERSITY",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "HOLD / LOW CONVICTION",
+            "research_source": "fallback",
+            "research_depth": "limited",
+            "market_data_source_backed": "no",
+        }
+    )
+    assert "Research: PARTIAL_FALLBACK" in block
+    assert "Full research unavailable; valuation is based on market data + deterministic peer set." in block

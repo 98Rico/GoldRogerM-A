@@ -848,6 +848,7 @@ def run_analysis(
             except Exception as e:
                 result = (None, e)
             _finish_step("Peer Selection", _t, _cancel_peers, "peer_selection")
+            console.print("  [dim]Peer selection complete; validating peer market data...[/dim]")
             return result
         if cli_mode:
             # Interactive CLI policy: deterministic peer core first, no LLM discovery latency.
@@ -866,6 +867,7 @@ def run_analysis(
             except Exception as e:
                 result = (None, e)
             _finish_step("Peer Selection", _t, _cancel_peers, "peer_selection")
+            console.print("  [dim]Peer selection complete; validating peer market data...[/dim]")
             return result
         try:
             raw = peer_agent.run(company, company_type, {
@@ -899,6 +901,7 @@ def run_analysis(
         except Exception as e:
             result = (None, e)
         _finish_step("Peer Selection", _t, _cancel_peers, "peer_selection")
+        console.print("  [dim]Peer selection complete; validating peer market data...[/dim]")
         return result
 
     def _do_financials():
@@ -1147,8 +1150,11 @@ def run_analysis(
                 # Peer-set stability guard: force-add reserve peers before valuation.
                 peer_tickers = list(dict.fromkeys(peer_tickers + _aapl_reserve))
             if quick_mode:
-                # Keep quick mode fast: trim candidate fetch set before yfinance validation loop.
-                peer_tickers = peer_tickers[:12]
+                # Keep quick mode fast and stable.
+                if _self_ticker == "AAPL":
+                    peer_tickers = [t for t in _aapl_reserve if t != _self_ticker]
+                else:
+                    peer_tickers = peer_tickers[:8]
 
             sources.add_once(
                 "Peer Selection Policy",
@@ -1383,6 +1389,7 @@ def run_analysis(
     if _missing_consumer_ecosystem_bucket and peers_status == "OK":
         peers_status = "OK_ADJACENT"
     _peer_post_elapsed = round(time.time() - _peer_post_t0, 2)
+    _done("Peer Validation", _peer_post_t0)
     try:
         _peer_sel = float(log.step_times.get("peer_selection") or 0.0)
         log.step_times["peer_validation"] = _peer_post_elapsed
@@ -1745,6 +1752,9 @@ def run_analysis(
         _low_conviction = True
     if _model_signal.startswith("SELL") and (_raw_rec or "").upper() == "HOLD":
         _low_conviction = True
+    _model_signal_for_text = _model_signal
+    if _low_conviction and _model_signal_for_text.startswith("SELL /"):
+        _model_signal_for_text = "Negative valuation signal"
     if company_type == "private" and result.has_revenue and blended_ev and _rev_float and _rev_float > 0:
         _entry_ev_rev = blended_ev / _rev_float
         _, _sm_mid, _sm_high = _sm.ev_revenue
@@ -2110,7 +2120,7 @@ def run_analysis(
             f"Thesis:\n"
             f"- Moat: ecosystem, services, and vertical integration dynamics in {fund.sector or 'the sector'}.\n"
             f"- Growth: modeled revenue growth {_modeled_growth}; execution still tied to demand and product cycle.\n"
-            f"- Valuation signal: {_model_signal} ({val.upside_downside or 'N/A'}); "
+            f"- Valuation signal: {_model_signal_for_text} ({val.upside_downside or 'N/A'}); "
             f"final recommendation {_rec} due to confidence/dispersion guardrails.\n"
             f"- Indicative fair value: {_fv_range} (use range over point estimate when confidence is low).\n"
             f"\nRisks:\n"
@@ -2139,7 +2149,7 @@ def run_analysis(
             sector=fund.sector or "",
             recommendation=val.recommendation or "HOLD",
             reason="research fallback mode (source-backed market context unavailable)",
-            model_signal=_model_signal,
+            model_signal=_model_signal_for_text,
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -2154,7 +2164,7 @@ def run_analysis(
             sector=fund.sector or "",
             recommendation=val.recommendation or "HOLD",
             reason="global runtime budget reached",
-            model_signal=_model_signal,
+            model_signal=_model_signal_for_text,
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -2228,7 +2238,7 @@ def run_analysis(
                 sector=fund.sector or "",
                 recommendation=val.recommendation or "HOLD",
                 reason="thesis timeout",
-                model_signal=_model_signal,
+                model_signal=_model_signal_for_text,
             )
         except APICapacityError:
             thesis_status = "DEGRADED_API_CAPACITY"
@@ -2238,7 +2248,7 @@ def run_analysis(
                 sector=fund.sector or "",
                 recommendation=val.recommendation or "HOLD",
                 reason="report-writer API capacity",
-                model_signal=_model_signal,
+                model_signal=_model_signal_for_text,
             )
         except Exception as _th_err:
             thesis_status = "FAILED"
@@ -2248,7 +2258,7 @@ def run_analysis(
                 sector=fund.sector or "",
                 recommendation=val.recommendation or "HOLD",
                 reason="thesis generation failure",
-                model_signal=_model_signal,
+                model_signal=_model_signal_for_text,
             )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -2394,6 +2404,57 @@ def run_analysis(
         except Exception:
             pass
 
+    # Canonical peer-status taxonomy for user-facing consistency.
+    if peers_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
+        _peers_display_status = "PEERS_FAILED"
+    elif not peer_multiples or peer_multiples.n_valuation_peers <= 0:
+        _peers_display_status = "PEERS_FAILED"
+    else:
+        _adjacent = bool(_missing_consumer_ecosystem_bucket)
+        _eff_disp = float(peer_multiples.effective_peer_count or 0.0)
+        _low_div = bool(_eff_disp > 0 and _eff_disp < 5.0)
+        if _adjacent and _low_div:
+            _peers_display_status = "ADJACENT_COMPS_LOW_DIVERSITY"
+        elif _adjacent:
+            _peers_display_status = "ADJACENT_COMPS_OK"
+        elif peers_status == "DEGRADED" or _low_div:
+            _peers_display_status = "PEERS_DEGRADED"
+        else:
+            _peers_display_status = "PURE_COMPS_OK"
+    _peers_is_low_conf = _peers_display_status in {
+        "ADJACENT_COMPS_LOW_DIVERSITY",
+        "PEERS_DEGRADED",
+        "PEERS_FAILED",
+    }
+
+    _peer_quality_score = 100
+    if peer_multiples:
+        if peer_multiples.n_valuation_peers < (3 if quick_mode else 5):
+            _peer_quality_score -= 20
+        if peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < 5.0:
+            _peer_quality_score -= 20
+    else:
+        _peer_quality_score -= 40
+    if _missing_consumer_ecosystem_bucket:
+        _peer_quality_score -= 15
+    if _peers_display_status == "PEERS_FAILED":
+        _peer_quality_score = min(_peer_quality_score, 45)
+    _peer_quality_score = max(0, min(100, _peer_quality_score))
+
+    _financial_data_quality_score = 100
+    if not market_data:
+        _financial_data_quality_score -= 40
+    else:
+        if market_data.revenue_ttm is None:
+            _financial_data_quality_score -= 15
+        if market_data.ebitda_margin is None:
+            _financial_data_quality_score -= 15
+        if market_data.current_price is None:
+            _financial_data_quality_score -= 10
+        if market_data.market_cap is None:
+            _financial_data_quality_score -= 10
+    _financial_data_quality_score = max(0, min(100, _financial_data_quality_score))
+
     _confidence_reasons: list[str] = []
     if peer_multiples and peer_multiples.n_valuation_peers < (3 if quick_mode else 5):
         _confidence_reasons.append("weak valuation peer count")
@@ -2436,7 +2497,7 @@ def run_analysis(
             "checks": quality.checks,
             "pipeline_status": {
                 "market_analysis": market_status,
-                "peers": peers_status,
+                "peers": _peers_display_status,
                 "valuation": valuation_status,
                 "thesis": thesis_status,
                 "core_valuation": (
@@ -2444,7 +2505,7 @@ def run_analysis(
                     if valuation_status == "FAILED"
                     else (
                         "DEGRADED"
-                        if valuation_status == "DEGRADED" or peers_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
+                        if valuation_status == "DEGRADED" or _peers_is_low_conf
                         else "OK"
                     )
                 ),
@@ -2455,9 +2516,16 @@ def run_analysis(
                         "SKIPPED_QUICK_MODE"
                         if market_status == "SKIPPED_QUICK_MODE"
                         else (
-                            "DEGRADED"
-                            if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"} or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
-                            else "OK"
+                            "PARTIAL_FALLBACK"
+                            if (
+                                _research_source != "source_backed"
+                                and (market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"} or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY", "DEGRADED"})
+                            )
+                            else (
+                                "DEGRADED"
+                                if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"} or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
+                                else "OK"
+                            )
                         )
                     )
                 ),
@@ -2471,7 +2539,7 @@ def run_analysis(
                     "Low"
                     if (
                         valuation_status in {"FAILED", "DEGRADED"}
-                        or peers_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
+                        or _peers_is_low_conf
                         or market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
                         or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
                     )
@@ -2485,6 +2553,8 @@ def run_analysis(
                 "research_source": _research_source,
                 "research_depth": _research_depth,
                 "market_data_source_backed": "yes" if _market_source_backed else "no",
+                "peer_quality_score": _peer_quality_score,
+                "financial_data_quality_score": _financial_data_quality_score,
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),
@@ -2534,7 +2604,15 @@ def run_analysis(
         )
         _existing_trends = [str(t) for t in (analysis.market.key_trends or []) if str(t).strip()]
         _usable_trends = [t for t in _existing_trends if not _trend_is_placeholder(t)]
-        if not _usable_trends:
+        if not _source_backed:
+            analysis.market.key_trends = [
+                "Market Context — fallback context only (not source-backed).",
+                "Demand trend: hardware demand remains replacement-cycle driven.",
+                "Platform/services trend: monetization remains a key valuation driver.",
+                "Regulatory trend: platform-policy and antitrust pressure remain material risks.",
+                "Product trend: roadmap execution and user engagement are key watch items.",
+            ]
+        elif not _usable_trends:
             _sec = (fund.sector or "").lower()
             if any(k in _sec for k in ("tech", "software", "technology", "communication")):
                 analysis.market.key_trends = [
@@ -2542,7 +2620,7 @@ def run_analysis(
                     "Demand trend: mature smartphone category remains upgrade-cycle driven.",
                     "Competitive trend: premium Android and China-local OEM pressure can affect share.",
                     "Regulatory trend: App Store / DMA / DOJ platform-policy developments can affect monetization.",
-                    "Product trend: AI feature adoption and services monetization remain key drivers.",
+                    "Product trend: roadmap execution and services monetization remain key drivers.",
                 ]
             else:
                 analysis.market.key_trends = [

@@ -510,6 +510,8 @@ def _normalize_research_status(raw: str) -> str:
     s = (raw or "").upper()
     if s == "SKIPPED_QUICK_MODE":
         return "SKIPPED_QUICK_MODE"
+    if s == "PARTIAL_FALLBACK":
+        return "PARTIAL_FALLBACK"
     if s in {"FAILED", "TIMEOUT"}:
         return "FAILED"
     if s in {"DEGRADED", "DEGRADED_API_CAPACITY"}:
@@ -532,7 +534,9 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     research_state = _normalize_research_status(str(pipeline_status.get("research_enrichment", "OK")))
     peers_state = str(pipeline_status.get("peers", "N/A")).upper()
     if peers_state == "DEGRADED_API_CAPACITY":
-        peers_state = "DEGRADED"
+        peers_state = "PEERS_FAILED"
+    if peers_state in {"FAILED", "TIMEOUT", "DEGRADED"}:
+        peers_state = "PEERS_DEGRADED"
     valuation_state = _normalize_valuation_status(
         str(pipeline_status.get("valuation", "N/A")),
         str(pipeline_status.get("confidence", "")),
@@ -555,6 +559,8 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             + " | Research depth: " + (_r_depth or "n/a")
             + " | Market data source-backed: " + (_r_backed or "n/a")
         )
+    if research_state == "PARTIAL_FALLBACK":
+        block += "\n  Full research unavailable; valuation is based on market data + deterministic peer set."
     reason = str(pipeline_status.get("confidence_reason", "") or "").strip()
     return block, reason
 
@@ -668,6 +674,9 @@ def print_result(result, debug: bool = False):
             console.print(f"[dim]Why low confidence: {_status_reason}[/dim]")
         _ms_plain = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")) or "N/A")
         _fr_plain = str(_pipeline_status.get("recommendation", "N/A") or "N/A")
+        if str(_pipeline_status.get("confidence", "")).strip().lower() == "low":
+            if _ms_plain.upper().startswith("SELL /"):
+                _ms_plain = "NEGATIVE VALUATION SIGNAL"
         if _ms_plain not in {"N/A", ""} and _fr_plain not in {"N/A", ""} and _ms_plain != _fr_plain:
             console.print(
                 f"[dim]Valuation signal: {_ms_plain}. Final recommendation: {_fr_plain}. "
@@ -688,10 +697,13 @@ def print_result(result, debug: bool = False):
     _core_q = _dq.get("core_data_quality_score")
     _r_q = _dq.get("research_enrichment_quality_score")
     _r_lbl = _dq.get("research_enrichment_quality_label")
+    _peer_q = _pipeline_status.get("peer_quality_score") if _pipeline_status else None
+    _fin_q = _pipeline_status.get("financial_data_quality_score") if _pipeline_status else None
     if (_core_q is not None) or (_r_q is not None):
         console.print(
             "[bold]Quality Split:[/bold]\n"
-            f"  Core data quality: {(_core_q if _core_q is not None else 'N/A')}/100\n"
+            f"  Financial data quality: {(_fin_q if _fin_q is not None else _core_q if _core_q is not None else 'N/A')}/100\n"
+            f"  Peer quality: {(_peer_q if _peer_q is not None else 'N/A')}/100\n"
             f"  Research enrichment quality: {(_r_q if _r_q is not None else _r_lbl or 'N/A')}\n"
             f"  Valuation confidence: {_pipeline_status.get('confidence', 'N/A') if _pipeline_status else 'N/A'}"
         )
@@ -730,8 +742,8 @@ def print_result(result, debug: bool = False):
             f"  Fundamentals: {_timings.get('fundamentals', 'N/A')}s\n"
             f"  Market analysis: {_timings.get('market_analysis', 'N/A')}s\n"
             f"  Peer selection: {_timings.get('peer_selection', 'N/A')}s\n"
-            f"  Peer validation: {_timings.get('peer_validation', 'N/A')}s\n"
-            f"  Peers: {_timings.get('peers', 'N/A')}s\n"
+            f"  Peer validation/data fetch: {_timings.get('peer_validation', 'N/A')}s\n"
+            f"  Peer total: {_timings.get('peers', 'N/A')}s\n"
             f"  Financials: {_timings.get('financials', 'N/A')}s\n"
             f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"
             f"  Report: {_timings.get('thesis', 'N/A')}s\n"
