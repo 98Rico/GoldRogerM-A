@@ -244,7 +244,14 @@ class ValuationService:
                 notes.append(f"DCF implied exit EV/EBITDA: {_implied_exit:.1f}x.")
                 if assumptions.get("mega_cap_tech") and _implied_exit < 12.0:
                     dcf_conservative = True
-                    notes.append("DCF sanity flag: implied exit multiple appears low for mega-cap tech.")
+                    notes.append(
+                        "DCF sanity flag: implied exit multiple appears low for mega-cap tech; "
+                        "base case may be materially conservative."
+                    )
+                    if market_data and market_data.ev_ebitda_market and _implied_exit < (0.55 * market_data.ev_ebitda_market):
+                        notes.append(
+                            "DCF base case appears materially conservative versus live trading multiple and cash-flow profile."
+                        )
                 _peer_rng = assumptions.get("ev_ebitda_range")
                 if (
                     assumptions.get("mega_cap_tech")
@@ -295,6 +302,10 @@ class ValuationService:
         peer_count = int(assumptions.get("peer_count") or 0)
         effective_peer_count = float(assumptions.get("effective_peer_count") or 0.0)
         quick_mode = bool(assumptions.get("quick_mode"))
+        if assumptions.get("missing_consumer_ecosystem_bucket"):
+            notes.append(
+                "Consumer hardware ecosystem peers limited; comps rely on adjacent platform/infrastructure peers."
+            )
         if use_financial_path:
             comps_output, tx_output = self._financial_comps(
                 market_data, sector_m, notes

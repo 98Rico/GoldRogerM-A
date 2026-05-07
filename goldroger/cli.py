@@ -513,6 +513,15 @@ def print_result(result):
     _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
     console.print()
     _target_display = "N/A" if _is_inconclusive else (v.target_price or v.implied_value)
+    _confidence = str(_pipeline_status.get("confidence", "")).lower()
+    if (not _is_inconclusive) and _confidence == "low" and isinstance(_target_display, str):
+        _m = re.search(r"\$([0-9][0-9,]*\.?[0-9]*)", _target_display)
+        if _m:
+            try:
+                _pt = float(_m.group(1).replace(",", ""))
+                _target_display = f"~${_pt:,.0f}"
+            except Exception:
+                pass
     _fv_range = _source_value("Fair Value Range")
     _fv_width = _source_value("Fair Value Range Width")
     _ev_display = (
@@ -557,7 +566,7 @@ def print_result(result):
             f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}\n"
             f"  Confidence reason: {_pipeline_status.get('confidence_reason', 'N/A')}"
         )
-        _ms = str(_pipeline_status.get("model_signal", "N/A"))
+        _ms = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")))
         _fr = str(_pipeline_status.get("recommendation", "N/A"))
         if _ms not in {"N/A", ""} and _fr not in {"N/A", ""} and _ms != _fr:
             console.print(f"[dim]Model signal vs final recommendation: {_ms} → {_fr} (guardrails/confidence applied).[/dim]")
@@ -616,6 +625,11 @@ def print_result(result):
     ]:
         kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
     console.print(kpi_table)
+    if m.key_trends:
+        console.print("\n[bold]Market Context[/]")
+        for trend in m.key_trends[:4]:
+            if str(trend or "").strip():
+                console.print(f"  • {trend}")
 
     # Peer table (auditability)
     if result.peer_comps and result.peer_comps.peers:
@@ -684,10 +698,7 @@ def print_result(result):
 
     # Thesis
     if t.thesis:
-        _thesis_txt = t.thesis
-        if len(_thesis_txt) > 1200:
-            _thesis_txt = _thesis_txt[:1200].rstrip() + "..."
-        console.print(Panel(_thesis_txt, title="Investment Thesis", border_style="green"))
+        console.print(Panel(t.thesis, title="Investment Thesis", border_style="green"))
 
     # Scenarios
     if t.bull_case or t.base_case or t.bear_case:

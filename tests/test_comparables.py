@@ -220,6 +220,30 @@ def test_mega_cap_floor_forces_tiny_peer_to_qualitative_only():
     assert all(p.ticker != "SMALL1" or (p.weight or 0.0) == 0.0 for p in result.peers)
 
 
+def test_networking_bucket_is_capped_for_premium_device_profile():
+    peers = [
+        _md("SOFT1", "Technology", ev_ebitda=25.0, market_cap=2_200_000.0, industry="Software - Infrastructure"),
+        _md("SOFT2", "Technology", ev_ebitda=21.0, market_cap=1_600_000.0, industry="Software - Infrastructure"),
+        _md("NET1", "Technology", ev_ebitda=16.0, market_cap=900_000.0, industry="Communication Equipment"),
+        _md("SEMI1", "Technology", ev_ebitda=20.0, market_cap=1_000_000.0, industry="Semiconductors"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["SOFT1", "SOFT2", "NET1", "SEMI1"],
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+            target_market_cap=4_000_000.0,
+            min_market_cap_ratio=0.05,
+            min_valuation_peers=3,
+        )
+    net_weight = sum(
+        float(p.weight or 0.0)
+        for p in result.peers
+        if p.bucket == "networking_infrastructure" and p.ev_ebitda is not None
+    )
+    assert net_weight <= 0.151
+
+
 # ── resolve_peer_tickers ──────────────────────────────────────────────────────
 
 def test_resolve_with_ticker_provided():

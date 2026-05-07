@@ -921,6 +921,7 @@ def run_analysis(
         _target_industry = str(market_data.additional_metadata.get("industry") or "")
     peer_comps_table: PeerCompsTable | None = None
     peer_multiples: PeerMultiples | None = None
+    _missing_consumer_ecosystem_bucket = False
     # Always start from deterministic peer engine; full-mode LLM results can only enrich.
     try:
         _deterministic_base = find_peers_deterministic_quick(
@@ -1025,6 +1026,19 @@ def run_analysis(
                     if _bucket_counts:
                         _mix = ", ".join(f"{k}={v}" for k, v in sorted(_bucket_counts.items(), key=lambda kv: kv[0]))
                         console.print(f"  [dim]Peer mix by business model bucket: {_mix}[/dim]")
+                        _consumer_cnt = _bucket_counts.get("consumer_hardware_ecosystem", 0)
+                        if _is_mega_tech and _consumer_cnt < 1:
+                            _missing_consumer_ecosystem_bucket = True
+                            console.print(
+                                "  [yellow]Consumer hardware ecosystem peers limited; "
+                                "valuation relies on adjacent software/platform and infrastructure peers.[/yellow]"
+                            )
+                            sources.add_once(
+                                "Peer Bucket Coverage",
+                                "Consumer hardware ecosystem peers unavailable; adjacent peers used",
+                                "peer_policy",
+                                "inferred",
+                            )
                     if debug and peer_multiples.excluded_details:
                         console.print("  [dim]Excluded peers (debug):[/dim]")
                         for _ex in peer_multiples.excluded_details[:12]:
@@ -1276,11 +1290,13 @@ def run_analysis(
         _is_mega_cap and peer_multiples and (
             (3 <= peer_multiples.n_valuation_peers < 5)
             or (peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < (3.0 if quick_mode else 5.0))
+            or _missing_consumer_ecosystem_bucket
         )
     )
     assumptions_dict["mega_cap_tech"] = bool(
         _is_mega_cap and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
     )
+    assumptions_dict["missing_consumer_ecosystem_bucket"] = bool(_missing_consumer_ecosystem_bucket)
     _peer_quality = "weak"
     if peer_multiples and peer_multiples.peers:
         _valuation_only = [p for p in peer_multiples.peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
@@ -1402,7 +1418,11 @@ def run_analysis(
         ))
     if result.has_revenue and result.comps and _w_comp > 0:
         _methods.append(ValuationMethod(
-            name=f"Trading Comps ({result.valuation_path.upper()})",
+            name=(
+                "Trading Comps (Applied Weighted EV/EBITDA)"
+                if result.valuation_path.upper() == "EV_EBITDA"
+                else f"Trading Comps ({result.valuation_path.upper()})"
+            ),
             low=str(round(result.comps.low, 1)),
             mid=str(round(result.comps.mid, 1)),
             high=str(round(result.comps.high, 1)),
@@ -2070,6 +2090,8 @@ def run_analysis(
         _confidence_reasons.append("weak valuation peer count")
     if peer_multiples and peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < (3.0 if quick_mode else 5.0):
         _confidence_reasons.append("low effective peer diversification")
+    if _missing_consumer_ecosystem_bucket:
+        _confidence_reasons.append("consumer-hardware ecosystem peers unavailable")
     if valuation_status == "DEGRADED":
         _confidence_reasons.append("high DCF/comps dispersion or method disagreement")
     if _dcf_sanity_fail:
@@ -2130,7 +2152,8 @@ def run_analysis(
                         )
                     )
                 ),
-                "model_signal": _raw_rec,
+                "model_signal": _model_signal,
+                "model_signal_raw": _raw_rec,
                 "model_signal_detail": _model_signal,
                 "recommendation": _rec,
                 "dcf_status": _dcf_status,

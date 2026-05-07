@@ -379,7 +379,7 @@ def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
         return {
             "consumer_hardware_ecosystem": 1.00,
             "software_services_platform": 0.92,
-            "networking_infrastructure": 0.42,
+            "networking_infrastructure": 0.34,
             "semiconductors": 0.40,
             "semiconductor_equipment": 0.34,
             "other_adjacent_tech": 0.35,
@@ -397,7 +397,7 @@ def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
         return {
             "consumer_hardware_ecosystem": 1.00,
             "software_services_platform": 0.82,
-            "networking_infrastructure": 0.60,
+            "networking_infrastructure": 0.52,
             "semiconductors": 0.52,
             "semiconductor_equipment": 0.46,
             "other_adjacent_tech": 0.50,
@@ -426,7 +426,7 @@ def _bucket_similarity_factor(profile: str, bucket: str) -> float:
         return {
             "consumer_hardware_ecosystem": 1.00,
             "software_services_platform": 0.88,
-            "networking_infrastructure": 0.36,
+            "networking_infrastructure": 0.30,
             "semiconductors": 0.34,
             "semiconductor_equipment": 0.28,
             "other_adjacent_tech": 0.32,
@@ -444,7 +444,7 @@ def _bucket_similarity_factor(profile: str, bucket: str) -> float:
         return {
             "consumer_hardware_ecosystem": 1.00,
             "software_services_platform": 0.78,
-            "networking_infrastructure": 0.58,
+            "networking_infrastructure": 0.50,
             "semiconductors": 0.50,
             "semiconductor_equipment": 0.42,
             "other_adjacent_tech": 0.45,
@@ -581,8 +581,29 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
                 recips = [b for b in (
                     "consumer_hardware_ecosystem",
                     "networking_infrastructure",
+                    "semiconductors",
+                    "semiconductor_equipment",
                     "other_adjacent_tech",
                 ) if b in active]
+                if recips:
+                    denom = sum(max(target.get(b, 0.0), 0.01) for b in recips)
+                    for b in recips:
+                        target[b] = target.get(b, 0.0) + excess * (max(target.get(b, 0.0), 0.01) / denom)
+        # Networking cap for Apple-like ecosystem profiles so a single networking peer
+        # cannot dominate weights when consumer-hardware peers are sparse.
+        if profile in {"premium_device_platform", "consumer_hardware_ecosystem"}:
+            net_cap = 0.15
+            net_w = target.get("networking_infrastructure", 0.0)
+            if ("networking_infrastructure" in active) and net_w > net_cap:
+                excess = net_w - net_cap
+                target["networking_infrastructure"] = net_cap
+                recips = [b for b in (
+                    "software_services_platform",
+                    "consumer_hardware_ecosystem",
+                    "other_adjacent_tech",
+                    "semiconductors",
+                    "semiconductor_equipment",
+                ) if b in active and b != "networking_infrastructure"]
                 if recips:
                     denom = sum(max(target.get(b, 0.0), 0.01) for b in recips)
                     for b in recips:
@@ -802,10 +823,12 @@ def find_peers_deterministic_quick(
         # 1) software/platform, 2) consumer-hardware ecosystem, 3) adjacent tech, 4) semis/infrastructure.
         candidates.extend(_search_yahoo_tickers("internet platform mega cap equities", limit=12))
         candidates.extend(_search_yahoo_tickers("communication services mega cap equities", limit=12))
+        candidates.extend(_search_yahoo_tickers("digital platform ecosystem mega cap equities", limit=12))
         candidates.extend(_search_yahoo_tickers("consumer hardware mega cap equities", limit=12))
         candidates.extend(_search_yahoo_tickers("consumer electronics global leaders equities", limit=12))
         candidates.extend(_search_yahoo_tickers("premium device platform companies equities", limit=10))
         candidates.extend(_search_yahoo_tickers("global hardware services ecosystem equities", limit=10))
+        candidates.extend(_search_yahoo_tickers("global device ecosystem leaders equities", limit=10))
         candidates.extend(_search_yahoo_tickers("technology mega cap equities", limit=12))
         candidates.extend(_search_yahoo_tickers("semiconductor infrastructure mega cap equities", limit=8))
 
