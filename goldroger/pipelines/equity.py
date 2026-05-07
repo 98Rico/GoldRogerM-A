@@ -198,6 +198,13 @@ def _quality_tier(score: int) -> str:
 
 
 def _fallback_catalysts(company: str, sector: str) -> list[str]:
+    _c = (company or "").upper()
+    if "AAPL" in _c or "APPLE" in _c:
+        return [
+            "Next earnings update: current iPhone cycle demand and Services growth trajectory.",
+            "Apple Intelligence / AI adoption: device upgrade-cycle and ecosystem monetization implications.",
+            "Regulatory updates: App Store / DMA / platform-policy developments and monetization impact.",
+        ]
     _s = (sector or "").lower()
     if "tech" in _s or "software" in _s:
         return [
@@ -1221,7 +1228,11 @@ def run_analysis(
         _sim_vals = [float(p.similarity or 0.0) for p in _valuation_only]
         _avg_sim = (sum(_sim_vals) / len(_sim_vals)) if _sim_vals else 0.0
         _total_w = sum(float(p.weight or 0.0) for p in _valuation_only)
-        _semi_w = sum(float(p.weight or 0.0) for p in _valuation_only if (p.bucket or "") == "semiconductors_infrastructure")
+        _semi_w = sum(
+            float(p.weight or 0.0)
+            for p in _valuation_only
+            if (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}
+        )
         _semi_share = (_semi_w / _total_w) if _total_w > 0 else 0.0
         if peer_multiples.n_valuation_peers >= 8 and _avg_sim >= 0.75 and _semi_share <= 0.25:
             _peer_quality = "strong"
@@ -1405,6 +1416,14 @@ def run_analysis(
     _ev_str = _fmt_ev_human(blended_ev) if blended_ev else "N/A"
     _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
+    _model_signal = _raw_rec
+    if (
+        result.has_revenue
+        and rec.upside_pct is not None
+        and -0.25 <= rec.upside_pct <= -0.10
+        and (_raw_rec or "").upper() == "HOLD"
+    ):
+        _model_signal = "HOLD / NEGATIVE BIAS"
     _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
     if peer_multiples and peer_multiples.n_valuation_peers < 3:
         _low_conviction = True
@@ -1658,12 +1677,22 @@ def run_analysis(
                 "scenario_blended",
                 "inferred",
             )
+            result.field_sources["Fair Value Range"] = (
+                f"${_lo:.2f}–${_hi:.2f}",
+                "scenario_blended",
+                "inferred",
+            )
             _mid = ((_lo + _hi) / 2.0) if (_lo is not None and _hi is not None) else None
             if _mid and _mid > 0:
                 _width_ratio = (_hi - _lo) / _mid
                 if _width_ratio > 0.75:
                     sources.add_once(
                         "Fair Value Range Width",
+                        f"{_width_ratio:.0%} of midpoint",
+                        "valuation_engine",
+                        "inferred",
+                    )
+                    result.field_sources["Fair Value Range Width"] = (
                         f"{_width_ratio:.0%} of midpoint",
                         "valuation_engine",
                         "inferred",
@@ -1866,6 +1895,19 @@ def run_analysis(
         _fv_src = result.field_sources.get("Fair Value Range")
         _fv_txt = _fv_src[0] if _fv_src and _fv_src[0] else "N/A"
         _pt_txt = val.target_price or "N/A"
+        if thesis.thesis:
+            if _fv_txt and _fv_txt != "N/A":
+                thesis.thesis = _re.sub(
+                    r"(?i)\bfair value\s+\$?\d[\d,]*(?:\.\d+)?\s*(?:-|–|to)\s*\$?\d[\d,]*(?:\.\d+)?",
+                    f"fair value {_fv_txt}",
+                    thesis.thesis,
+                )
+            if _pt_txt and _pt_txt != "N/A":
+                thesis.thesis = _re.sub(
+                    r"(?i)\bpoint estimate\s+\$?\d[\d,]*(?:\.\d+)?",
+                    f"point estimate {_pt_txt}",
+                    thesis.thesis,
+                )
         _canon = (
             f"Valuation reference (canonical): fair value {_fv_txt}; "
             f"point estimate {_pt_txt}; recommendation {val.recommendation or 'N/A'}."
@@ -2008,6 +2050,7 @@ def run_analysis(
                     )
                 ),
                 "model_signal": _raw_rec,
+                "model_signal_detail": _model_signal,
                 "recommendation": _rec,
                 "confidence": (
                     "Low"
@@ -2060,11 +2103,21 @@ def run_analysis(
             f"Regulatory context: {'available' if _has_reg else 'unavailable'}"
         )
         if not analysis.market.key_trends:
-            analysis.market.key_trends = [
-                "Demand trend context: limited direct TAM datapoints; monitor category demand proxies.",
-                "Competitive trend context: incumbents and platform competitors remain active.",
-                "Regulatory trend context: policy and antitrust dynamics can affect monetization.",
-            ]
+            _sec = (fund.sector or "").lower()
+            if any(k in _sec for k in ("tech", "software", "technology", "communication")):
+                analysis.market.key_trends = [
+                    "Demand trend: mature device categories are replacement-cycle driven; services mix resilience remains key.",
+                    "Competitive trend: premium ecosystem competition and regional pressure (including China) can affect share dynamics.",
+                    "Regulatory trend: App Store, DMA/antitrust, and platform-policy changes can affect monetization.",
+                    "Segment trend: hardware growth moderates while software/services contribution drives margin durability.",
+                ]
+            else:
+                analysis.market.key_trends = [
+                    "Demand trend context: limited direct TAM datapoints; monitor category demand proxies.",
+                    "Competitive trend context: incumbents and platform competitors remain active.",
+                    "Regulatory trend context: policy and antitrust dynamics can affect monetization.",
+                    "Segment trend context: mix-shift and category-level growth should be monitored.",
+                ]
     elif market_analysis_failed:
         analysis.market.market_size = "Not available"
         analysis.market.market_growth = "Not available"
@@ -2078,8 +2131,8 @@ def run_analysis(
     else:
         _tam_unavail = "not available" in str(_tam_v).lower()
         _mg_unavail = "not available" in str(_mg_v).lower()
-        _tam_conf = "inferred" if _tam_unavail else "estimated"
-        _mg_conf = "inferred" if _mg_unavail else "estimated"
+        _tam_conf = "unavailable" if _tam_unavail else "estimated"
+        _mg_conf = "unavailable" if _mg_unavail else "estimated"
         sources.add_once(
             "TAM",
             _tam_v,

@@ -164,7 +164,8 @@ def _parse_with_retry(
             if fatal_on_fail:
                 raise ValueError(f"{agent.__class__.__name__}: invalid JSON (retry disabled)")
             return result
-        console.print("  [yellow]JSON parse failed — retrying with strict prompt[/yellow]")
+        if log_raw_errors:
+            console.print("  [yellow]JSON parse failed — retrying with strict prompt[/yellow]")
         strict_ctx = {**context, "__strict_json_hint": True}
         try:
             raw2 = agent.run(company, company_type, strict_ctx, _strict_json=True)

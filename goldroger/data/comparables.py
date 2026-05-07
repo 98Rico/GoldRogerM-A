@@ -278,10 +278,19 @@ def _econ_similarity(
 def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
     s = f"{sector or ''} {industry or ''} {name or ''}".lower()
     if any(k in s for k in (
-        "semiconductor", "chip", "foundry", "memory", "gpu", "fabless",
-        "wafer", "equipment", "lithography", "eda", "design automation",
+        "network", "networking", "communications equipment", "communication equipment",
+        "router", "switch", "telecom equipment",
     )):
-        return "semiconductors_infrastructure"
+        return "networking_infrastructure"
+    if any(k in s for k in (
+        "semiconductor equipment", "lithography", "wafer fab", "eda", "design automation",
+        "test equipment", "metrology",
+    )):
+        return "semiconductor_equipment"
+    if any(k in s for k in (
+        "semiconductor", "chip", "foundry", "memory", "gpu", "fabless", "wafer",
+    )):
+        return "semiconductors"
     if any(k in s for k in (
         "consumer electronics", "hardware", "computer", "smartphone",
         "pc", "devices", "peripherals", "wearable", "tablet",
@@ -295,14 +304,14 @@ def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
     )):
         return "software_services_platform"
     if _sector_group(s or "") in {"tech", "comms", "consumer"}:
-        return "adjacent_tech_other"
-    return "adjacent_tech_other"
+        return "other_adjacent_tech"
+    return "other_adjacent_tech"
 
 
 def _target_profile(target_sector: str, target_industry: str) -> str:
     t = f"{target_sector or ''} {target_industry or ''}".lower()
-    if any(k in t for k in ("semiconductor", "chip", "foundry", "memory", "gpu", "fabless", "equipment")):
-        return "semiconductors_infrastructure"
+    if any(k in t for k in ("semiconductor", "chip", "foundry", "memory", "gpu", "fabless")):
+        return "semiconductors"
     if any(k in t for k in ("consumer electronics", "hardware", "devices", "smartphone", "pc", "tablet")) and (
         "tech" in t or "technology" in t
     ):
@@ -313,62 +322,78 @@ def _target_profile(target_sector: str, target_industry: str) -> str:
 
 
 def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
-    if profile == "semiconductors_infrastructure":
+    if profile == "semiconductors":
         return {
-            "semiconductors_infrastructure": 1.00,
+            "semiconductors": 1.00,
+            "semiconductor_equipment": 0.90,
+            "networking_infrastructure": 0.70,
             "software_services_platform": 0.70,
             "consumer_hardware_ecosystem": 0.65,
-            "adjacent_tech_other": 0.55,
+            "other_adjacent_tech": 0.55,
         }.get(bucket, 0.55)
     if profile == "consumer_hardware_ecosystem":
         return {
-            "software_services_platform": 0.95,
             "consumer_hardware_ecosystem": 1.00,
-            "semiconductors_infrastructure": 0.60,
-            "adjacent_tech_other": 0.55,
+            "software_services_platform": 0.82,
+            "networking_infrastructure": 0.60,
+            "semiconductors": 0.52,
+            "semiconductor_equipment": 0.46,
+            "other_adjacent_tech": 0.50,
         }.get(bucket, 0.55)
     if profile == "software_services_ecosystem":
         return {
             "software_services_platform": 1.00,
             "consumer_hardware_ecosystem": 0.75,
-            "semiconductors_infrastructure": 0.60,
-            "adjacent_tech_other": 0.55,
+            "networking_infrastructure": 0.62,
+            "semiconductors": 0.55,
+            "semiconductor_equipment": 0.45,
+            "other_adjacent_tech": 0.55,
         }.get(bucket, 0.55)
     return {
         "software_services_platform": 0.88,
         "consumer_hardware_ecosystem": 0.82,
-        "semiconductors_infrastructure": 0.70,
-        "adjacent_tech_other": 0.60,
+        "networking_infrastructure": 0.72,
+        "semiconductors": 0.68,
+        "semiconductor_equipment": 0.55,
+        "other_adjacent_tech": 0.60,
     }.get(bucket, 0.60)
 
 
 def _bucket_similarity_factor(profile: str, bucket: str) -> float:
-    if profile == "semiconductors_infrastructure":
+    if profile == "semiconductors":
         return {
-            "semiconductors_infrastructure": 1.00,
+            "semiconductors": 1.00,
+            "semiconductor_equipment": 0.90,
+            "networking_infrastructure": 0.68,
             "software_services_platform": 0.68,
             "consumer_hardware_ecosystem": 0.62,
-            "adjacent_tech_other": 0.50,
+            "other_adjacent_tech": 0.50,
         }.get(bucket, 0.55)
     if profile == "consumer_hardware_ecosystem":
         return {
-            "software_services_platform": 0.88,
             "consumer_hardware_ecosystem": 1.00,
-            "semiconductors_infrastructure": 0.55,
-            "adjacent_tech_other": 0.45,
+            "software_services_platform": 0.78,
+            "networking_infrastructure": 0.58,
+            "semiconductors": 0.50,
+            "semiconductor_equipment": 0.42,
+            "other_adjacent_tech": 0.45,
         }.get(bucket, 0.50)
     if profile == "software_services_ecosystem":
         return {
             "software_services_platform": 1.00,
             "consumer_hardware_ecosystem": 0.72,
-            "semiconductors_infrastructure": 0.55,
-            "adjacent_tech_other": 0.50,
+            "networking_infrastructure": 0.62,
+            "semiconductors": 0.50,
+            "semiconductor_equipment": 0.40,
+            "other_adjacent_tech": 0.50,
         }.get(bucket, 0.55)
     return {
         "software_services_platform": 0.90,
         "consumer_hardware_ecosystem": 0.80,
-        "semiconductors_infrastructure": 0.65,
-        "adjacent_tech_other": 0.55,
+        "networking_infrastructure": 0.68,
+        "semiconductors": 0.62,
+        "semiconductor_equipment": 0.48,
+        "other_adjacent_tech": 0.55,
     }.get(bucket, 0.58)
 
 
@@ -377,28 +402,36 @@ def _bucket_budgets(profile: str) -> dict[str, float]:
         return {
             "software_services_platform": 0.40,
             "consumer_hardware_ecosystem": 0.30,
-            "semiconductors_infrastructure": 0.20,
-            "adjacent_tech_other": 0.10,
+            "networking_infrastructure": 0.15,
+            "semiconductors": 0.10,
+            "semiconductor_equipment": 0.05,
+            "other_adjacent_tech": 0.00,
         }
     if profile == "software_services_ecosystem":
         return {
             "software_services_platform": 0.45,
             "consumer_hardware_ecosystem": 0.20,
-            "semiconductors_infrastructure": 0.25,
-            "adjacent_tech_other": 0.10,
+            "networking_infrastructure": 0.15,
+            "semiconductors": 0.10,
+            "semiconductor_equipment": 0.05,
+            "other_adjacent_tech": 0.05,
         }
-    if profile == "semiconductors_infrastructure":
+    if profile == "semiconductors":
         return {
             "software_services_platform": 0.20,
             "consumer_hardware_ecosystem": 0.10,
-            "semiconductors_infrastructure": 0.60,
-            "adjacent_tech_other": 0.10,
+            "networking_infrastructure": 0.10,
+            "semiconductors": 0.45,
+            "semiconductor_equipment": 0.10,
+            "other_adjacent_tech": 0.05,
         }
     return {
         "software_services_platform": 0.35,
         "consumer_hardware_ecosystem": 0.25,
-        "semiconductors_infrastructure": 0.25,
-        "adjacent_tech_other": 0.15,
+        "networking_infrastructure": 0.15,
+        "semiconductors": 0.15,
+        "semiconductor_equipment": 0.05,
+        "other_adjacent_tech": 0.05,
     }
 
 
@@ -408,7 +441,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
     budgets = _bucket_budgets(profile)
     buckets = {}
     for p in peers:
-        b = p.bucket or "adjacent_tech_other"
+        b = p.bucket or "other_adjacent_tech"
         buckets.setdefault(b, []).append(p)
 
     # Activate only buckets that actually have peers.
@@ -422,8 +455,10 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
         pref = [b for b in (
             "software_services_platform",
             "consumer_hardware_ecosystem",
-            "adjacent_tech_other",
-            "semiconductors_infrastructure",
+            "networking_infrastructure",
+            "semiconductors",
+            "semiconductor_equipment",
+            "other_adjacent_tech",
         ) if b in active]
         if pref:
             denom = sum(max(target.get(b, 0.0), 0.01) for b in pref)
@@ -433,25 +468,46 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
     # Enforce semiconductor cap for Apple-like profiles.
     if profile in {"consumer_hardware_ecosystem", "software_services_ecosystem", "general_tech"}:
         semi_cap = 0.25 if profile == "consumer_hardware_ecosystem" else 0.30
-        semi_w = target.get("semiconductors_infrastructure", 0.0)
+        semi_w = target.get("semiconductors", 0.0) + target.get("semiconductor_equipment", 0.0)
         if semi_w > semi_cap:
             excess = semi_w - semi_cap
-            target["semiconductors_infrastructure"] = semi_cap
+            s0 = target.get("semiconductors", 0.0)
+            se0 = target.get("semiconductor_equipment", 0.0)
+            denom = max(s0 + se0, 1e-9)
+            target["semiconductors"] = semi_cap * (s0 / denom)
+            target["semiconductor_equipment"] = semi_cap * (se0 / denom)
             recipients = [b for b in (
                 "software_services_platform",
                 "consumer_hardware_ecosystem",
-                "adjacent_tech_other",
+                "networking_infrastructure",
+                "other_adjacent_tech",
             ) if b in active]
             if recipients:
                 denom = sum(max(target.get(b, 0.0), 0.01) for b in recipients)
                 for b in recipients:
                     target[b] = target.get(b, 0.0) + excess * (max(target.get(b, 0.0), 0.01) / denom)
+        # Software/platform max cap for Apple-like profile.
+        if profile == "consumer_hardware_ecosystem":
+            soft_cap = 0.45
+            soft_w = target.get("software_services_platform", 0.0)
+            if soft_w > soft_cap:
+                excess = soft_w - soft_cap
+                target["software_services_platform"] = soft_cap
+                recips = [b for b in (
+                    "consumer_hardware_ecosystem",
+                    "networking_infrastructure",
+                    "other_adjacent_tech",
+                ) if b in active]
+                if recips:
+                    denom = sum(max(target.get(b, 0.0), 0.01) for b in recips)
+                    for b in recips:
+                        target[b] = target.get(b, 0.0) + excess * (max(target.get(b, 0.0), 0.01) / denom)
         # Ensure software/platform floor for ecosystem profiles.
         if profile == "consumer_hardware_ecosystem":
             ps = target.get("software_services_platform", 0.0)
             if ps < 0.35:
                 need = 0.35 - ps
-                donors = [b for b in ("semiconductors_infrastructure", "adjacent_tech_other", "consumer_hardware_ecosystem") if target.get(b, 0.0) > 0.0]
+                donors = [b for b in ("semiconductors", "semiconductor_equipment", "networking_infrastructure", "other_adjacent_tech", "consumer_hardware_ecosystem") if target.get(b, 0.0) > 0.0]
                 for d in donors:
                     floor = 0.25 if d == "consumer_hardware_ecosystem" else 0.0
                     take = min(need, max(0.0, target[d] - floor))
@@ -465,7 +521,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
             ch = target.get("consumer_hardware_ecosystem", 0.0)
             if ch < 0.25:
                 need = 0.25 - ch
-                donors = [b for b in ("software_services_platform", "adjacent_tech_other", "semiconductors_infrastructure") if target.get(b, 0.0) > 0.0]
+                donors = [b for b in ("software_services_platform", "networking_infrastructure", "other_adjacent_tech", "semiconductors", "semiconductor_equipment") if target.get(b, 0.0) > 0.0]
                 for d in donors:
                     floor = 0.35 if d == "software_services_platform" else 0.0
                     take = min(need, max(0.0, target[d] - floor))
@@ -481,7 +537,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
             soft = target.get("software_services_platform", 0.0)
             if soft < 0.35:
                 need = 0.35 - soft
-                donors = [b for b in ("semiconductors_infrastructure", "adjacent_tech_other", "consumer_hardware_ecosystem") if target.get(b, 0.0) > 0.0]
+                donors = [b for b in ("semiconductors", "semiconductor_equipment", "networking_infrastructure", "other_adjacent_tech", "consumer_hardware_ecosystem") if target.get(b, 0.0) > 0.0]
                 for d in donors:
                     take = min(need, max(0.0, target[d] - 0.0))
                     if take <= 0:
@@ -679,17 +735,23 @@ def _peer_role(profile: str, bucket: str, ev_ebitda: float | None) -> str:
     if ev_ebitda is None:
         return "qualitative peer only"
     if profile == "consumer_hardware_ecosystem":
-        if bucket in {"consumer_hardware_ecosystem", "software_services_platform"}:
+        if bucket in {"consumer_hardware_ecosystem"}:
             return "core valuation peer"
-        if bucket in {"semiconductors_infrastructure", "adjacent_tech_other"}:
+        if bucket in {
+            "software_services_platform",
+            "networking_infrastructure",
+            "semiconductors",
+            "semiconductor_equipment",
+            "other_adjacent_tech",
+        }:
             return "adjacent valuation peer"
     if profile == "software_services_ecosystem":
         if bucket in {"software_services_platform", "consumer_hardware_ecosystem"}:
             return "core valuation peer"
-        if bucket in {"semiconductors_infrastructure", "adjacent_tech_other"}:
+        if bucket in {"networking_infrastructure", "semiconductors", "semiconductor_equipment", "other_adjacent_tech"}:
             return "adjacent valuation peer"
-    if profile == "semiconductors_infrastructure":
-        if bucket == "semiconductors_infrastructure":
+    if profile == "semiconductors":
+        if bucket in {"semiconductors", "semiconductor_equipment"}:
             return "core valuation peer"
         return "adjacent valuation peer"
     if bucket in {"software_services_platform", "consumer_hardware_ecosystem"}:
@@ -703,21 +765,25 @@ def _relaxation_stage(profile: str, bucket: str) -> int:
             return 1
         if bucket == "software_services_platform":
             return 2
-        if bucket == "adjacent_tech_other":
+        if bucket == "networking_infrastructure":
+            return 3
+        if bucket == "other_adjacent_tech":
             return 4
-        if bucket == "semiconductors_infrastructure":
+        if bucket in {"semiconductors", "semiconductor_equipment"}:
             return 5
     if profile == "software_services_ecosystem":
         if bucket == "software_services_platform":
             return 1
         if bucket == "consumer_hardware_ecosystem":
             return 3
-        if bucket == "adjacent_tech_other":
+        if bucket == "networking_infrastructure":
             return 4
-        if bucket == "semiconductors_infrastructure":
+        if bucket == "other_adjacent_tech":
+            return 4
+        if bucket in {"semiconductors", "semiconductor_equipment"}:
             return 5
-    if profile == "semiconductors_infrastructure":
-        if bucket == "semiconductors_infrastructure":
+    if profile == "semiconductors":
+        if bucket in {"semiconductors", "semiconductor_equipment"}:
             return 1
         if bucket == "software_services_platform":
             return 2
@@ -726,7 +792,9 @@ def _relaxation_stage(profile: str, bucket: str) -> int:
         return 4
     if bucket in {"software_services_platform", "consumer_hardware_ecosystem"}:
         return 2
-    if bucket == "adjacent_tech_other":
+    if bucket == "networking_infrastructure":
+        return 3
+    if bucket == "other_adjacent_tech":
         return 4
     return 5
 
@@ -829,7 +897,7 @@ def build_peer_multiples(
         ):
             global_floor = max(100_000.0, target_market_cap * min_market_cap_ratio)
             adjacent_floor = max(40_000.0, target_market_cap * 0.015)
-            floor = adjacent_floor if _bucket in {"semiconductors_infrastructure", "adjacent_tech_other"} else global_floor
+            floor = adjacent_floor if _bucket in {"semiconductors", "semiconductor_equipment", "networking_infrastructure", "other_adjacent_tech"} else global_floor
             if md.market_cap < floor:
                 n_scale += 1
                 excluded.append(f"{ticker}: below market-cap floor")
@@ -839,7 +907,7 @@ def build_peer_multiples(
         _outlier_capped = False
         if (
             profile in {"consumer_hardware_ecosystem", "software_services_ecosystem"}
-            and _bucket == "semiconductors_infrastructure"
+            and _bucket in {"semiconductors", "semiconductor_equipment"}
             and ev_ebitda is not None
             and ev_ebitda > 40.0
         ):
@@ -900,8 +968,8 @@ def build_peer_multiples(
 
     # Bucket-balance policy for non-semi tech: avoid semiconductor-dominated peer sets.
     if peers and profile in {"consumer_hardware_ecosystem", "software_services_ecosystem", "general_tech"}:
-        semis = [p for p in peers if p.bucket == "semiconductors_infrastructure"]
-        non_semis = [p for p in peers if p.bucket != "semiconductors_infrastructure"]
+        semis = [p for p in peers if p.bucket in {"semiconductors", "semiconductor_equipment"}]
+        non_semis = [p for p in peers if p.bucket not in {"semiconductors", "semiconductor_equipment"}]
         if semis and len(semis) > max(2, int(0.35 * len(peers))):
             keep_n = max(2, int(0.35 * len(peers)))
             semis_sorted = sorted(semis, key=lambda p: (p.weight or 0.0), reverse=True)

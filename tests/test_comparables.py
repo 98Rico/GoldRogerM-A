@@ -6,6 +6,7 @@ from goldroger.data.comparables import (
     parse_peer_agent_output,
     _sectors_compatible,
     _sector_group,
+    _classify_peer_bucket,
     MIN_VALID_PEERS,
 )
 from goldroger.data.fetcher import MarketData
@@ -187,6 +188,15 @@ def test_controlled_relaxation_restores_minimum_valuation_peers():
             min_valuation_peers=2,
         )
     assert result.n_valuation_peers >= 2
+
+
+def test_cisco_like_name_classifies_as_networking_not_semiconductors():
+    bucket = _classify_peer_bucket(
+        sector="Technology",
+        industry="Communication Equipment",
+        name="Cisco Systems",
+    )
+    assert bucket == "networking_infrastructure"
 
 
 # ── resolve_peer_tickers ──────────────────────────────────────────────────────

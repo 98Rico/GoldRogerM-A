@@ -548,7 +548,7 @@ def print_result(result):
             f"  Peers: {_pipeline_status.get('peers', 'N/A')}\n"
             f"  Valuation: {_pipeline_status.get('valuation', 'N/A')}\n"
             f"  Thesis: {_pipeline_status.get('thesis', 'N/A')}\n"
-            f"  Model signal: {_pipeline_status.get('model_signal', 'N/A')}\n"
+            f"  Model signal: {_pipeline_status.get('model_signal_detail', _pipeline_status.get('model_signal', 'N/A'))}\n"
             f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
             f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}\n"
             f"  Confidence reason: {_pipeline_status.get('confidence_reason', 'N/A')}"

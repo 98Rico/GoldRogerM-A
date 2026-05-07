@@ -175,12 +175,14 @@ def test_mega_cap_weight_rules_follow_peer_count_buckets():
             "_assumption_source": "system",
             "peer_count": 9,
             "peer_quality": "strong",
-            "ev_ebitda_range": [20.0, 28.0],
+            "ev_ebitda_range": [15.0, 20.0],
         },
         market_data=market_data,
         sector="Technology",
     )
-    assert 0.40 <= out_9.weights_used["comps"] <= 0.50
+    assert 0.35 <= out_9.weights_used["comps"] <= 0.50
+    if out_9.weights_used["comps"] <= 0.35:
+        assert any("dispersion" in n.lower() for n in out_9.notes)
 
 
 def test_live_multiple_vs_applied_peer_multiple_note_present():
@@ -201,3 +203,24 @@ def test_live_multiple_vs_applied_peer_multiple_note_present():
         sector="Technology",
     )
     assert any("Live EV/EBITDA check:" in n for n in out.notes)
+
+
+def test_high_dispersion_caps_comps_weight_for_mega_cap():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 9,
+            "peer_quality": "strong",
+            "ev_ebitda_range": [60.0, 80.0],
+            "ev_ebitda_median": 70.0,
+            "ev_ebitda_weighted": 70.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert out.weights_used["comps"] <= 0.35
+    assert any("High pre-blend DCF/comps dispersion" in n for n in out.notes)

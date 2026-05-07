@@ -56,7 +56,13 @@ class SourcesLog:
         ]
         for e in self._entries:
             url_str = f" ([link]({e.url}))" if e.url else ""
-            conf_emoji = {"verified": "✅", "estimated": "⚠️", "inferred": "🔵"}.get(e.confidence, "❓")
+            conf_emoji = {
+                "verified": "✅",
+                "estimated": "⚠️",
+                "inferred": "🔵",
+                "unavailable": "⛔",
+                "skipped": "⏭️",
+            }.get(e.confidence, "❓")
             lines.append(f"| {e.metric} | {e.value} | {e.source}{url_str} | {conf_emoji} {e.confidence} |")
         lines += [
             "",
@@ -64,6 +70,8 @@ class SourcesLog:
             "- ✅ verified — from official filings or exchange data",
             "- ⚠️ estimated — from web search or LLM with cited basis",
             "- 🔵 inferred — sector default or model assumption",
+            "- ⛔ unavailable — source expected but no reliable datapoint available",
+            "- ⏭️ skipped — intentionally skipped by pipeline mode/policy",
         ]
         return "\n".join(lines)
 

@@ -315,8 +315,19 @@ class ValuationService:
             market_data=market_data,
         )
         _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+        _is_mega_cap = bool(market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m)
+        _pre_disp = None
+        if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
+            _pre_disp = max(dcf_output.enterprise_value, comps_output.mid) / min(
+                dcf_output.enterprise_value,
+                comps_output.mid,
+            )
         if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
             peer_quality = str(assumptions.get("peer_quality") or "normal").lower()
+            low_conf_peer_set = bool(
+                assumptions.get("low_confidence_comps")
+                or peer_quality in {"weak", "mixed"}
+            )
             if insufficient_comps:
                 weights = {"dcf": 1.0, "comps": 0.0, "transactions": 0.0}
                 notes.append(
@@ -346,6 +357,28 @@ class ValuationService:
                     f"Mega-cap peer-quality weighting ({peer_quality}): "
                     f"DCF {weights['dcf']:.0%} / Comps {weights['comps']:.0%}."
                 )
+            if low_conf_peer_set and weights.get("comps", 0.0) > 0.35:
+                _old = float(weights.get("comps", 0.0))
+                _shift = _old - 0.35
+                weights = {
+                    "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
+                    "comps": 0.35,
+                    "transactions": float(weights.get("transactions", 0.0)),
+                }
+                notes.append(
+                    f"Low-confidence peer guardrail: capped comps weight {_old:.0%}→35%."
+                )
+            if _pre_disp and _pre_disp > 2.0 and weights.get("comps", 0.0) > 0.35:
+                _old = float(weights.get("comps", 0.0))
+                _shift = _old - 0.35
+                weights = {
+                    "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
+                    "comps": 0.35,
+                    "transactions": float(weights.get("transactions", 0.0)),
+                }
+                notes.append(
+                    f"High pre-blend DCF/comps dispersion ({_pre_disp:.1f}x): capped comps weight {_old:.0%}→35%."
+                )
         if dcf_conservative and weights.get("comps", 0.0) > 0:
             # Reduce DCF influence when DCF looks structurally conservative vs peer economics.
             shift = min(0.15, max(0.0, weights.get("dcf", 0.0) - 0.45))
@@ -358,6 +391,28 @@ class ValuationService:
                 notes.append(
                     f"DCF conservative adjustment: shifted {shift:.0%} weight from DCF to comps."
                 )
+        if _is_mega_cap and (assumptions.get("low_confidence_comps") or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}) and weights.get("comps", 0.0) > 0.35:
+            _old = float(weights.get("comps", 0.0))
+            _shift = _old - 0.35
+            weights = {
+                "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
+                "comps": 0.35,
+                "transactions": float(weights.get("transactions", 0.0)),
+            }
+            notes.append(
+                f"Final low-confidence cap: comps weight {_old:.0%}→35%."
+            )
+        if _is_mega_cap and _pre_disp and _pre_disp > 2.0 and weights.get("comps", 0.0) > 0.35:
+            _old = float(weights.get("comps", 0.0))
+            _shift = _old - 0.35
+            weights = {
+                "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
+                "comps": 0.35,
+                "transactions": float(weights.get("transactions", 0.0)),
+            }
+            notes.append(
+                f"Final dispersion cap: comps weight {_old:.0%}→35%."
+            )
         w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
         notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)

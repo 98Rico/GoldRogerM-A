@@ -555,3 +555,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ DCF diagnostics expansion — valuation notes now include terminal value share and projected FCF CAGR, and low implied exit multiples (<12x for mega-cap tech) trigger conservative flags
 ✔ Unavailable market-context provenance — missing full-mode TAM/market-growth now logs `market_analysis_unavailable` instead of generic inferred tags
 ✔ Canonical valuation consistency in thesis — thesis now prepends a canonical fair-value/point-estimate reference from the same valuation object used in the headline
+✔ Canonical range hardening — thesis fair-value range and point estimate are now regex-normalized to the canonical valuation object to prevent headline/thesis mismatch
+✔ Mega-cap degraded-comps guardrail — comps weight is capped at 35% when peer confidence is low or when pre-blend DCF/comps dispersion exceeds 2.0x
+✔ Peer-bucket integrity fix — removed stale `semiconductors_infrastructure` dependency in peer-quality scoring; split semiconductor buckets now evaluate correctly
+✔ Source-confidence semantics expansion — `sources.md` now renders explicit `unavailable` and `skipped` confidence states with dedicated legend entries
+✔ Regression coverage for this pass — added tests for Cisco networking bucket classification and high-dispersion comps-weight capping behavior
