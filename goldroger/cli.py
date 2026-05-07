@@ -485,7 +485,60 @@ def _format_valuation_cell(value: Optional[str]) -> str:
     return _fmt_money_m(n)
 
 
-def print_result(result):
+def _peer_table_headers(debug: bool = False) -> list[str]:
+    if debug:
+        return [
+            "Ticker", "Name", "Bucket", "Role", "MCap", "EV/EBITDA",
+            "Similarity", "Business Sim", "Scale Sim", "Weight", "Include Reason",
+        ]
+    return ["Ticker", "Role", "Bucket", "MCap", "EV/EBITDA", "Weight"]
+
+
+def _normalize_research_status(raw: str) -> str:
+    s = (raw or "").upper()
+    if s == "SKIPPED_QUICK_MODE":
+        return "SKIPPED_QUICK_MODE"
+    if s in {"FAILED", "TIMEOUT"}:
+        return "FAILED"
+    if s in {"DEGRADED", "DEGRADED_API_CAPACITY"}:
+        return "PARTIAL"
+    return "OK"
+
+
+def _normalize_valuation_status(raw_status: str, confidence: str) -> str:
+    s = (raw_status or "").upper()
+    c = (confidence or "").lower()
+    if s == "FAILED":
+        return "FAILED"
+    if s in {"DEGRADED", "DEGRADED_API_CAPACITY"} or c == "low":
+        return "LOW_CONFIDENCE"
+    return "OK"
+
+
+def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
+    market_data_state = "OK"
+    research_state = _normalize_research_status(str(pipeline_status.get("research_enrichment", "OK")))
+    peers_state = str(pipeline_status.get("peers", "N/A")).upper()
+    if peers_state == "DEGRADED_API_CAPACITY":
+        peers_state = "DEGRADED"
+    valuation_state = _normalize_valuation_status(
+        str(pipeline_status.get("valuation", "N/A")),
+        str(pipeline_status.get("confidence", "")),
+    )
+    rec_state = str(pipeline_status.get("recommendation", "N/A"))
+    block = (
+        "[bold]Pipeline status:[/bold]\n"
+        f"  Market data: {market_data_state}\n"
+        f"  Research: {research_state}\n"
+        f"  Peers: {peers_state}\n"
+        f"  Valuation: {valuation_state}\n"
+        f"  Recommendation: {rec_state}"
+    )
+    reason = str(pipeline_status.get("confidence_reason", "") or "").strip()
+    return block, reason
+
+
+def print_result(result, debug: bool = False):
     f = result.fundamentals
     m = result.market
     fin = result.financials
@@ -551,43 +604,48 @@ def print_result(result):
     if _fv_width:
         _fv_label = f"{_fv_label} (wide; low confidence)"
     _pt_label = "Indicative Value" if ((not _is_inconclusive) and _confidence == "low") else "Point Estimate"
-    _target_line = (
-        f"Fair Value Range: {_fv_label} | "
-        f"{_pt_label}: {_value_with_source('Target', _target_display)}"
-        if _fv_range and v.target_price and not _is_inconclusive
-        else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
-    )
+    _is_low_conf = ((not _is_inconclusive) and _confidence == "low")
+    if _is_low_conf and _fv_range and v.target_price:
+        _target_line = (
+            f"Indicative Range: {_fv_label} | "
+            f"Midpoint reference: {_value_with_source('Target', _target_display)} | "
+            f"Model-implied upside/downside: {_value_with_source('Upside', v.upside_downside)}"
+        )
+    else:
+        _target_line = (
+            f"Fair Value Range: {_fv_label} | "
+            f"{_pt_label}: {_value_with_source('Target', _target_display)}"
+            if _fv_range and v.target_price and not _is_inconclusive
+            else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
+        )
     if (not _is_inconclusive) and _pipeline_status.get("confidence"):
         _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
+    _headline_tail = "" if _is_low_conf else f" | Upside: {_value_with_source('Upside', v.upside_downside)}"
     console.print(Panel(
         f"[bold]{f.company_name}[/] | {f.sector} | {f.headquarters}\n"
         f"{f.description}\n\n"
         f"Recommendation: [{rec_color}]{v.recommendation}[/] | "
-        f"{_target_line} | "
-        f"Upside: {_value_with_source('Upside', v.upside_downside)}",
+        f"{_target_line}{_headline_tail}",
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
     ))
     _dq = (getattr(result, "data_quality", {}) or {})
     if _pipeline_status:
-        console.print(
-            "[bold]Pipeline status:[/bold]\n"
-            f"  Core valuation: {_pipeline_status.get('core_valuation', 'N/A')}\n"
-            f"  Research enrichment: {_pipeline_status.get('research_enrichment', 'N/A')}\n"
-            f"  Market analysis: {_pipeline_status.get('market_analysis', 'N/A')}\n"
-            f"  Peers: {_pipeline_status.get('peers', 'N/A')}\n"
-            f"  Valuation: {_pipeline_status.get('valuation', 'N/A')}\n"
-            f"  Thesis: {_pipeline_status.get('thesis', 'N/A')}\n"
-            f"  Model signal: {_pipeline_status.get('model_signal_detail', _pipeline_status.get('model_signal', 'N/A'))}\n"
-            f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
-            f"  DCF status: {_pipeline_status.get('dcf_status', 'N/A')}\n"
-            f"  Effective peers: {_pipeline_status.get('effective_peer_count', 'N/A')}\n"
-            f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}\n"
-            f"  Confidence reason: {_pipeline_status.get('confidence_reason', 'N/A')}"
-        )
+        _status_block, _status_reason = _render_pipeline_status_block(_pipeline_status)
+        console.print(_status_block)
+        if _status_reason:
+            console.print(f"[dim]Why low confidence: {_status_reason}[/dim]")
+        if debug:
+            console.print(
+                "[dim]Diagnostics:\n"
+                f"  Model signal: {_pipeline_status.get('model_signal_detail', _pipeline_status.get('model_signal', 'N/A'))}\n"
+                f"  DCF status: {_pipeline_status.get('dcf_status', 'N/A')}\n"
+                f"  Effective peers: {_pipeline_status.get('effective_peer_count', 'N/A')}\n"
+                f"  Thesis status: {_pipeline_status.get('thesis', 'N/A')}[/dim]"
+            )
         _ms = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")))
         _fr = str(_pipeline_status.get("recommendation", "N/A"))
-        if _ms not in {"N/A", ""} and _fr not in {"N/A", ""} and _ms != _fr:
+        if debug and _ms not in {"N/A", ""} and _fr not in {"N/A", ""} and _ms != _fr:
             console.print(f"[dim]Model signal vs final recommendation: {_ms} → {_fr} (guardrails/confidence applied).[/dim]")
     _core_q = _dq.get("core_data_quality_score")
     _r_q = _dq.get("research_enrichment_quality_score")
@@ -653,31 +711,32 @@ def print_result(result):
     # Peer table (auditability)
     if result.peer_comps and result.peer_comps.peers:
         peer_table = Table(title="Peer Set (Top Validated Peers)", show_header=True, header_style="bold cyan")
-        peer_table.add_column("Ticker")
-        peer_table.add_column("Name")
-        peer_table.add_column("Bucket")
-        peer_table.add_column("Role")
-        peer_table.add_column("MCap")
-        peer_table.add_column("EV/EBITDA")
-        peer_table.add_column("Similarity")
-        peer_table.add_column("Business Sim")
-        peer_table.add_column("Scale Sim")
-        peer_table.add_column("Weight")
-        peer_table.add_column("Include Reason")
+        for _col in _peer_table_headers(debug=debug):
+            peer_table.add_column(_col)
         for p in result.peer_comps.peers:
-            peer_table.add_row(
-                p.ticker or "—",
-                p.name or "—",
-                p.bucket or "—",
-                p.role or "—",
-                p.market_cap or "—",
-                p.ev_ebitda or "—",
-                p.similarity or "—",
-                p.business_similarity or "—",
-                p.scale_similarity or "—",
-                p.weight or "—",
-                p.include_reason or "—",
-            )
+            if debug:
+                peer_table.add_row(
+                    p.ticker or "—",
+                    p.name or "—",
+                    p.bucket or "—",
+                    p.role or "—",
+                    p.market_cap or "—",
+                    p.ev_ebitda or "—",
+                    p.similarity or "—",
+                    p.business_similarity or "—",
+                    p.scale_similarity or "—",
+                    p.weight or "—",
+                    p.include_reason or "—",
+                )
+            else:
+                peer_table.add_row(
+                    p.ticker or "—",
+                    p.role or "—",
+                    p.bucket or "—",
+                    p.market_cap or "—",
+                    p.ev_ebitda or "—",
+                    p.weight or "—",
+                )
         console.print(peer_table)
 
     # Valuation methods
@@ -845,7 +904,7 @@ def main():
                                    interactive=args.interactive, data_sources=selected_sources,
                                    country_hint=country_hint, company_identifier=company_identifier,
                                    quick_mode=args.quick, debug=args.debug, cli_mode=True)
-            print_result(result)
+            print_result(result, debug=args.debug)
 
         if args.output:
             path = Path(args.output)

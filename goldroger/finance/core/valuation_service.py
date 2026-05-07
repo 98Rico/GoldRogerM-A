@@ -236,6 +236,9 @@ class ValuationService:
         dcf_output = compute_dcf(dcf_input)
         dcf_conservative = False
         dcf_materially_conservative = False
+        _implied_exit_mult: float | None = None
+        _live_mult_anchor: float | None = None
+        _applied_peer_anchor: float | None = None
         # DCF sanity diagnostics
         try:
             _y5_ebitda = revenue_series[-1] * ebitda_margin if revenue_series else 0.0
@@ -250,6 +253,7 @@ class ValuationService:
             )
             if _y5_ebitda and dcf_output.enterprise_value > 0:
                 _implied_exit = dcf_output.enterprise_value / _y5_ebitda
+                _implied_exit_mult = float(_implied_exit)
                 notes.append(f"DCF implied exit EV/EBITDA: {_implied_exit:.1f}x.")
                 if assumptions.get("mega_cap_tech") and _implied_exit < 12.0:
                     dcf_conservative = True
@@ -287,6 +291,8 @@ class ValuationService:
                         _applied_peer = float(_applied_peer) if _applied_peer is not None else None
                     except Exception:
                         _applied_peer = None
+                    _live_mult_anchor = _live_mult
+                    _applied_peer_anchor = _applied_peer
                     _anchor_candidates = [x for x in (_live_mult, _applied_peer) if x and x > 0]
                     if _anchor_candidates:
                         _anchor_mult = sum(_anchor_candidates) / len(_anchor_candidates)
@@ -309,6 +315,27 @@ class ValuationService:
                 notes.append(f"DCF implied terminal FCF yield: {_fcf_yield:.1%}.")
         except Exception:
             pass
+        _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+        _is_stable_mega_cap = bool(
+            assumptions.get("mega_cap_tech")
+            and market_data
+            and market_data.market_cap
+            and market_data.market_cap > _mega_cap_usd_m
+            and ebitda_margin >= 0.20
+        )
+        if (
+            _is_stable_mega_cap
+            and _implied_exit_mult
+            and _applied_peer_anchor
+            and _live_mult_anchor
+            and _implied_exit_mult < (0.50 * _applied_peer_anchor)
+        ):
+            dcf_conservative = True
+            dcf_materially_conservative = True
+            notes.append(
+                "DCF materially conservative rule triggered: implied exit EV/EBITDA is <50% of applied peer multiple "
+                "for a stable mega-cap with live multiple available."
+            )
 
         if dcf_output.terminal_value_pct > 0.85:
             notes.append(
@@ -532,6 +559,32 @@ class ValuationService:
         if dcf_materially_conservative and low_conf_peer_set:
             notes.append(
                 "Point estimate is indicative only due to degraded DCF and imperfect peer set."
+            )
+        if (
+            _is_mega_cap
+            and dcf_materially_conservative
+            and peer_count >= 3
+            and _implied_exit_mult
+            and _applied_peer_anchor
+            and _live_mult_anchor
+            and _implied_exit_mult < (0.50 * _applied_peer_anchor)
+        ):
+            _target_dcf = 0.50 if low_conf_peer_set else 0.40
+            _target_comps = 0.50 if low_conf_peer_set else 0.60
+            _old_dcf = float(weights.get("dcf", 0.0))
+            _old_comps = float(weights.get("comps", 0.0))
+            weights = {
+                "dcf": _target_dcf,
+                "comps": _target_comps,
+                "transactions": 0.0,
+            }
+            notes.append(
+                "DCF materially conservative versus market/peer anchors: "
+                f"reweighted DCF/Comps {_old_dcf:.0%}/{_old_comps:.0%}→{_target_dcf:.0%}/{_target_comps:.0%}."
+            )
+            notes.append(
+                "DCF appears materially conservative versus market/peer multiples; valuation relies more on blended "
+                "range than point estimate."
             )
         w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
         notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")

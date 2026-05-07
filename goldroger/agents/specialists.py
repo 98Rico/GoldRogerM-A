@@ -94,6 +94,13 @@ Return ONLY this JSON:
   "market_size": "TAM in dollars (e.g. '$12B')",
   "market_growth": "CAGR percentage (e.g. '18%')",
   "market_segment": "specific segment company operates in",
+  "market_segments": ["segment 1", "segment 2", "segment 3"],
+  "tam_basis": "short explanation of TAM scope/method or 'unavailable'",
+  "growth_basis": "short explanation of growth estimate basis or 'unavailable'",
+  "competitor_context": "short paragraph about competitive landscape quality and limits",
+  "source_quality": "high | medium | low",
+  "data_status": "COMPLETE | PARTIAL | FAILED",
+  "missing_fields": ["tam_estimate", "market_growth"],
   "key_trends": ["specific trend 1", "trend 2", "trend 3", "trend 4"],
   "main_competitors": [
     {{"name": "competitor name", "market_share": "estimated share"}},
@@ -103,7 +110,13 @@ Return ONLY this JSON:
   "company_market_share": "estimated share of {company}",
   "competitive_position": "paragraph on competitive dynamics and {company}'s positioning",
   "sources": ["Title — https://example.com", "Title — https://example.com"]
-}}"""
+}}
+
+Rules:
+- If TAM or market growth is not source-backed, set value to "unavailable" and include missing_fields.
+- Never fabricate numeric TAM or CAGR.
+- data_status must be COMPLETE only when TAM and growth are source-backed.
+"""
 
 class FinancialModelerAgent(BaseAgent):
     """Agent 3 — STRICT financial data extraction ONLY"""

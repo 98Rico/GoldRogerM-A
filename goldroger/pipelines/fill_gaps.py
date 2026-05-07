@@ -105,14 +105,12 @@ def _fill_financials(result: AnalysisResult, sector: str) -> None:
 
 def _fill_market(result: AnalysisResult) -> None:
     m = result.market
-    sector = result.fundamentals.sector or ""
 
     if _blank(m.market_size):
-        m.market_size = "Market size data not available [no verified source]"
+        m.market_size = "Not available from current queries"
 
     if _blank(m.market_growth):
-        g = get_sector_rev_growth(sector)
-        m.market_growth = f"{g:+.1%} [sector benchmark]"
+        m.market_growth = "Not available from current queries"
 
     if _blank(m.competitive_position):
         m.competitive_position = "Competitive position analysis not available."

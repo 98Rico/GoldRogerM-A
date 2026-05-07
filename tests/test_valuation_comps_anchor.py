@@ -310,3 +310,29 @@ def test_materially_conservative_dcf_sets_indicative_note_and_comps_floor():
     if dcf_status == "materially conservative / degraded":
         assert out.weights_used.get("comps", 0.0) >= 0.40
         assert any("Point estimate is indicative only" in n for n in out.notes)
+
+
+def test_materially_conservative_rule_reweights_toward_comps_when_peers_usable():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "mega_cap_tech": True,
+            "peer_count": 6,
+            "peer_quality": "normal",
+            "low_confidence_comps": False,
+            "ev_ebitda_range": [20.0, 28.0],
+            "ev_ebitda_median": 24.0,
+            "ev_ebitda_weighted": 24.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    dcf_status = out.field_sources.get("DCF Status", ("normal", "", ""))[0]
+    if dcf_status == "materially conservative / degraded":
+        assert out.weights_used.get("dcf", 1.0) <= 0.50
+        assert out.weights_used.get("comps", 0.0) >= 0.50
+        assert any("reweighted DCF/Comps" in n for n in out.notes)

@@ -318,14 +318,23 @@ class BaseAgent:
 
             except Exception as exc:
                 is_capacity = is_api_capacity_error(exc)
-                if cli_mode and is_capacity:
+                exc_str = str(exc).lower()
+                is_rate_limit = (
+                    "429" in str(exc)
+                    or "rate_limit" in exc_str
+                    or "rate limit" in exc_str
+                    or "service_tier_capacity_exceeded" in exc_str
+                    or "code\":\"3505" in exc_str
+                    or "code\":\"1300" in exc_str
+                )
+                # Interactive CLI should never stall on long API-capacity sleeps.
+                if cli_mode and (is_capacity or is_rate_limit):
                     raise APICapacityError(
                         f"{self.name} capacity unavailable in CLI mode: {exc}"
                     ) from exc
-                exc_str = str(exc).lower()
-                is_rate_limit = "429" in str(exc) or "rate_limit" in exc_str or "rate limit" in exc_str
                 if attempt < effective_retries:
-                    wait = 60 if is_rate_limit else 2 ** attempt
+                    # Keep retries short in non-CLI contexts as well.
+                    wait = min(10, 2 ** attempt) if is_rate_limit else 2 ** attempt
                     if debug_retries:
                         print(f"[{self.name}] Attempt {attempt + 1} failed: {exc} — retrying in {wait}s...")
                     time.sleep(wait)

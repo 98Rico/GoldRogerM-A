@@ -23,6 +23,13 @@ class MarketAnalysis(Model):
     market_size: Optional[str] = None
     market_growth: Optional[str] = None
     market_segment: Optional[str] = None
+    market_segments: list[str] = Field(default_factory=list)
+    tam_basis: Optional[str] = None
+    growth_basis: Optional[str] = None
+    competitor_context: Optional[str] = None
+    source_quality: Optional[str] = None
+    data_status: Optional[str] = None
+    missing_fields: list[str] = Field(default_factory=list)
     key_trends: list[str] = []
     main_competitors: list[Competitor] = []
     company_market_share: Optional[str] = None

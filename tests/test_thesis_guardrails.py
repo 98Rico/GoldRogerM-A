@@ -15,6 +15,17 @@ def test_sanitize_stale_catalyst_rewrites_to_recent():
     assert "upcoming" not in out[0].lower()
 
 
+def test_sanitize_catalyst_rewrites_stale_product_labels():
+    out = _sanitize_catalysts(
+        ["iPhone 18 demand update expected in Q4 2025"],
+        run_year=2026,
+    )
+    assert out
+    joined = " ".join(out).lower()
+    assert "current iphone cycle" not in joined
+    assert "latest iphone cycle" in joined
+
+
 def test_placeholder_trend_detection():
     assert _trend_is_placeholder("No market trend data available")
     assert _trend_is_placeholder("Not available from current queries")

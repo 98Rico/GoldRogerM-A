@@ -161,7 +161,7 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
                 event_ym = y * 12 + 12
             delta_months = run_ym - event_ym
             stale = delta_months > 0
-            very_old = delta_months > 6
+            very_old = delta_months > 3
             # hard reject ancient stale catalysts from the catalysts section
             if delta_months > 18:
                 continue
@@ -173,10 +173,11 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
         elif stale and not txt.lower().startswith("recent"):
             txt = f"Recent event context: {txt}"
         # Avoid stale product-cycle naming when date provenance is weak.
-        txt = _re.sub(r"\biPhone\s*\d+\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
+        txt = _re.sub(r"\biPhone\s*\d+\b", "latest iPhone cycle", txt, flags=_re.IGNORECASE)
         txt = _re.sub(r"\biOS\s*\d+\b", "next major iOS release", txt, flags=_re.IGNORECASE)
         txt = _re.sub(r"\bmacOS\s*\d+\b", "next major macOS release", txt, flags=_re.IGNORECASE)
-        txt = _re.sub(r"\bcurrent iPhone cycle\s+cycle\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
+        txt = _re.sub(r"\bcurrent iPhone cycle\b", "latest iPhone cycle", txt, flags=_re.IGNORECASE)
+        txt = _re.sub(r"\blatest iPhone cycle\s+cycle\b", "latest iPhone cycle", txt, flags=_re.IGNORECASE)
         txt = _re.sub(r"\bcycle\s+cycle\b", "cycle", txt, flags=_re.IGNORECASE)
         out.append(txt)
     return out
@@ -187,7 +188,7 @@ def _sanitize_thesis_language(text: str) -> str:
     if not txt:
         return txt
     # Avoid stale/version-locked product labeling unless explicitly sourced.
-    txt = _re.sub(r"\biPhone\s*\d+\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"\biPhone\s*\d+\b", "latest iPhone cycle", txt, flags=_re.IGNORECASE)
     txt = _re.sub(r"\biOS\s*\d+\b", "next major iOS release", txt, flags=_re.IGNORECASE)
     txt = _re.sub(r"\bmacOS\s*\d+\b", "next major macOS release", txt, flags=_re.IGNORECASE)
     # Soften overly specific unsourced phrasing.
@@ -198,8 +199,8 @@ def _sanitize_thesis_language(text: str) -> str:
         flags=_re.IGNORECASE,
     )
     txt = _re.sub(
-        r"\bAI-enhanced\s+current iPhone cycle\s+cycle\b",
-        "AI-enabled current iPhone cycle",
+        r"\bAI-enhanced\s+latest iPhone cycle\s+cycle\b",
+        "AI-enabled latest iPhone cycle",
         txt,
         flags=_re.IGNORECASE,
     )
@@ -250,6 +251,36 @@ def _text_missing(v) -> bool:
     return any(tok in s for tok in ("n/a", "not available", "unknown", "none", "unavailable"))
 
 
+def _has_source_backed_market_data(m: MarketAnalysis) -> bool:
+    _sources = [str(s) for s in (m.sources or []) if str(s).strip()]
+    return any(("http://" in s.lower()) or ("https://" in s.lower()) for s in _sources)
+
+
+def _ensure_market_analysis_contract(m: MarketAnalysis) -> MarketAnalysis:
+    """Enforce explicit market-analysis completeness/quality flags."""
+    if not m.market_segments and not _text_missing(m.market_segment):
+        m.market_segments = [str(m.market_segment).strip()]
+    m.market_segments = [str(x).strip() for x in (m.market_segments or []) if str(x).strip()]
+    missing = [str(x) for x in (m.missing_fields or []) if str(x).strip()]
+    if _text_missing(m.market_size):
+        missing.append("tam_estimate")
+    if _text_missing(m.market_growth):
+        missing.append("market_growth")
+    if not [str(t).strip() for t in (m.key_trends or []) if str(t).strip()]:
+        missing.append("key_trends")
+    # Stable order, no duplicates
+    m.missing_fields = sorted(set(missing))
+    if not (m.source_quality or "").strip():
+        m.source_quality = "high" if _has_source_backed_market_data(m) else "low"
+    if not (m.data_status or "").strip():
+        m.data_status = "COMPLETE" if not m.missing_fields else "PARTIAL"
+    if m.data_status.upper() not in {"COMPLETE", "PARTIAL", "FAILED"}:
+        m.data_status = "PARTIAL"
+    if m.data_status.upper() == "COMPLETE" and m.missing_fields:
+        m.data_status = "PARTIAL"
+    return m
+
+
 def _quality_tier(score: int) -> str:
     if score >= 80:
         return "A"
@@ -264,7 +295,7 @@ def _fallback_catalysts(company: str, sector: str) -> list[str]:
     _c = (company or "").upper()
     if "AAPL" in _c or "APPLE" in _c:
         return [
-            "Next earnings update: current iPhone cycle demand and Services growth trajectory.",
+            "Next earnings update: latest iPhone cycle demand and Services growth trajectory.",
             "Apple Intelligence / AI adoption: device upgrade-cycle and ecosystem monetization implications.",
             "Regulatory updates: App Store / DMA / platform-policy developments and monetization impact.",
         ]
@@ -272,7 +303,7 @@ def _fallback_catalysts(company: str, sector: str) -> list[str]:
     if "tech" in _s or "software" in _s:
         return [
             f"{company}: next earnings release and forward guidance update",
-            f"{company}: current product/AI feature adoption commentary",
+            f"{company}: latest product/AI feature adoption commentary",
             f"{company}: regulatory and platform-policy developments",
         ]
     if "energy" in _s:
@@ -777,11 +808,13 @@ def run_analysis(
             )
             status = "ok"
         except APICapacityError:
-            console.print("  [yellow]Market analysis LLM unavailable; using qualitative fallback.[/yellow]")
+            if not _cancel_market.is_set():
+                console.print("  [yellow]Market analysis LLM unavailable; using qualitative fallback.[/yellow]")
             result = MarketAnalysis()
             status = "degraded_api_capacity"
         except Exception as e:
-            console.print(f"  [red]Market analysis failed: {e}[/red]")
+            if not _cancel_market.is_set():
+                console.print(f"  [red]Market analysis failed: {e}[/red]")
             result = MarketAnalysis()
             status = "failed"
         _finish_step("Market Analysis", _t, _cancel_market, "market_analysis")
@@ -819,7 +852,8 @@ def run_analysis(
             })
             result = (raw, None)
         except APICapacityError as e:
-            console.print("  [yellow]PeerFinder LLM unavailable; using deterministic peer fallback.[/yellow]")
+            if not _cancel_peers.is_set():
+                console.print("  [yellow]PeerFinder LLM unavailable; using deterministic peer fallback.[/yellow]")
             try:
                 _fallback = find_peers_deterministic_quick(
                     target_md=market_data,
@@ -871,10 +905,12 @@ def run_analysis(
                 # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
                 f.revenue_current = normalise_revenue_string(f.revenue_current)
         except APICapacityError:
-            console.print("  [yellow]FinancialModeler LLM unavailable; using deterministic fallback.[/yellow]")
+            if not _cancel_fin.is_set():
+                console.print("  [yellow]FinancialModeler LLM unavailable; using deterministic fallback.[/yellow]")
             f = _fin_fallback()
         except Exception as e:
-            console.print(f"  [yellow]Financials fallback: {e}[/yellow]")
+            if not _cancel_fin.is_set():
+                console.print(f"  [yellow]Financials fallback: {e}[/yellow]")
             f = _fin_fallback()
         _finish_step("Financials", _t, _cancel_fin, "financials")
         return f
@@ -897,7 +933,8 @@ def run_analysis(
             })
             result = (raw, None)
         except APICapacityError as e:
-            console.print("  [yellow]Transaction comps LLM unavailable; using cached/none fallback.[/yellow]")
+            if not _cancel_tx.is_set():
+                console.print("  [yellow]Transaction comps LLM unavailable; using cached/none fallback.[/yellow]")
             result = (None, e)
         except Exception as e:
             result = (None, e)
@@ -925,6 +962,7 @@ def run_analysis(
             elif _mkt_status == "skipped_quick_mode":
                 market_status = "SKIPPED_QUICK_MODE"
             else:
+                mkt = _ensure_market_analysis_contract(mkt)
                 market_status = "OK"
                 _trend_vals = [str(t) for t in (mkt.key_trends or []) if str(t).strip()]
                 _has_placeholder_only = bool(_trend_vals) and all(_trend_is_placeholder(t) for t in _trend_vals)
@@ -933,6 +971,8 @@ def run_analysis(
                     or (not _trend_vals)
                     or _has_placeholder_only
                 ):
+                    market_status = "DEGRADED"
+                if str(mkt.data_status or "").upper() in {"PARTIAL", "FAILED"}:
                     market_status = "DEGRADED"
         except FutureTimeoutError:
             market_analysis_failed = True
@@ -1715,28 +1755,45 @@ def run_analysis(
             )
         except Exception:
             pass
-    # Always surface key DCF sanity diagnostics (not only in debug mode).
-    _sanity_prefixes = (
-        "DCF calibration —",
-        "DCF implied exit EV/EBITDA:",
-        "DCF implied terminal FCF yield:",
-        "Terminal value ",
-        "Multiple cross-check:",
-        "Normalized terminal multiple cross-check:",
-        "Live EV/EBITDA check:",
-    )
+    # DCF diagnostics: keep normal output concise; detailed internals in --debug.
+    _exit_line = None
+    _live_line = None
+    _multi_line = None
     for _n in (result.notes or []):
         _txt = str(_n)
-        if _txt.startswith(_sanity_prefixes):
-            console.print(f"  [dim]{_txt}[/dim]")
-            if _txt.startswith("DCF implied exit EV/EBITDA:"):
-                sources.add_once("DCF Implied Exit EV/EBITDA", _txt.split(":", 1)[1].strip(), "valuation_engine", "inferred")
-            elif _txt.startswith("DCF implied terminal FCF yield:"):
-                sources.add_once("DCF Implied Terminal FCF Yield", _txt.split(":", 1)[1].strip(), "valuation_engine", "inferred")
-            elif _txt.startswith("Terminal value "):
-                sources.add_once("Terminal Value Share of DCF", _txt.replace("Terminal value", "").strip(), "valuation_engine", "inferred")
-            elif _txt.startswith("DCF calibration —"):
-                sources.add_once("DCF Calibration Snapshot", _txt.replace("DCF calibration —", "").strip(), "valuation_engine", "inferred")
+        if _txt.startswith("DCF implied exit EV/EBITDA:"):
+            _exit_line = _txt
+            sources.add_once("DCF Implied Exit EV/EBITDA", _txt.split(":", 1)[1].strip(), "valuation_engine", "inferred")
+        elif _txt.startswith("Live EV/EBITDA check:"):
+            _live_line = _txt
+        elif _txt.startswith("Multiple cross-check:"):
+            _multi_line = _txt
+        elif debug and _txt.startswith("DCF implied terminal FCF yield:"):
+            sources.add_once("DCF Implied Terminal FCF Yield", _txt.split(":", 1)[1].strip(), "valuation_engine", "inferred")
+        elif debug and _txt.startswith("Terminal value "):
+            sources.add_once("Terminal Value Share of DCF", _txt.replace("Terminal value", "").strip(), "valuation_engine", "inferred")
+        elif debug and _txt.startswith("DCF calibration —"):
+            sources.add_once("DCF Calibration Snapshot", _txt.replace("DCF calibration —", "").strip(), "valuation_engine", "inferred")
+    if _exit_line:
+        if _live_line:
+            console.print(f"  [dim]{_exit_line}  | {_live_line.replace('Live EV/EBITDA check: ', '')}[/dim]")
+        elif _multi_line:
+            console.print(f"  [dim]{_exit_line}  | {_multi_line.replace('Multiple cross-check: ', '')}[/dim]")
+        else:
+            console.print(f"  [dim]{_exit_line}[/dim]")
+    if debug:
+        _sanity_prefixes = (
+            "DCF calibration —",
+            "DCF implied terminal FCF yield:",
+            "Terminal value ",
+            "Multiple cross-check:",
+            "Normalized terminal multiple cross-check:",
+            "Live EV/EBITDA check:",
+        )
+        for _n in (result.notes or []):
+            _txt = str(_n)
+            if _txt.startswith(_sanity_prefixes):
+                console.print(f"  [dim]{_txt}[/dim]")
     if debug:
         for note in result.notes:
             console.print(f"  [dim]• {note}[/dim]")
@@ -2352,16 +2409,25 @@ def run_analysis(
         analysis.market.market_size = "Not available in quick mode"
         analysis.market.market_growth = "Not available in quick mode"
         analysis.market.market_segment = "Not available in quick mode"
+        analysis.market.data_status = "SKIPPED_QUICK_MODE"
         analysis.market.key_trends = []
     elif market_status == "DEGRADED":
+        analysis.market = _ensure_market_analysis_contract(analysis.market)
         if _text_missing(analysis.market.market_size):
             analysis.market.market_size = "Not available from current queries"
         if _text_missing(analysis.market.market_growth):
             analysis.market.market_growth = "Not available from current queries"
+        _source_backed = _has_source_backed_market_data(analysis.market)
+        if not _source_backed:
+            analysis.market.market_size = "Not available from current queries"
+            analysis.market.market_growth = "Not available from current queries"
         _has_seg = not _text_missing(analysis.market.market_segment)
         _has_comp = bool([c for c in (analysis.market.main_competitors or []) if getattr(c, "name", None)])
         _has_reg = any("regulat" in str(t).lower() or "policy" in str(t).lower() for t in (analysis.market.key_trends or []))
+        _missing_txt = ", ".join(analysis.market.missing_fields or []) or "none"
         analysis.market.market_segment = (
+            f"Data status: {analysis.market.data_status or 'PARTIAL'} | "
+            f"Missing: {_missing_txt} | "
             f"Segment trends: {'available' if _has_seg else 'unavailable'} | "
             f"Competitive landscape: {'available' if _has_comp else 'unavailable'} | "
             f"Regulatory context: {'available' if _has_reg else 'unavailable'}"
@@ -2372,17 +2438,19 @@ def run_analysis(
             _sec = (fund.sector or "").lower()
             if any(k in _sec for k in ("tech", "software", "technology", "communication")):
                 analysis.market.key_trends = [
-                    "Market Context (qualitative fallback, not source-backed): demand trend — mature smartphone category remains upgrade-cycle driven.",
-                    "Market Context (qualitative fallback, not source-backed): competitive trend — premium Android and China-local OEM pressure can affect share.",
-                    "Market Context (qualitative fallback, not source-backed): regulatory trend — App Store / DMA / DOJ platform-policy developments can affect monetization.",
-                    "Market Context (qualitative fallback, not source-backed): product trend — AI feature adoption and services monetization remain key drivers.",
+                    "Market Context — qualitative fallback (not source-backed).",
+                    "Demand trend: mature smartphone category remains upgrade-cycle driven.",
+                    "Competitive trend: premium Android and China-local OEM pressure can affect share.",
+                    "Regulatory trend: App Store / DMA / DOJ platform-policy developments can affect monetization.",
+                    "Product trend: AI feature adoption and services monetization remain key drivers.",
                 ]
             else:
                 analysis.market.key_trends = [
-                    "Market Context (qualitative fallback, not source-backed): demand trend — limited direct TAM datapoints; monitor category demand proxies.",
-                    "Market Context (qualitative fallback, not source-backed): competitive trend — incumbents and platform competitors remain active.",
-                    "Market Context (qualitative fallback, not source-backed): regulatory trend — policy and antitrust dynamics can affect monetization.",
-                    "Market Context (qualitative fallback, not source-backed): segment trend — mix-shift and category-level growth should be monitored.",
+                    "Market Context — qualitative fallback (not source-backed).",
+                    "Demand trend: limited direct TAM datapoints; monitor category demand proxies.",
+                    "Competitive trend: incumbents and platform competitors remain active.",
+                    "Regulatory trend: policy and antitrust dynamics can affect monetization.",
+                    "Segment trend: mix-shift and category-level growth should be monitored.",
                 ]
         else:
             analysis.market.key_trends = _usable_trends
@@ -2390,7 +2458,14 @@ def run_analysis(
         analysis.market.market_size = "Not available"
         analysis.market.market_growth = "Not available"
         analysis.market.market_segment = "Not available"
+        analysis.market.data_status = "FAILED"
         analysis.market.key_trends = []
+    if market_status != "SKIPPED_QUICK_MODE":
+        analysis.market = _ensure_market_analysis_contract(analysis.market)
+        _src_backed_market = _has_source_backed_market_data(analysis.market)
+        if (not _src_backed_market) and str(analysis.market.data_status or "").upper() != "COMPLETE":
+            analysis.market.market_size = "Not available from current queries"
+            analysis.market.market_growth = "Not available from current queries"
     _tam_v = analysis.market.market_size or "Not available"
     _mg_v = analysis.market.market_growth or "Not available"
     if market_status == "SKIPPED_QUICK_MODE":
@@ -2399,18 +2474,27 @@ def run_analysis(
     else:
         _tam_unavail = "not available" in str(_tam_v).lower()
         _mg_unavail = "not available" in str(_mg_v).lower()
-        _tam_conf = "unavailable" if _tam_unavail else "estimated"
-        _mg_conf = "unavailable" if _mg_unavail else "estimated"
+        _src_backed = _has_source_backed_market_data(analysis.market)
+        _tam_conf = "unavailable" if _tam_unavail else ("verified" if _src_backed else "estimated")
+        _mg_conf = "unavailable" if _mg_unavail else ("verified" if _src_backed else "estimated")
         sources.add_once(
             "TAM",
             _tam_v,
-            ("market_analysis_unavailable" if _tam_unavail else "market_analysis"),
+            (
+                "market_analysis_unavailable"
+                if _tam_unavail
+                else ("market_analysis_verified" if _tam_conf == "verified" else "market_analysis_estimate")
+            ),
             _tam_conf,
         )
         sources.add_once(
             "Market Growth",
             _mg_v,
-            ("market_analysis_unavailable" if _mg_unavail else "market_analysis"),
+            (
+                "market_analysis_unavailable"
+                if _mg_unavail
+                else ("market_analysis_verified" if _mg_conf == "verified" else "market_analysis_estimate")
+            ),
             _mg_conf,
         )
     analysis.sources_md = sources.to_markdown()
