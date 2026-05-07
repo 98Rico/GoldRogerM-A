@@ -1097,8 +1097,20 @@ def run_analysis(
     _market_source_backed = _has_source_backed_market_data(mkt)
     if (not quick_mode) and market_status == "OK" and (not _market_source_backed):
         market_status = "DEGRADED"
-    _research_source = "source_backed" if (market_status == "OK" and _market_source_backed) else "fallback"
-    _research_depth = "full" if _research_source == "source_backed" else "limited"
+    if market_status == "SKIPPED_QUICK_MODE":
+        _research_source = "skipped"
+        _research_depth = "none"
+    else:
+        _research_source = "source_backed" if (market_status == "OK" and _market_source_backed) else "fallback"
+        _research_depth = "full" if _research_source == "source_backed" else "limited"
+    if (not quick_mode) and _research_source == "fallback":
+        _ma_t = log.step_times.get("market_analysis")
+        if _ma_t is not None:
+            try:
+                _ma_txt = f"{float(_ma_t):.2f}s"
+            except Exception:
+                _ma_txt = f"{_ma_t}s"
+            console.print(f"  [dim]Market analysis attempted: {_ma_txt}; fallback used.[/dim]")
 
     # Post-process peer results (yfinance calls — sequential is fine)
     _peer_post_t0 = time.time()
@@ -1136,25 +1148,27 @@ def run_analysis(
                 and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
             )
             _self_ticker = (market_data.ticker or "").upper() if market_data else ""
-            _aapl_reserve = ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU", "INTC"]
+            _aapl_reserve_core = ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU"]
+            _aapl_reserve_full = _aapl_reserve_core + ["INTC"]
 
             # Core peer set from deterministic engine for BOTH quick and full.
             peer_tickers = [t for t in _deterministic_base if t and t != _self_ticker]
             if _self_ticker == "AAPL":
                 # Keep quick/full Apple fallback stable across runs.
-                peer_tickers = _aapl_reserve + [t for t in peer_tickers if t not in _aapl_reserve]
+                _base_reserve = _aapl_reserve_core if quick_mode else _aapl_reserve_full
+                peer_tickers = _base_reserve + [t for t in peer_tickers if t not in _base_reserve]
             # Optional full-mode enrichment: merge validated LLM candidates (no overwrite).
             if (not quick_mode) and peer_tickers_seed:
                 peer_tickers = list(dict.fromkeys(peer_tickers + [t for t in peer_tickers_seed if t and t != _self_ticker]))
             if _self_ticker == "AAPL" and len(peer_tickers) < 5:
                 # Peer-set stability guard: force-add reserve peers before valuation.
-                peer_tickers = list(dict.fromkeys(peer_tickers + _aapl_reserve))
+                peer_tickers = list(dict.fromkeys(peer_tickers + (_aapl_reserve_full if not quick_mode else _aapl_reserve_core)))
             if quick_mode:
                 # Keep quick mode fast and stable.
                 if _self_ticker == "AAPL":
-                    peer_tickers = [t for t in _aapl_reserve if t != _self_ticker]
+                    peer_tickers = [t for t in _aapl_reserve_core if t != _self_ticker]
                 else:
-                    peer_tickers = peer_tickers[:8]
+                    peer_tickers = peer_tickers[:6]
 
             sources.add_once(
                 "Peer Selection Policy",
@@ -1172,11 +1186,11 @@ def run_analysis(
                     target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
                     target_growth=(market_data.forward_revenue_growth if market_data else None),
                     min_market_cap_ratio=(0.05 if _is_mega_tech else 0.0),
-                    min_valuation_peers=((3 if quick_mode else 5) if _is_mega_tech else 3),
+                    min_valuation_peers=((5 if quick_mode and _self_ticker == "AAPL" else (3 if quick_mode else 5)) if _is_mega_tech else 3),
                     max_return_peers=(8 if quick_mode else 10),
                 )
                 if _self_ticker == "AAPL" and peer_multiples.n_valuation_peers < 5:
-                    _expanded = list(dict.fromkeys(peer_tickers + _aapl_reserve))
+                    _expanded = list(dict.fromkeys(peer_tickers + _aapl_reserve_full))
                     peer_multiples = build_peer_multiples(
                         _expanded,
                         target_sector=_target_sector,
@@ -1186,7 +1200,7 @@ def run_analysis(
                         target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
                         target_growth=(market_data.forward_revenue_growth if market_data else None),
                         min_market_cap_ratio=(0.05 if _is_mega_tech else 0.0),
-                        min_valuation_peers=((3 if quick_mode else 5) if _is_mega_tech else 3),
+                        min_valuation_peers=((5 if quick_mode and _self_ticker == "AAPL" else (3 if quick_mode else 5)) if _is_mega_tech else 3),
                         max_return_peers=(10 if quick_mode else 12),
                     )
                 # Log validation summary
@@ -2606,7 +2620,7 @@ def run_analysis(
         _usable_trends = [t for t in _existing_trends if not _trend_is_placeholder(t)]
         if not _source_backed:
             analysis.market.key_trends = [
-                "Market Context — fallback context only (not source-backed).",
+                "Fallback Market Context — not source-backed; used for thesis framing, not valuation inputs.",
                 "Demand trend: hardware demand remains replacement-cycle driven.",
                 "Platform/services trend: monetization remains a key valuation driver.",
                 "Regulatory trend: platform-policy and antitrust pressure remain material risks.",

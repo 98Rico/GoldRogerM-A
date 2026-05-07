@@ -370,16 +370,31 @@ def _metric_source_keys(metric: str) -> list[str]:
 
 
 def _infer_source_note(metric: str, value: str, src_map: dict[str, dict[str, str]]) -> str:
+    if metric == "Fair Value Range":
+        entry = src_map.get("Fair Value Range")
+        if entry:
+            src = entry["source"]
+            conf = entry["confidence"]
+            if src == "scenario_blended":
+                src = "valuation_bridge from blended valuation low/high"
+                conf = "inferred"
+            note = f"{metric}: {src} ({conf})"
+            if entry.get("url"):
+                note += f" — {entry['url']}"
+            return note
     for key in _metric_source_keys(metric):
         entry = src_map.get(key)
         if entry:
             if metric in {"Indicative midpoint", "Indicative value per share"}:
+                src = entry["source"]
                 conf = entry["confidence"]
+                if src == "valuation_bridge":
+                    src = "valuation_bridge from blended valuation mid"
                 if conf.lower() == "verified":
                     conf = "verified calculation, low-confidence input"
                 else:
                     conf = f"{conf} calculation, low-confidence input"
-                note = f"{metric}: {entry['source']} ({conf})"
+                note = f"{metric}: {src} ({conf})"
                 if entry.get("url"):
                     note += f" — {entry['url']}"
                 return note
@@ -557,10 +572,13 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         block += (
             "\n  Research source: " + (_r_src or "n/a")
             + " | Research depth: " + (_r_depth or "n/a")
-            + " | Market data source-backed: " + (_r_backed or "n/a")
+            + " | Market context source-backed: " + (_r_backed or "n/a")
         )
     if research_state == "PARTIAL_FALLBACK":
-        block += "\n  Full research unavailable; valuation is based on market data + deterministic peer set."
+        block += (
+            "\n  Full research unavailable; report generated from verified market data, "
+            "deterministic peer set, and conservative fallback thesis template."
+        )
     reason = str(pipeline_status.get("confidence_reason", "") or "").strip()
     return block, reason
 
@@ -665,11 +683,6 @@ def print_result(result, debug: bool = False):
     if _pipeline_status:
         _status_block, _status_reason = _render_pipeline_status_block(_pipeline_status)
         console.print(_status_block)
-        if (
-            str(_pipeline_status.get("research_source", "")).strip().lower() == "fallback"
-            and str(_pipeline_status.get("research_enrichment", "")).upper() != "SKIPPED_QUICK_MODE"
-        ):
-            console.print("[dim]Full research unavailable; report generated using fallback research template.[/dim]")
         if _status_reason:
             console.print(f"[dim]Why low confidence: {_status_reason}[/dim]")
         _ms_plain = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")) or "N/A")
@@ -776,6 +789,12 @@ def print_result(result, debug: bool = False):
         console.print(
             f"[dim]Bridge:[/] EV {_ev_bridge}{_tag_ev}{_nd_txt} = Equity {_eq_bridge}{_tag_eq} "
             f"→ / Shares {_sh_bridge}{_tag_sh} = {_tp_bridge_label} {_tp_bridge_show}{_tag_tp}"
+        )
+    _mcap_val = src_map.get("Market Cap", {}).get("value")
+    if (not _is_inconclusive) and _mcap_val and _eq_bridge:
+        console.print(
+            f"[dim]Market cap: {_mcap_val} | Model equity value: {_eq_bridge} | "
+            f"Model-implied upside/downside: {v.upside_downside or 'N/A'}[/dim]"
         )
 
     # KPIs

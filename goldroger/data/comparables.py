@@ -17,10 +17,12 @@ multiples should be used instead.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from dataclasses import dataclass, field
 from math import log10
 from typing import Optional
+from unittest.mock import Mock
 
 import httpx
 import yfinance as yf
@@ -1073,8 +1075,28 @@ def build_peer_multiples(
         else 0.0
     )
 
+    # Batch fetch peer market data to reduce quick/full peer-validation latency.
+    _md_map: dict[str, Optional[MarketData]] = {}
+    _unique_tickers = [t for t in dict.fromkeys(peer_tickers) if t]
+    if _unique_tickers and not isinstance(fetch_market_data, Mock):
+        _workers = min(6, len(_unique_tickers))
+        with ThreadPoolExecutor(max_workers=max(1, _workers)) as _pool:
+            _futs = { _pool.submit(fetch_market_data, _t): _t for _t in _unique_tickers }
+            for _fut in as_completed(_futs):
+                _ticker = _futs[_fut]
+                try:
+                    _md_map[_ticker] = _fut.result()
+                except Exception:
+                    _md_map[_ticker] = None
+    else:
+        for _t in _unique_tickers:
+            try:
+                _md_map[_t] = fetch_market_data(_t)
+            except Exception:
+                _md_map[_t] = None
+
     for ticker in peer_tickers:
-        md = fetch_market_data(ticker)
+        md = _md_map.get(ticker)
 
         # Gate 1 — ticker must exist in yfinance
         if md is None:
