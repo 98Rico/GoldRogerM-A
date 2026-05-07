@@ -969,7 +969,7 @@ def run_analysis(
                     min_similarity=(0.40 if _is_mega_tech else 0.0),
                     target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
                     target_growth=(market_data.forward_revenue_growth if market_data else None),
-                    min_market_cap_ratio=(0.04 if _is_mega_tech else 0.0),
+                    min_market_cap_ratio=(0.05 if _is_mega_tech else 0.0),
                     min_valuation_peers=((3 if quick_mode else 5) if _is_mega_tech else 3),
                     max_return_peers=(8 if quick_mode else 10),
                 )
@@ -988,15 +988,23 @@ def run_analysis(
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
                 if peer_multiples.n_valuation_peers > 0:
+                    _eff_req = 3.0 if quick_mode else 5.0
                     if peers_status in {"FAILED", "TIMEOUT"}:
                         peers_status = "DEGRADED"
                     if peers_status == "OK" and peer_multiples.n_valuation_peers < 5:
+                        peers_status = "DEGRADED"
+                    if peers_status == "OK" and peer_multiples.effective_peer_count and peer_multiples.effective_peer_count < _eff_req:
                         peers_status = "DEGRADED"
                     if _is_mega_tech and peer_multiples.n_valuation_peers < 5:
                         console.print(
                             f"  [yellow]Peer set expanded (adjacent/global stages used): "
                             f"{peer_multiples.n_valuation_peers} valuation peers "
                             f"({peer_multiples.n_qualitative_peers} qualitative); confidence reduced.[/yellow]"
+                        )
+                    if peer_multiples.effective_peer_count:
+                        console.print(
+                            f"  [dim]Effective peer count: {peer_multiples.effective_peer_count:.2f}"
+                            f" (target ≥{_eff_req:.0f} for {'quick' if quick_mode else 'full'} mode)[/dim]"
                         )
                     _show_n = min(6, peer_multiples.n_peers)
                     _shown = ", ".join(p.ticker for p in peer_multiples.peers[:_show_n])
@@ -1028,9 +1036,17 @@ def run_analysis(
                             _mcap_txt = f"{_mcap_b:.1f}B" if _mcap_b is not None else "N/A"
                             console.print(
                                 f"  [dim]Peer {_p.ticker}: EV/EBITDA={_p.ev_ebitda:.1f}x "
-                                f"MCap={_mcap_txt} (similarity {_sim:.2f}, role={_p.role or 'n/a'})[/dim]"
+                                f"MCap={_mcap_txt} (similarity {_sim:.2f}, "
+                                f"business {float(_p.business_similarity or 0.0):.2f}, "
+                                f"scale {float(_p.scale_similarity or 0.0):.2f}, "
+                                f"role={_p.role or 'n/a'})[/dim]"
                                 if _p.ev_ebitda
-                                else f"  [dim]Peer {_p.ticker}: MCap={_mcap_txt} similarity {_sim:.2f} role={_p.role or 'n/a'}[/dim]"
+                                else (
+                                    f"  [dim]Peer {_p.ticker}: MCap={_mcap_txt} similarity {_sim:.2f} "
+                                    f"business {float(_p.business_similarity or 0.0):.2f} "
+                                    f"scale {float(_p.scale_similarity or 0.0):.2f} "
+                                    f"role={_p.role or 'n/a'}[/dim]"
+                                )
                             )
                         sources.add_once(
                             f"Peer {_p.ticker} Similarity",
@@ -1068,7 +1084,7 @@ def run_analysis(
                         sources.add_once(
                             "Peer EV/EBITDA applied",
                             f"{_app:.1f}x",
-                            "valuation_policy",
+                            "weighted_validated_peers",
                             "verified",
                         )
                     for _p in peer_multiples.peers[:8]:
@@ -1098,6 +1114,8 @@ def run_analysis(
                                 ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
                                 revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
                                 similarity=f"{(p.similarity or 0):.2f}",
+                                business_similarity=f"{(p.business_similarity or 0):.2f}",
+                                scale_similarity=f"{(p.scale_similarity or 0):.2f}",
                                 weight=f"{(p.weight or 0):.2f}",
                                 include_reason=p.include_reason,
                             )
@@ -1193,6 +1211,7 @@ def run_analysis(
         and market_data.market_cap > _mega_cap_usd_m
     )
     _peer_count = peer_multiples.n_valuation_peers if peer_multiples else 0
+    _effective_peer_count = float(peer_multiples.effective_peer_count) if peer_multiples else 0.0
     if _is_mega_cap_quality and _peer_count < 1:
         if quality.score > 75:
             quality.score = 75
@@ -1213,6 +1232,13 @@ def run_analysis(
             quality.tier = "C"
         quality.warnings.append(
             "Public mega-cap peer set is weak (<5 validated peers) — confidence reduced."
+        )
+    if _is_mega_cap_quality and _effective_peer_count > 0 and _effective_peer_count < (3.0 if quick_mode else 5.0):
+        if quality.score > 66:
+            quality.score = 66
+            quality.tier = "C"
+        quality.warnings.append(
+            f"Low effective peer diversification ({_effective_peer_count:.2f}) — confidence reduced."
         )
     _core_quality_score = quality.score
     console.print(
@@ -1240,18 +1266,24 @@ def run_analysis(
         and market_data.market_cap > _mega_cap_usd_m
     )
     assumptions_dict["peer_count"] = _peer_count
+    _eff_peer_count = float(peer_multiples.effective_peer_count) if peer_multiples else 0.0
+    assumptions_dict["effective_peer_count"] = _eff_peer_count
+    assumptions_dict["quick_mode"] = bool(quick_mode)
     assumptions_dict["insufficient_comps"] = bool(
         _is_mega_cap and _peer_count < 1
     )
     assumptions_dict["low_confidence_comps"] = bool(
-        _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_valuation_peers < 5
+        _is_mega_cap and peer_multiples and (
+            (3 <= peer_multiples.n_valuation_peers < 5)
+            or (peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < (3.0 if quick_mode else 5.0))
+        )
     )
     assumptions_dict["mega_cap_tech"] = bool(
         _is_mega_cap and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
     )
     _peer_quality = "weak"
     if peer_multiples and peer_multiples.peers:
-        _valuation_only = [p for p in peer_multiples.peers if p.ev_ebitda is not None]
+        _valuation_only = [p for p in peer_multiples.peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
         _sim_vals = [float(p.similarity or 0.0) for p in _valuation_only]
         _avg_sim = (sum(_sim_vals) / len(_sim_vals)) if _sim_vals else 0.0
         _total_w = sum(float(p.weight or 0.0) for p in _valuation_only)
@@ -1261,9 +1293,9 @@ def run_analysis(
             if (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}
         )
         _semi_share = (_semi_w / _total_w) if _total_w > 0 else 0.0
-        if peer_multiples.n_valuation_peers >= 8 and _avg_sim >= 0.75 and _semi_share <= 0.25:
+        if peer_multiples.n_valuation_peers >= 8 and _avg_sim >= 0.75 and _semi_share <= 0.20 and _eff_peer_count >= (3.0 if quick_mode else 5.0):
             _peer_quality = "strong"
-        elif peer_multiples.n_valuation_peers >= 5 and _avg_sim >= 0.65 and _semi_share <= 0.30:
+        elif peer_multiples.n_valuation_peers >= 5 and _avg_sim >= 0.65 and _semi_share <= 0.25 and _eff_peer_count >= (3.0 if quick_mode else 5.0):
             _peer_quality = "normal"
         elif peer_multiples.n_valuation_peers >= 3:
             _peer_quality = "mixed"
@@ -1271,9 +1303,12 @@ def run_analysis(
             _peer_quality = "weak"
         assumptions_dict["peer_avg_similarity"] = _avg_sim
         assumptions_dict["peer_semi_weight_share"] = _semi_share
+        assumptions_dict["effective_peer_count"] = _eff_peer_count
         sources.add_once("Peer Quality", _peer_quality, "peer_quality_model", "inferred")
         sources.add_once("Peer Avg Similarity", f"{_avg_sim:.2f}", "peer_quality_model", "inferred")
         sources.add_once("Peer Semi Weight Share", f"{_semi_share:.1%}", "peer_quality_model", "inferred")
+        if _eff_peer_count > 0:
+            sources.add_once("Effective Peer Count", f"{_eff_peer_count:.2f}", "peer_quality_model", "inferred")
     assumptions_dict["peer_quality"] = _peer_quality
     if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
         assumptions_dict["ev_ebitda_range"] = [
@@ -1454,7 +1489,11 @@ def run_analysis(
     _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
     if peer_multiples and peer_multiples.n_valuation_peers < 3:
         _low_conviction = True
+    if peer_multiples and peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < (3.0 if quick_mode else 5.0):
+        _low_conviction = True
     if _is_mega_cap and peer_multiples and 3 <= peer_multiples.n_valuation_peers < 5:
+        _low_conviction = True
+    if _model_signal.startswith("SELL") and (_raw_rec or "").upper() == "HOLD":
         _low_conviction = True
     if company_type == "private" and result.has_revenue and blended_ev and _rev_float and _rev_float > 0:
         _entry_ev_rev = blended_ev / _rev_float
@@ -2029,6 +2068,8 @@ def run_analysis(
     _confidence_reasons: list[str] = []
     if peer_multiples and peer_multiples.n_valuation_peers < (3 if quick_mode else 5):
         _confidence_reasons.append("weak valuation peer count")
+    if peer_multiples and peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < (3.0 if quick_mode else 5.0):
+        _confidence_reasons.append("low effective peer diversification")
     if valuation_status == "DEGRADED":
         _confidence_reasons.append("high DCF/comps dispersion or method disagreement")
     if _dcf_sanity_fail:
@@ -2093,6 +2134,7 @@ def run_analysis(
                 "model_signal_detail": _model_signal,
                 "recommendation": _rec,
                 "dcf_status": _dcf_status,
+                "effective_peer_count": (round(_eff_peer_count, 2) if _eff_peer_count > 0 else None),
                 "confidence": (
                     "Low"
                     if (

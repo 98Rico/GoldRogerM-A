@@ -510,6 +510,7 @@ def print_result(result):
     # Header
     _is_inconclusive = (v.recommendation or "").upper().startswith("INCONCLUSIVE")
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow", "INCONCLUSIVE": "magenta"}.get((v.recommendation or "").split(" ")[0], "white")
+    _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
     console.print()
     _target_display = "N/A" if _is_inconclusive else (v.target_price or v.implied_value)
     _fv_range = _source_value("Fair Value Range")
@@ -528,6 +529,8 @@ def print_result(result):
         if _fv_range and v.target_price and not _is_inconclusive
         else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
     )
+    if (not _is_inconclusive) and _pipeline_status.get("confidence"):
+        _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
     console.print(Panel(
         f"[bold]{f.company_name}[/] | {f.sector} | {f.headquarters}\n"
         f"{f.description}\n\n"
@@ -537,7 +540,6 @@ def print_result(result):
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
     ))
-    _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
     _dq = (getattr(result, "data_quality", {}) or {})
     if _pipeline_status:
         console.print(
@@ -551,6 +553,7 @@ def print_result(result):
             f"  Model signal: {_pipeline_status.get('model_signal_detail', _pipeline_status.get('model_signal', 'N/A'))}\n"
             f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
             f"  DCF status: {_pipeline_status.get('dcf_status', 'N/A')}\n"
+            f"  Effective peers: {_pipeline_status.get('effective_peer_count', 'N/A')}\n"
             f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}\n"
             f"  Confidence reason: {_pipeline_status.get('confidence_reason', 'N/A')}"
         )
@@ -624,6 +627,8 @@ def print_result(result):
         peer_table.add_column("MCap")
         peer_table.add_column("EV/EBITDA")
         peer_table.add_column("Similarity")
+        peer_table.add_column("Business Sim")
+        peer_table.add_column("Scale Sim")
         peer_table.add_column("Weight")
         peer_table.add_column("Include Reason")
         for p in result.peer_comps.peers:
@@ -635,6 +640,8 @@ def print_result(result):
                 p.market_cap or "—",
                 p.ev_ebitda or "—",
                 p.similarity or "—",
+                p.business_similarity or "—",
+                p.scale_similarity or "—",
                 p.weight or "—",
                 p.include_reason or "—",
             )

@@ -124,6 +124,8 @@ class PeerData:
     role: Optional[str] = None
     include_reason: Optional[str] = None
     similarity: Optional[float] = None
+    business_similarity: Optional[float] = None
+    scale_similarity: Optional[float] = None
     weight: Optional[float] = None
 
 
@@ -150,6 +152,7 @@ class PeerMultiples:
     n_peers: int = 0
     n_valuation_peers: int = 0
     n_qualitative_peers: int = 0
+    effective_peer_count: float = 0.0
     source: str = "yfinance_peers"
 
     # Validation metadata — useful for CLI output and debugging
@@ -238,6 +241,56 @@ def _similarity_score(target_mcap: float | None, peer_mcap: float | None, target
             union = len(tset | pset)
             sector_score = (inter / union) if union else 0.4
     return max(0.0, min(1.0, 0.65 * size_score + 0.35 * sector_score))
+
+
+def _scale_similarity(target_mcap: float | None, peer_mcap: float | None) -> float:
+    if not target_mcap or not peer_mcap or target_mcap <= 0 or peer_mcap <= 0:
+        return 0.40
+    ratio = max(target_mcap, peer_mcap) / min(target_mcap, peer_mcap)
+    if ratio <= 1.5:
+        return 1.00
+    if ratio <= 3.0:
+        return 0.85
+    if ratio <= 6.0:
+        return 0.65
+    if ratio <= 10.0:
+        return 0.45
+    if ratio <= 20.0:
+        return 0.25
+    return 0.10
+
+
+def _business_similarity(
+    target_sector: str,
+    peer_sector: str,
+    target_margin: float | None,
+    peer_margin: float | None,
+    target_growth: float | None,
+    peer_growth: float | None,
+    profile: str,
+    bucket: str,
+) -> float:
+    ts = (target_sector or "").lower()
+    ps = (peer_sector or "").lower()
+    industry_match = 1.0 if ts == ps and ts else (0.75 if _sectors_compatible(ts, ps) else 0.20)
+    sector_match = 1.0 if _sectors_compatible(ts, ps) else 0.10
+    bucket_fit = _bucket_similarity_factor(profile, bucket)
+    if target_margin is not None and peer_margin is not None:
+        margin_similarity = max(0.0, 1.0 - min(abs(target_margin - peer_margin) / 0.25, 1.0))
+    else:
+        margin_similarity = 0.5
+    if target_growth is not None and peer_growth is not None:
+        growth_similarity = max(0.0, 1.0 - min(abs(target_growth - peer_growth) / 0.30, 1.0))
+    else:
+        growth_similarity = 0.5
+    score = (
+        0.35 * industry_match
+        + 0.25 * sector_match
+        + 0.25 * bucket_fit
+        + 0.10 * margin_similarity
+        + 0.05 * growth_similarity
+    )
+    return max(0.0, min(1.0, score))
 
 
 def _econ_similarity(
@@ -537,7 +590,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
         # Ensure software/platform floor for ecosystem profiles.
         if profile in {"premium_device_platform", "consumer_hardware_ecosystem"}:
             ps = target.get("software_services_platform", 0.0)
-            if ps < 0.35:
+            if ("software_services_platform" in active) and ps < 0.35:
                 need = 0.35 - ps
                 donors = [b for b in ("semiconductors", "semiconductor_equipment", "networking_infrastructure", "other_adjacent_tech", "consumer_hardware_ecosystem") if target.get(b, 0.0) > 0.0]
                 for d in donors:
@@ -551,7 +604,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
                     if need <= 1e-6:
                         break
             ch = target.get("consumer_hardware_ecosystem", 0.0)
-            if ch < 0.25:
+            if ("consumer_hardware_ecosystem" in active) and ch < 0.25:
                 need = 0.25 - ch
                 donors = [b for b in ("software_services_platform", "networking_infrastructure", "other_adjacent_tech", "semiconductors", "semiconductor_equipment") if target.get(b, 0.0) > 0.0]
                 for d in donors:
@@ -567,7 +620,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
         # Ensure software floor for software-services profiles.
         if profile == "software_services_ecosystem":
             soft = target.get("software_services_platform", 0.0)
-            if soft < 0.35:
+            if ("software_services_platform" in active) and soft < 0.35:
                 need = 0.35 - soft
                 donors = [b for b in ("semiconductors", "semiconductor_equipment", "networking_infrastructure", "other_adjacent_tech", "consumer_hardware_ecosystem") if target.get(b, 0.0) > 0.0]
                 for d in donors:
@@ -886,6 +939,12 @@ def build_peer_multiples(
     n_no_data = n_sector = n_sanity = n_scale = n_bucket = 0
     excluded: list[str] = []
     profile = _target_profile(target_sector, target_industry)
+    _is_mega_target = bool(target_market_cap and target_market_cap > 500_000.0)
+    _mega_valuation_floor = (
+        max(100_000.0, (target_market_cap or 0.0) * 0.05)
+        if _is_mega_target
+        else 0.0
+    )
 
     for ticker in peer_tickers:
         md = fetch_market_data(ticker)
@@ -925,25 +984,32 @@ def build_peer_multiples(
             excluded.append(f"{ticker}: invalid multiples")
             continue
 
-        _sim = _econ_similarity(
-            target_sector=target_sector,
-            peer_sector=md.sector or "",
-            target_mcap=target_market_cap,
-            peer_mcap=md.market_cap,
-            target_margin=target_ebitda_margin,
-            peer_margin=md.ebitda_margin,
-            target_growth=target_growth,
-            peer_growth=(md.forward_revenue_growth or md.revenue_growth_yoy),
-        )
         _industry = ""
         if isinstance(md.additional_metadata, dict):
             _industry = str(md.additional_metadata.get("industry") or "")
         _bucket = _classify_peer_bucket(md.sector or "", _industry, md.company_name or "")
+        _business_sim = _business_similarity(
+            target_sector=target_sector,
+            peer_sector=md.sector or "",
+            target_margin=target_ebitda_margin,
+            peer_margin=md.ebitda_margin,
+            target_growth=target_growth,
+            peer_growth=(md.forward_revenue_growth or md.revenue_growth_yoy),
+            profile=profile,
+            bucket=_bucket,
+        )
+        _scale_sim = _scale_similarity(target_market_cap, md.market_cap)
+        _sim = max(0.0, min(1.0, (0.75 * _business_sim) + (0.25 * _scale_sim)))
         _b_weight = _bucket_weight_for_profile(profile, _bucket)
-        _sim = _sim * _bucket_similarity_factor(profile, _bucket)
 
         # Gate 2b — scale compatibility with bucket-aware floor for mega-cap targets.
         _scale_fail = False
+        _below_mega_valuation_floor = bool(
+            _is_mega_target
+            and md.market_cap
+            and md.market_cap > 0
+            and md.market_cap < _mega_valuation_floor
+        )
         if (
             min_market_cap_ratio > 0
             and target_market_cap
@@ -958,6 +1024,11 @@ def build_peer_multiples(
                 n_scale += 1
                 excluded.append(f"{ticker}: below market-cap floor")
                 _scale_fail = True
+        if _below_mega_valuation_floor and not _scale_fail:
+            n_scale += 1
+            excluded.append(
+                f"{ticker}: below mega-cap valuation floor (${_mega_valuation_floor/1000:.0f}B)"
+            )
 
         # Outlier cap for adjacent semiconductors in Apple-like profiles.
         _outlier_capped = False
@@ -972,6 +1043,10 @@ def build_peer_multiples(
 
         _role = _peer_role(profile, _bucket, ev_ebitda)
         _stage = _relaxation_stage(profile, _bucket)
+        _valuation_scale_ok = not _below_mega_valuation_floor
+        if _below_mega_valuation_floor:
+            # For mega-caps, tiny peers may remain qualitative context but cannot drive valuation.
+            _role = "qualitative peer only"
         if _role == "core valuation peer":
             _sim_floor = max(min_similarity, 0.45)
         elif _role == "adjacent valuation peer":
@@ -987,8 +1062,17 @@ def build_peer_multiples(
             include_reason = "adjacent: business-model/size fit"
         elif _role == "qualitative peer only":
             include_reason = "qualitative only: EV/EBITDA unavailable"
+        if _below_mega_valuation_floor:
+            include_reason = (
+                f"qualitative only: below mega-cap valuation floor "
+                f"(${_mega_valuation_floor/1000:.0f}B)"
+            )
         if _outlier_capped:
             include_reason += " (outlier EV/EBITDA capped)"
+        _data_quality = 1.0 if ev_ebitda is not None else 0.0
+        _weight_raw = _business_sim * _scale_sim * _data_quality * _b_weight
+        if not _valuation_scale_ok:
+            _weight_raw = 0.0
         _candidate = PeerData(
             name=md.company_name,
             ticker=ticker,
@@ -1004,7 +1088,9 @@ def build_peer_multiples(
             role=_role,
             include_reason=include_reason,
             similarity=_sim,
-            weight=max(_sim * _b_weight, 0.01) if ev_ebitda is not None else 0.0,
+            business_similarity=_business_sim,
+            scale_similarity=_scale_sim,
+            weight=max(_weight_raw, 0.0),
         )
 
         # Keep strict acceptance first; stage-based relaxation can add more peers later.
@@ -1037,23 +1123,28 @@ def build_peer_multiples(
 
     # Controlled relaxation to avoid over-filtering:
     # 1) same archetype, 2) software/platform, 3) consumer hardware, 4) adjacent tech, 5) semis.
-    _valuation_peers = [p for p in peers if p.ev_ebitda is not None]
+    _valuation_peers = [p for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
     if len(_valuation_peers) < max(1, min_valuation_peers):
         for _, cand, why in sorted(relaxation_pool, key=lambda x: (x[0], -(x[1].similarity or 0.0))):
             if any(p.ticker == cand.ticker for p in peers):
                 continue
             peers.append(cand)
             excluded.append(f"{cand.ticker}: re-included by {why}")
-            _valuation_peers = [p for p in peers if p.ev_ebitda is not None]
+            _valuation_peers = [p for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
             if len(_valuation_peers) >= max(1, min_valuation_peers):
                 break
 
     peers = _normalize_bucket_weights(peers, profile)
     # Peers without EV/EBITDA are qualitative only (zero valuation weight).
     for p in peers:
-        if p.ev_ebitda is None:
+        if p.ev_ebitda is None or (p.weight or 0.0) <= 0.0:
             p.weight = 0.0
             p.role = "qualitative peer only"
+    _valuation_weight_sum = sum((p.weight or 0.0) for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0)
+    if _valuation_weight_sum > 0:
+        for p in peers:
+            if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0:
+                p.weight = float(p.weight or 0.0) / _valuation_weight_sum
     peers = sorted(peers, key=lambda p: (p.weight or 0.0), reverse=True)
     if max_return_peers and max_return_peers > 0 and len(peers) > max_return_peers:
         dropped = peers[max_return_peers:]
@@ -1061,8 +1152,14 @@ def build_peer_multiples(
         excluded.extend([f"{p.ticker}: trimmed to top-{max_return_peers} peer target" for p in dropped])
         peers = _normalize_bucket_weights(peers, profile)
         for p in peers:
-            if p.ev_ebitda is None:
+            if p.ev_ebitda is None or (p.weight or 0.0) <= 0.0:
                 p.weight = 0.0
+                p.role = "qualitative peer only"
+        _valuation_weight_sum = sum((p.weight or 0.0) for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0)
+        if _valuation_weight_sum > 0:
+            for p in peers:
+                if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0:
+                    p.weight = float(p.weight or 0.0) / _valuation_weight_sum
         peers = sorted(peers, key=lambda p: (p.weight or 0.0), reverse=True)
 
     # No validated peers.
@@ -1078,10 +1175,10 @@ def build_peer_multiples(
             source="sector_fallback",
         )
 
-    ev_ebitdas_raw = [p.ev_ebitda for p in peers if p.ev_ebitda is not None]
-    ev_ebitda_w = [p.weight or 1.0 for p in peers if p.ev_ebitda is not None]
-    ev_revenues_raw = [p.ev_revenue for p in peers if p.ev_revenue]
-    ev_revenue_w = [p.weight or 1.0 for p in peers if p.ev_revenue]
+    ev_ebitdas_raw = [p.ev_ebitda for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
+    ev_ebitda_w = [p.weight or 1.0 for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
+    ev_revenues_raw = [p.ev_revenue for p in peers if p.ev_revenue and (p.weight or 0.0) > 0.0]
+    ev_revenue_w = [p.weight or 1.0 for p in peers if p.ev_revenue and (p.weight or 0.0) > 0.0]
     ev_ebitdas = _winsorize(ev_ebitdas_raw)
     ev_revenues = _winsorize(ev_revenues_raw)
     pes = [p.pe_ratio for p in peers if p.pe_ratio]
@@ -1122,8 +1219,13 @@ def build_peer_multiples(
             or _median(ev_revenues)
         )
 
-    _n_valuation = len([p for p in peers if p.ev_ebitda is not None])
-    _n_qual = len([p for p in peers if p.ev_ebitda is None])
+    _n_valuation = len([p for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0])
+    _n_qual = len([p for p in peers if p.ev_ebitda is None or (p.weight or 0.0) <= 0.0])
+    _effective_peer_count = 0.0
+    if ev_ebitda_w:
+        _w_sum_sq = sum((float(w) ** 2) for w in ev_ebitda_w if w and w > 0)
+        if _w_sum_sq > 0:
+            _effective_peer_count = 1.0 / _w_sum_sq
 
     return PeerMultiples(
         peers=peers,
@@ -1141,6 +1243,7 @@ def build_peer_multiples(
         n_peers=len(peers),
         n_valuation_peers=_n_valuation,
         n_qualitative_peers=_n_qual,
+        effective_peer_count=_effective_peer_count,
         n_dropped_no_data=n_no_data,
         n_dropped_sector=n_sector,
         n_dropped_sanity=n_sanity,

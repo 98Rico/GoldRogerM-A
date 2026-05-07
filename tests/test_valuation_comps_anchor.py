@@ -224,3 +224,26 @@ def test_high_dispersion_caps_comps_weight_for_mega_cap():
     )
     assert out.weights_used["comps"] <= 0.35
     assert any("High pre-blend DCF/comps dispersion" in n for n in out.notes)
+
+
+def test_low_effective_peer_count_caps_comps_weight_aggressively():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 4,
+            "effective_peer_count": 2.2,
+            "quick_mode": True,
+            "peer_quality": "mixed",
+            "ev_ebitda_range": [18.0, 24.0],
+            "ev_ebitda_median": 20.0,
+            "ev_ebitda_weighted": 20.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert out.weights_used["comps"] <= 0.15
+    assert any("Weak peer diversification guardrail" in n for n in out.notes)

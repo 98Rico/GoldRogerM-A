@@ -94,6 +94,8 @@ class PeerComp(Model):
     ebitda_margin: Optional[str] = None
     revenue_growth: Optional[str] = None
     similarity: Optional[str] = None
+    business_similarity: Optional[str] = None
+    scale_similarity: Optional[str] = None
     weight: Optional[str] = None
     include_reason: Optional[str] = None
 

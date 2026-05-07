@@ -199,6 +199,27 @@ def test_cisco_like_name_classifies_as_networking_not_semiconductors():
     assert bucket == "networking_infrastructure"
 
 
+def test_mega_cap_floor_forces_tiny_peer_to_qualitative_only():
+    peers = [
+        _md("MEGA1", "Technology", ev_ebitda=24.0, market_cap=3_000_000.0, industry="Software - Infrastructure"),
+        _md("SMALL1", "Technology", ev_ebitda=18.0, market_cap=5_000.0, industry="Consumer Electronics"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["MEGA1", "SMALL1"],
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+            target_market_cap=4_000_000.0,
+            min_market_cap_ratio=0.05,
+            min_valuation_peers=1,
+        )
+    small = [p for p in result.peers if p.ticker == "SMALL1"]
+    if small:
+        assert small[0].role == "qualitative peer only"
+        assert (small[0].weight or 0.0) == 0.0
+    assert all(p.ticker != "SMALL1" or (p.weight or 0.0) == 0.0 for p in result.peers)
+
+
 # ── resolve_peer_tickers ──────────────────────────────────────────────────────
 
 def test_resolve_with_ticker_provided():

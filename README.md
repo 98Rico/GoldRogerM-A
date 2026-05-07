@@ -567,3 +567,9 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ DCF status surfacing — valuation now logs explicit `DCF Status` (`normal` vs `conservative / degraded`) for downstream pipeline confidence display
 ✔ Stronger model-signal separation — downside worse than -30% now maps to `SELL / NEGATIVE VALUATION SIGNAL` while final recommendation can remain capped by confidence guardrails
 ✔ Stale product-cycle phrasing guardrail — thesis/catalyst sanitizer now rewrites version-locked labels (`iPhone N`, `iOS N`, `macOS N`) into current-cycle generic wording when unsourced
+✔ Scale-aware mega-cap peer floor — valuation peers for mega-cap targets now require `max($100B, 5% of target market cap)`; subscale names are qualitative-only
+✔ Split peer similarity dimensions — peer diagnostics now track both `business_similarity` and `scale_similarity` (not only blended similarity)
+✔ Effective peer diversification control — added `effective_peer_count` and weak-diversification guardrails that cap comps influence (down to 15% in weak quick-mode sets)
+✔ Tiny-peer dominance prevention — small niche peers can no longer carry valuation weights in Apple-like mega-cap runs even when business tags match
+✔ Valuation reliability surfacing — CLI header now prints valuation reliability and effective peer count alongside DCF status/model signal
+✔ Additional regressions — tests now cover mega-cap floor qualitative-only behavior and aggressive comps-cap behavior under low effective peer count

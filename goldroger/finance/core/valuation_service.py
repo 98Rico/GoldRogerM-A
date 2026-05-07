@@ -293,6 +293,8 @@ class ValuationService:
         comps_field_sources: dict = {}
         insufficient_comps = bool(assumptions.get("insufficient_comps"))
         peer_count = int(assumptions.get("peer_count") or 0)
+        effective_peer_count = float(assumptions.get("effective_peer_count") or 0.0)
+        quick_mode = bool(assumptions.get("quick_mode"))
         if use_financial_path:
             comps_output, tx_output = self._financial_comps(
                 market_data, sector_m, notes
@@ -329,9 +331,12 @@ class ValuationService:
             )
         if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
             peer_quality = str(assumptions.get("peer_quality") or "normal").lower()
+            eff_threshold = 3.0 if quick_mode else 5.0
+            weak_effective_peers = bool(effective_peer_count > 0 and effective_peer_count < eff_threshold)
             low_conf_peer_set = bool(
                 assumptions.get("low_confidence_comps")
                 or peer_quality in {"weak", "mixed"}
+                or weak_effective_peers
             )
             if insufficient_comps:
                 weights = {"dcf": 1.0, "comps": 0.0, "transactions": 0.0}
@@ -361,6 +366,23 @@ class ValuationService:
                 notes.append(
                     f"Mega-cap peer-quality weighting ({peer_quality}): "
                     f"DCF {weights['dcf']:.0%} / Comps {weights['comps']:.0%}."
+                )
+            if effective_peer_count > 0:
+                notes.append(
+                    f"Effective peer count: {effective_peer_count:.2f} "
+                    f"(target ≥{eff_threshold:.0f} in {'quick' if quick_mode else 'full'} mode)."
+                )
+                _cap = 0.15 if effective_peer_count < 3.0 else 0.25
+            if weak_effective_peers and weights.get("comps", 0.0) > _cap:
+                _old = float(weights.get("comps", 0.0))
+                _shift = _old - _cap
+                weights = {
+                    "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
+                    "comps": _cap,
+                    "transactions": float(weights.get("transactions", 0.0)),
+                }
+                notes.append(
+                    f"Weak peer diversification guardrail: capped comps weight {_old:.0%}→{_cap:.0%}."
                 )
             if low_conf_peer_set and weights.get("comps", 0.0) > 0.35:
                 _old = float(weights.get("comps", 0.0))
@@ -463,6 +485,14 @@ class ValuationService:
                 )
                 if assumptions.get("low_confidence_comps") or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}:
                     notes.append("Peer multiple comparison is low-confidence reference due to degraded peer set.")
+                if _delta > 30 and (
+                    assumptions.get("low_confidence_comps")
+                    or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}
+                    or (effective_peer_count > 0 and effective_peer_count < (3.0 if quick_mode else 5.0))
+                ):
+                    notes.append(
+                        "Applied peer multiple may be unreliable: materially below live multiple while peer set is degraded."
+                    )
                 elif _delta >= 0:
                     notes.append(
                         "Premium rationale to test: margin durability, FCF conversion, and balance-sheet quality."
