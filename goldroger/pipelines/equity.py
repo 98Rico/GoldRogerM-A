@@ -831,7 +831,7 @@ def run_analysis(
         return result, status
 
     def _do_peers():
-        _t = _step("Peer Comparables")
+        _t = _step("Peer Selection")
         if quick_mode:
             try:
                 tickers = find_peers_deterministic_quick(
@@ -847,7 +847,7 @@ def run_analysis(
                 result = ({"mode": "quick_deterministic", "tickers": tickers}, None)
             except Exception as e:
                 result = (None, e)
-            _finish_step("Peer Comparables", _t, _cancel_peers, "peers")
+            _finish_step("Peer Selection", _t, _cancel_peers, "peer_selection")
             return result
         if cli_mode:
             # Interactive CLI policy: deterministic peer core first, no LLM discovery latency.
@@ -865,7 +865,7 @@ def run_analysis(
                 result = ({"mode": "quick_deterministic", "tickers": tickers}, None)
             except Exception as e:
                 result = (None, e)
-            _finish_step("Peer Comparables", _t, _cancel_peers, "peers")
+            _finish_step("Peer Selection", _t, _cancel_peers, "peer_selection")
             return result
         try:
             raw = peer_agent.run(company, company_type, {
@@ -898,7 +898,7 @@ def run_analysis(
             result = ({"mode": "quick_deterministic", "tickers": _fallback}, e)
         except Exception as e:
             result = (None, e)
-        _finish_step("Peer Comparables", _t, _cancel_peers, "peers")
+        _finish_step("Peer Selection", _t, _cancel_peers, "peer_selection")
         return result
 
     def _do_financials():
@@ -1133,15 +1133,22 @@ def run_analysis(
                 and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
             )
             _self_ticker = (market_data.ticker or "").upper() if market_data else ""
+            _aapl_reserve = ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU", "INTC"]
 
             # Core peer set from deterministic engine for BOTH quick and full.
             peer_tickers = [t for t in _deterministic_base if t and t != _self_ticker]
+            if _self_ticker == "AAPL":
+                # Keep quick/full Apple fallback stable across runs.
+                peer_tickers = _aapl_reserve + [t for t in peer_tickers if t not in _aapl_reserve]
             # Optional full-mode enrichment: merge validated LLM candidates (no overwrite).
             if (not quick_mode) and peer_tickers_seed:
                 peer_tickers = list(dict.fromkeys(peer_tickers + [t for t in peer_tickers_seed if t and t != _self_ticker]))
+            if _self_ticker == "AAPL" and len(peer_tickers) < 5:
+                # Peer-set stability guard: force-add reserve peers before valuation.
+                peer_tickers = list(dict.fromkeys(peer_tickers + _aapl_reserve))
             if quick_mode:
                 # Keep quick mode fast: trim candidate fetch set before yfinance validation loop.
-                peer_tickers = peer_tickers[:8]
+                peer_tickers = peer_tickers[:12]
 
             sources.add_once(
                 "Peer Selection Policy",
@@ -1162,6 +1169,20 @@ def run_analysis(
                     min_valuation_peers=((3 if quick_mode else 5) if _is_mega_tech else 3),
                     max_return_peers=(8 if quick_mode else 10),
                 )
+                if _self_ticker == "AAPL" and peer_multiples.n_valuation_peers < 5:
+                    _expanded = list(dict.fromkeys(peer_tickers + _aapl_reserve))
+                    peer_multiples = build_peer_multiples(
+                        _expanded,
+                        target_sector=_target_sector,
+                        target_industry=_target_industry,
+                        target_market_cap=(market_data.market_cap if market_data else None),
+                        min_similarity=0.30,
+                        target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
+                        target_growth=(market_data.forward_revenue_growth if market_data else None),
+                        min_market_cap_ratio=(0.05 if _is_mega_tech else 0.0),
+                        min_valuation_peers=((3 if quick_mode else 5) if _is_mega_tech else 3),
+                        max_return_peers=(10 if quick_mode else 12),
+                    )
                 # Log validation summary
                 drops: list[str] = []
                 if peer_multiples.n_dropped_no_data:
@@ -1363,8 +1384,9 @@ def run_analysis(
         peers_status = "OK_ADJACENT"
     _peer_post_elapsed = round(time.time() - _peer_post_t0, 2)
     try:
-        _peer_base = float(log.step_times.get("peers") or 0.0)
-        log.step_times["peers"] = round(_peer_base + _peer_post_elapsed, 2)
+        _peer_sel = float(log.step_times.get("peer_selection") or 0.0)
+        log.step_times["peer_validation"] = _peer_post_elapsed
+        log.step_times["peers"] = round(_peer_sel + _peer_post_elapsed, 2)
     except Exception:
         pass
 
@@ -1706,10 +1728,14 @@ def run_analysis(
     if result.has_revenue and rec.upside_pct is not None:
         if rec.upside_pct <= -0.30:
             _model_signal = "SELL / NEGATIVE VALUATION SIGNAL"
-        elif rec.upside_pct >= 0.20:
-            _model_signal = "BUY / POSITIVE VALUATION SIGNAL"
-        elif -0.25 <= rec.upside_pct <= -0.10 and (_raw_rec or "").upper() == "HOLD":
+        elif -0.30 < rec.upside_pct <= -0.15:
             _model_signal = "HOLD / NEGATIVE BIAS"
+        elif -0.15 < rec.upside_pct < 0.15:
+            _model_signal = "HOLD"
+        elif 0.15 <= rec.upside_pct < 0.30:
+            _model_signal = "BUY / POSITIVE BIAS"
+        elif rec.upside_pct >= 0.30:
+            _model_signal = "BUY / POSITIVE VALUATION SIGNAL"
     _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
     if peer_multiples and peer_multiples.n_valuation_peers < 3:
         _low_conviction = True
@@ -2464,6 +2490,8 @@ def run_analysis(
                 "market_data": log.step_times.get("market_data"),
                 "fundamentals": log.step_times.get("fundamentals"),
                 "market_analysis": log.step_times.get("market_analysis"),
+                "peer_selection": log.step_times.get("peer_selection"),
+                "peer_validation": log.step_times.get("peer_validation"),
                 "peers": log.step_times.get("peers"),
                 "financials": log.step_times.get("financials"),
                 "valuation": log.step_times.get("valuation"),

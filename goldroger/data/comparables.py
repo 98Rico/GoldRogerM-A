@@ -548,9 +548,9 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
     # Enforce semiconductor cap for Apple-like profiles.
     if profile in {"premium_device_platform", "consumer_hardware_ecosystem", "software_services_ecosystem", "general_tech"}:
         if profile == "premium_device_platform":
-            semi_cap = 0.20
+            semi_cap = 0.35
         elif profile == "consumer_hardware_ecosystem":
-            semi_cap = 0.20
+            semi_cap = 0.35
         else:
             semi_cap = 0.30
         semi_w = target.get("semiconductors", 0.0) + target.get("semiconductor_equipment", 0.0)
@@ -573,7 +573,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
                     target[b] = target.get(b, 0.0) + excess * (max(target.get(b, 0.0), 0.01) / denom)
         # Software/platform max cap for Apple-like profile.
         if profile in {"premium_device_platform", "consumer_hardware_ecosystem"}:
-            soft_cap = 0.45
+            soft_cap = 0.55
             soft_w = target.get("software_services_platform", 0.0)
             if soft_w > soft_cap:
                 excess = soft_w - soft_cap
@@ -592,7 +592,7 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
         # Networking cap for Apple-like ecosystem profiles so a single networking peer
         # cannot dominate weights when consumer-hardware peers are sparse.
         if profile in {"premium_device_platform", "consumer_hardware_ecosystem"}:
-            net_cap = 0.15
+            net_cap = 0.20
             net_w = target.get("networking_infrastructure", 0.0)
             if ("networking_infrastructure" in active) and net_w > net_cap:
                 excess = net_w - net_cap
@@ -653,6 +653,37 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
                     need -= take
                     if need <= 1e-6:
                         break
+        # Re-apply bucket caps after floor adjustments to avoid rebound above caps.
+        if profile in {"premium_device_platform", "consumer_hardware_ecosystem"}:
+            _caps = {
+                "software_services_platform": 0.55,
+                "networking_infrastructure": 0.20,
+            }
+            # combined semis cap
+            _semi_cap = 0.35
+            _semi_sum = target.get("semiconductors", 0.0) + target.get("semiconductor_equipment", 0.0)
+            if _semi_sum > _semi_cap:
+                _ex = _semi_sum - _semi_cap
+                s0 = target.get("semiconductors", 0.0)
+                se0 = target.get("semiconductor_equipment", 0.0)
+                _den = max(s0 + se0, 1e-9)
+                target["semiconductors"] = _semi_cap * (s0 / _den)
+                target["semiconductor_equipment"] = _semi_cap * (se0 / _den)
+                _recips = [b for b in ("software_services_platform", "consumer_hardware_ecosystem", "networking_infrastructure", "other_adjacent_tech") if b in active]
+                if _recips:
+                    _den2 = sum(max(target.get(b, 0.0), 0.01) for b in _recips)
+                    for b in _recips:
+                        target[b] = target.get(b, 0.0) + _ex * (max(target.get(b, 0.0), 0.01) / _den2)
+            for _bucket, _cap in _caps.items():
+                _w = target.get(_bucket, 0.0)
+                if (_bucket in active) and _w > _cap:
+                    _ex = _w - _cap
+                    target[_bucket] = _cap
+                    _recips = [b for b in ("consumer_hardware_ecosystem", "software_services_platform", "other_adjacent_tech", "semiconductors", "semiconductor_equipment", "networking_infrastructure") if b in active and b != _bucket]
+                    if _recips:
+                        _den2 = sum(max(target.get(b, 0.0), 0.01) for b in _recips)
+                        for b in _recips:
+                            target[b] = target.get(b, 0.0) + _ex * (max(target.get(b, 0.0), 0.01) / _den2)
 
     # Normalize final bucket targets.
     t_sum = sum(v for v in target.values() if v > 0)
@@ -673,6 +704,68 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
         denom = sum(max(p.weight or 0.0, 0.001) for p in arr)
         for p in arr:
             p.weight = bw * (max(p.weight or 0.0, 0.001) / denom)
+    return peers
+
+
+def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerData]:
+    """Apply per-peer caps to prevent concentration in adjacent-heavy sets."""
+    vals = [p for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
+    if not vals:
+        return peers
+
+    single_cap = 0.35 if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} else 0.50
+    semi_cap = 0.15 if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} else None
+    network_cap = 0.20 if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} else None
+
+    excess = 0.0
+    for p in vals:
+        cap = single_cap
+        if network_cap is not None and (p.bucket or "") == "networking_infrastructure":
+            cap = min(cap, network_cap)
+        if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
+            cap = min(cap, semi_cap)
+        w = float(p.weight or 0.0)
+        if w > cap:
+            excess += (w - cap)
+            p.weight = cap
+
+    if excess <= 0:
+        return peers
+
+    recipients: list[PeerData] = []
+    for p in vals:
+        cap = single_cap
+        if network_cap is not None and (p.bucket or "") == "networking_infrastructure":
+            cap = min(cap, network_cap)
+        if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
+            cap = min(cap, semi_cap)
+        if float(p.weight or 0.0) + 1e-9 < cap:
+            recipients.append(p)
+    if not recipients:
+        return peers
+
+    room = 0.0
+    for p in recipients:
+        p_cap = single_cap
+        if network_cap is not None and (p.bucket or "") == "networking_infrastructure":
+            p_cap = min(p_cap, network_cap)
+        if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
+            p_cap = min(p_cap, semi_cap)
+        room += max(0.0, p_cap - float(p.weight or 0.0))
+    if room <= 0:
+        return peers
+
+    for p in recipients:
+        p_cap = single_cap
+        if network_cap is not None and (p.bucket or "") == "networking_infrastructure":
+            p_cap = min(p_cap, network_cap)
+        if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
+            p_cap = min(p_cap, semi_cap)
+        p_room = max(0.0, p_cap - float(p.weight or 0.0))
+        if p_room <= 0:
+            continue
+        add = excess * (p_room / room)
+        p.weight = float(p.weight or 0.0) + add
     return peers
 
 
@@ -758,10 +851,11 @@ def find_peers_deterministic_quick(
     if target_md is None:
         return []
 
+    self_ticker = (target_md.ticker or "").upper().strip()
     meta = target_md.additional_metadata if isinstance(target_md.additional_metadata, dict) else {}
     sector_key = str(meta.get("sector_key") or "").strip()
     industry_key = str(meta.get("industry_key") or "").strip()
-    cache_key = f"quick_peers:{sector_key}:{industry_key}:{target_sector}:{target_industry}"
+    cache_key = f"quick_peers:{self_ticker}:{sector_key}:{industry_key}:{target_sector}:{target_industry}"
     cached = peer_universe_cache.get(cache_key)
     if cached is not None:
         return list(cached)
@@ -833,8 +927,17 @@ def find_peers_deterministic_quick(
         candidates.extend(_search_yahoo_tickers("semiconductor infrastructure mega cap equities", limit=8))
 
     # Deduplicate, remove self ticker, and cap.
-    self_ticker = (target_md.ticker or "").upper().strip()
     out = [t for t in dict.fromkeys(candidates) if t and t != self_ticker]
+
+    # Stability guard for Apple quick/full fallback:
+    # keep a deterministic reserve to avoid collapsing into a 3-name high-beta basket.
+    if self_ticker == "AAPL":
+        reserve = ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU", "INTC"]
+        if len(out) < 5:
+            out = reserve + out
+        else:
+            out = reserve + [t for t in out if t not in reserve]
+        out = [t for t in dict.fromkeys(out) if t and t != self_ticker]
     out = out[:max(8, target_peers)]
     peer_universe_cache.set(cache_key, out)
     return out
@@ -1176,6 +1279,7 @@ def build_peer_multiples(
         for p in peers:
             if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0:
                 p.weight = float(p.weight or 0.0) / _valuation_weight_sum
+    peers = _apply_peer_weight_caps(peers, profile)
     peers = sorted(peers, key=lambda p: (p.weight or 0.0), reverse=True)
     if max_return_peers and max_return_peers > 0 and len(peers) > max_return_peers:
         dropped = peers[max_return_peers:]
@@ -1191,6 +1295,7 @@ def build_peer_multiples(
             for p in peers:
                 if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0:
                     p.weight = float(p.weight or 0.0) / _valuation_weight_sum
+        peers = _apply_peer_weight_caps(peers, profile)
         peers = sorted(peers, key=lambda p: (p.weight or 0.0), reverse=True)
 
     # No validated peers.

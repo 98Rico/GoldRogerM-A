@@ -698,7 +698,22 @@ def print_result(result, debug: bool = False):
     _timings = (getattr(result, "data_quality", {}) or {}).get("timings_s", {})
     if _timings:
         _known = 0.0
-        for _k in ("market_data", "fundamentals", "market_analysis", "peers", "financials", "valuation", "thesis"):
+        _known_keys = [
+            "market_data",
+            "fundamentals",
+            "market_analysis",
+            "peer_selection",
+            "peer_validation",
+            "financials",
+            "valuation",
+            "thesis",
+        ]
+        if (
+            _timings.get("peer_selection") in {None, "N/A"}
+            and _timings.get("peer_validation") in {None, "N/A"}
+        ):
+            _known_keys.append("peers")
+        for _k in _known_keys:
             try:
                 _known += float(_timings.get(_k) or 0.0)
             except Exception:
@@ -714,6 +729,8 @@ def print_result(result, debug: bool = False):
             f"  Market data: {_timings.get('market_data', 'N/A')}s\n"
             f"  Fundamentals: {_timings.get('fundamentals', 'N/A')}s\n"
             f"  Market analysis: {_timings.get('market_analysis', 'N/A')}s\n"
+            f"  Peer selection: {_timings.get('peer_selection', 'N/A')}s\n"
+            f"  Peer validation: {_timings.get('peer_validation', 'N/A')}s\n"
             f"  Peers: {_timings.get('peers', 'N/A')}s\n"
             f"  Financials: {_timings.get('financials', 'N/A')}s\n"
             f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"

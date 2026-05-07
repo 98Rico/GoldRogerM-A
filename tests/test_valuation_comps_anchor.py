@@ -246,8 +246,32 @@ def test_low_effective_peer_count_caps_comps_weight_aggressively():
         market_data=market_data,
         sector="Technology",
     )
-    assert out.weights_used["comps"] <= 0.15
-    assert any("Weak peer diversification guardrail" in n for n in out.notes)
+    assert out.weights_used["comps"] <= 0.25
+
+
+def test_degraded_peer_set_caps_comps_high_case():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "peer_count": 3,
+            "effective_peer_count": 2.8,
+            "quick_mode": True,
+            "peer_quality": "mixed",
+            "ev_ebitda_range": [18.0, 45.0],
+            "ev_ebitda_median": 28.0,
+            "ev_ebitda_weighted": 28.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert out.comps is not None
+    assert out.comps.high <= (out.comps.mid * 1.25) + 1e-6
+    assert out.weights_used["comps"] <= 0.25
+    assert any("Degraded-peer high-case cap" in n for n in out.notes)
 
 
 def test_mega_cap_dcf_cross_checks_and_status_tiering():

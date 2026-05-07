@@ -2,6 +2,7 @@
 from unittest.mock import patch
 from goldroger.data.comparables import (
     build_peer_multiples,
+    find_peers_deterministic_quick,
     resolve_peer_tickers,
     parse_peer_agent_output,
     _sectors_compatible,
@@ -10,6 +11,7 @@ from goldroger.data.comparables import (
     MIN_VALID_PEERS,
 )
 from goldroger.data.fetcher import MarketData
+from goldroger.utils.cache import peer_universe_cache
 
 
 def _md(
@@ -241,7 +243,99 @@ def test_networking_bucket_is_capped_for_premium_device_profile():
         for p in result.peers
         if p.bucket == "networking_infrastructure" and p.ev_ebitda is not None
     )
-    assert net_weight <= 0.151
+    assert net_weight <= 0.201
+
+
+def test_apple_quick_deterministic_reserve_peer_floor():
+    peer_universe_cache.clear()
+    md = _md(
+        "AAPL",
+        "Technology",
+        ev_ebitda=26.0,
+        market_cap=4_200_000.0,
+        industry="Consumer Electronics",
+    )
+    with patch("goldroger.data.comparables._search_yahoo_tickers", return_value=[]), \
+         patch("goldroger.data.comparables.yf.Industry", side_effect=Exception("no net")), \
+         patch("goldroger.data.comparables.yf.Sector", side_effect=Exception("no net")):
+        peers = find_peers_deterministic_quick(
+            target_md=md,
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+            target_peers=12,
+        )
+    assert len(peers) >= 6
+    assert peers[:6] == ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU"]
+
+
+def test_deterministic_peer_cache_is_ticker_scoped():
+    peer_universe_cache.clear()
+    aapl = _md(
+        "AAPL",
+        "Technology",
+        ev_ebitda=26.0,
+        market_cap=4_200_000.0,
+        industry="Consumer Electronics",
+    )
+    msft = _md(
+        "MSFT",
+        "Technology",
+        ev_ebitda=17.0,
+        market_cap=3_200_000.0,
+        industry="Software - Infrastructure",
+    )
+    with patch("goldroger.data.comparables._search_yahoo_tickers", return_value=[]), \
+         patch("goldroger.data.comparables.yf.Industry", side_effect=Exception("no net")), \
+         patch("goldroger.data.comparables.yf.Sector", side_effect=Exception("no net")):
+        aapl_peers = find_peers_deterministic_quick(
+            target_md=aapl,
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+            target_peers=12,
+        )
+        msft_peers = find_peers_deterministic_quick(
+            target_md=msft,
+            target_sector="Technology",
+            target_industry="Software - Infrastructure",
+            target_peers=12,
+        )
+    assert aapl_peers[:3] == ["MSFT", "ORCL", "CSCO"]
+    assert msft_peers != aapl_peers
+
+
+def test_apple_like_semiconductor_weight_share_and_single_peer_cap():
+    peers = [
+        _md("MSFT", "Technology", ev_ebitda=17.0, market_cap=3_000_000.0, industry="Software - Infrastructure"),
+        _md("ORCL", "Technology", ev_ebitda=25.0, market_cap=560_000.0, industry="Software - Infrastructure"),
+        _md("CSCO", "Technology", ev_ebitda=23.0, market_cap=360_000.0, industry="Communication Equipment"),
+        _md("NVDA", "Technology", ev_ebitda=55.0, market_cap=5_000_000.0, industry="Semiconductors"),
+        _md("AVGO", "Technology", ev_ebitda=42.0, market_cap=2_000_000.0, industry="Semiconductors"),
+        _md("MU", "Technology", ev_ebitda=20.0, market_cap=740_000.0, industry="Semiconductors"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU"],
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+            target_market_cap=4_200_000.0,
+            min_market_cap_ratio=0.05,
+            min_valuation_peers=5,
+        )
+    semi_weight = sum(
+        float(p.weight or 0.0)
+        for p in result.peers
+        if (p.bucket or "") in {"semiconductors", "semiconductor_equipment"} and p.ev_ebitda is not None
+    )
+    max_semi_peer = max(
+        (
+            float(p.weight or 0.0)
+            for p in result.peers
+            if (p.bucket or "") in {"semiconductors", "semiconductor_equipment"} and p.ev_ebitda is not None
+        ),
+        default=0.0,
+    )
+    assert semi_weight <= 0.351
+    assert max_semi_peer <= 0.151
 
 
 def test_premium_device_platform_labels_software_peer_as_adjacent():

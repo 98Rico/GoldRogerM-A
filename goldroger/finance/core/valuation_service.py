@@ -396,6 +396,30 @@ class ValuationService:
             )
             valuation_path = "ev_ebitda"
         field_sources.update(comps_field_sources)
+        _mega_cap_usd_m_for_cap = _cfg.lbo.mega_cap_skip_usd_bn * 1000
+        _is_mega_cap_for_cap = bool(
+            market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m_for_cap
+        )
+        if (
+            _is_mega_cap_for_cap
+            and comps_output
+            and comps_output.mid > 0
+            and comps_output.high > 0
+            and effective_peer_count > 0
+            and effective_peer_count < 3.5
+        ):
+            _old_high = float(comps_output.high)
+            _cap_high = min(_old_high, float(comps_output.mid) * 1.25)
+            if _cap_high < _old_high:
+                comps_output = CompsOutput(
+                    low=comps_output.low,
+                    mid=comps_output.mid,
+                    high=_cap_high,
+                )
+                notes.append(
+                    f"Degraded-peer high-case cap: comps high {_old_high:.0f}→{_cap_high:.0f} "
+                    "(effective peers <3.5)."
+                )
 
         # ── 5. Blended EV ─────────────────────────────────────────────────
         weights = assumptions.get("weights") or compute_valuation_weights(
@@ -455,7 +479,7 @@ class ValuationService:
                     f"Effective peer count: {effective_peer_count:.2f} "
                     f"(target ≥{eff_threshold:.0f} in {'quick' if quick_mode else 'full'} mode)."
                 )
-                _cap = 0.15 if effective_peer_count < 3.0 else 0.25
+                _cap = 0.25 if effective_peer_count < 3.5 else 0.30
             if weak_effective_peers and weights.get("comps", 0.0) > _cap:
                 _old = float(weights.get("comps", 0.0))
                 _shift = _old - _cap
