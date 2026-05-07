@@ -550,6 +550,7 @@ def print_result(result):
             f"  Thesis: {_pipeline_status.get('thesis', 'N/A')}\n"
             f"  Model signal: {_pipeline_status.get('model_signal_detail', _pipeline_status.get('model_signal', 'N/A'))}\n"
             f"  Recommendation: {_pipeline_status.get('recommendation', 'N/A')}\n"
+            f"  DCF status: {_pipeline_status.get('dcf_status', 'N/A')}\n"
             f"  Confidence: {_pipeline_status.get('confidence', 'N/A')}\n"
             f"  Confidence reason: {_pipeline_status.get('confidence_reason', 'N/A')}"
         )
@@ -649,7 +650,7 @@ def print_result(result):
         val_table.add_column("Weight")
         for method in v.methods:
             if method.name.startswith("Trading Comps"):
-                source_metric = "EV/EBITDA (peer median)"
+                source_metric = "EV/EBITDA (peer applied)"
             elif method.name.startswith("Transaction Comps"):
                 source_metric = "Transaction Comps"
             elif method.name == "DCF":

@@ -281,6 +281,11 @@ class ValuationService:
                     notes.append(f"Projected FCF CAGR: {_fcf_cagr:.1%}.")
         except Exception:
             pass
+        field_sources["DCF Status"] = (
+            ("conservative / degraded" if dcf_conservative else "normal"),
+            "valuation_engine",
+            "inferred",
+        )
 
         # ── 4. Comps & transactions ───────────────────────────────────────
         ebitda = revenue_current * ebitda_margin
@@ -674,7 +679,7 @@ class ValuationService:
                     )
                 comps_field_sources["EV/EBITDA (peer applied)"] = (
                     f"{ev_ebitda_mid:.1f}x",
-                    "valuation_policy",
+                    "weighted_validated_peers",
                     "verified",
                 )
                 notes.append(

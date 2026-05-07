@@ -560,3 +560,10 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Peer-bucket integrity fix — removed stale `semiconductors_infrastructure` dependency in peer-quality scoring; split semiconductor buckets now evaluate correctly
 ✔ Source-confidence semantics expansion — `sources.md` now renders explicit `unavailable` and `skipped` confidence states with dedicated legend entries
 ✔ Regression coverage for this pass — added tests for Cisco networking bucket classification and high-dispersion comps-weight capping behavior
+✔ Apple archetype strengthening — added `premium_device_platform` profile to better represent hardware+services ecosystem valuation behavior
+✔ Hardware/ecosystem peer broadening — deterministic peer discovery now adds consumer-electronics and premium device/platform category expansions for Apple-like mega-caps
+✔ Lower semiconductor influence for Apple-like targets — aggregate semiconductor + semiconductor-equipment bucket cap reduced to 20%
+✔ Comps provenance clarity — trading-comps method now references `EV/EBITDA (peer applied)` from `weighted_validated_peers`
+✔ DCF status surfacing — valuation now logs explicit `DCF Status` (`normal` vs `conservative / degraded`) for downstream pipeline confidence display
+✔ Stronger model-signal separation — downside worse than -30% now maps to `SELL / NEGATIVE VALUATION SIGNAL` while final recommendation can remain capped by confidence guardrails
+✔ Stale product-cycle phrasing guardrail — thesis/catalyst sanitizer now rewrites version-locked labels (`iPhone N`, `iOS N`, `macOS N`) into current-cycle generic wording when unsourced

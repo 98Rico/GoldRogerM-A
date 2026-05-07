@@ -172,10 +172,37 @@ def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> li
             txt = f"Recent event context: {txt}"
         # Avoid stale product-cycle naming when date provenance is weak.
         txt = _re.sub(r"\biPhone\s*\d+\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
+        txt = _re.sub(r"\biOS\s*\d+\b", "next major iOS release", txt, flags=_re.IGNORECASE)
+        txt = _re.sub(r"\bmacOS\s*\d+\b", "next major macOS release", txt, flags=_re.IGNORECASE)
         txt = _re.sub(r"\bcurrent iPhone cycle\s+cycle\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
         txt = _re.sub(r"\bcycle\s+cycle\b", "cycle", txt, flags=_re.IGNORECASE)
         out.append(txt)
     return out
+
+
+def _sanitize_thesis_language(text: str) -> str:
+    txt = str(text or "")
+    if not txt:
+        return txt
+    # Avoid stale/version-locked product labeling unless explicitly sourced.
+    txt = _re.sub(r"\biPhone\s*\d+\b", "current iPhone cycle", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"\biOS\s*\d+\b", "next major iOS release", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"\bmacOS\s*\d+\b", "next major macOS release", txt, flags=_re.IGNORECASE)
+    # Soften overly specific unsourced phrasing.
+    txt = _re.sub(
+        r"\b30%\s+App\s*Store\s+commission(?:\s+structure)?\b",
+        "App Store monetization model",
+        txt,
+        flags=_re.IGNORECASE,
+    )
+    txt = _re.sub(
+        r"\bAI-enhanced\s+current iPhone cycle\s+cycle\b",
+        "AI-enabled current iPhone cycle",
+        txt,
+        flags=_re.IGNORECASE,
+    )
+    txt = _re.sub(r"\bcycle\s+cycle\b", "cycle", txt, flags=_re.IGNORECASE)
+    return txt
 
 
 def _text_missing(v) -> bool:
@@ -1417,13 +1444,13 @@ def run_analysis(
     _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
     _model_signal = _raw_rec
-    if (
-        result.has_revenue
-        and rec.upside_pct is not None
-        and -0.25 <= rec.upside_pct <= -0.10
-        and (_raw_rec or "").upper() == "HOLD"
-    ):
-        _model_signal = "HOLD / NEGATIVE BIAS"
+    if result.has_revenue and rec.upside_pct is not None:
+        if rec.upside_pct <= -0.30:
+            _model_signal = "SELL / NEGATIVE VALUATION SIGNAL"
+        elif rec.upside_pct >= 0.20:
+            _model_signal = "BUY / POSITIVE VALUATION SIGNAL"
+        elif -0.25 <= rec.upside_pct <= -0.10 and (_raw_rec or "").upper() == "HOLD":
+            _model_signal = "HOLD / NEGATIVE BIAS"
     _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
     if peer_multiples and peer_multiples.n_valuation_peers < 3:
         _low_conviction = True
@@ -1519,6 +1546,7 @@ def run_analysis(
         "DCF implied exit EV/EBITDA:",
         "DCF implied terminal FCF yield:",
         "Terminal value ",
+        "Live EV/EBITDA check:",
     )
     for _n in (result.notes or []):
         _txt = str(_n)
@@ -1883,6 +1911,12 @@ def run_analysis(
         log.end_step("thesis", t0)
         _done("Investment Thesis", t0)
 
+    if thesis:
+        thesis.thesis = _sanitize_thesis_language(thesis.thesis or "")
+        thesis.bull_case = _sanitize_thesis_language(thesis.bull_case or "")
+        thesis.base_case = _sanitize_thesis_language(thesis.base_case or "")
+        thesis.bear_case = _sanitize_thesis_language(thesis.bear_case or "")
+
     if football_field and thesis:
         if football_field.bear and thesis.bear_case:
             football_field.bear.narrative = thesis.bear_case[:200]
@@ -2003,6 +2037,12 @@ def run_analysis(
         _confidence_reasons.append("limited market context")
     if thesis_status in {"FAILED", "TIMEOUT"}:
         _confidence_reasons.append("thesis generation degraded")
+    _dcf_status = "normal"
+    _dcf_src = result.field_sources.get("DCF Status")
+    if _dcf_src and _dcf_src[0]:
+        _dcf_status = str(_dcf_src[0])
+    elif _dcf_sanity_fail:
+        _dcf_status = "conservative / degraded"
 
     analysis = AnalysisResult(
         company=company,
@@ -2052,6 +2092,7 @@ def run_analysis(
                 "model_signal": _raw_rec,
                 "model_signal_detail": _model_signal,
                 "recommendation": _rec,
+                "dcf_status": _dcf_status,
                 "confidence": (
                     "Low"
                     if (
