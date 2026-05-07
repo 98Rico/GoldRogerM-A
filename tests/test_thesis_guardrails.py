@@ -1,4 +1,5 @@
 from goldroger.pipelines.equity import (
+    _build_fallback_thesis,
     _sanitize_catalysts,
     _trend_is_placeholder,
     _soften_unsourced_scenario_specificity,
@@ -37,3 +38,14 @@ def test_soften_unsourced_scenario_specificity():
     out = _soften_unsourced_scenario_specificity(raw)
     assert "10-12% CAGR" not in out
     assert "38-40%" not in out
+
+
+def test_fallback_thesis_is_conservative_and_non_numeric():
+    th = _build_fallback_thesis(
+        company="AAPL",
+        sector="Technology",
+        recommendation="HOLD / LOW CONVICTION",
+        reason="research fallback mode",
+    )
+    assert "%" not in (th.thesis or "")
+    assert "CAGR" not in (th.thesis or "")

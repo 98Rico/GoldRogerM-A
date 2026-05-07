@@ -837,7 +837,25 @@ def run_analysis(
                 result = ({"mode": "quick_deterministic", "tickers": tickers}, None)
             except Exception as e:
                 result = (None, e)
-            _finish_step("Peer Comparables", _t, _cancel_peers)
+            _finish_step("Peer Comparables", _t, _cancel_peers, "peers")
+            return result
+        if cli_mode:
+            # Interactive CLI policy: deterministic peer core first, no LLM discovery latency.
+            try:
+                tickers = find_peers_deterministic_quick(
+                    target_md=market_data,
+                    target_sector=fund.sector or "",
+                    target_industry=(
+                        str((market_data.additional_metadata or {}).get("industry") or "")
+                        if market_data and isinstance(market_data.additional_metadata, dict)
+                        else ""
+                    ),
+                    target_peers=16,
+                )
+                result = ({"mode": "quick_deterministic", "tickers": tickers}, None)
+            except Exception as e:
+                result = (None, e)
+            _finish_step("Peer Comparables", _t, _cancel_peers, "peers")
             return result
         try:
             raw = peer_agent.run(company, company_type, {
@@ -870,7 +888,7 @@ def run_analysis(
             result = ({"mode": "quick_deterministic", "tickers": _fallback}, e)
         except Exception as e:
             result = (None, e)
-        _finish_step("Peer Comparables", _t, _cancel_peers)
+        _finish_step("Peer Comparables", _t, _cancel_peers, "peers")
         return result
 
     def _do_financials():
@@ -1057,9 +1075,17 @@ def run_analysis(
         fin.net_margin = "Not available [no verified source]"
 
     _parallel_elapsed = time.time() - _parallel_t0
-    console.print(
-        f"  [dim]Parallel agents: {_parallel_elapsed:.1f}s (≈3× faster than sequential)[/dim]"
-    )
+    if debug:
+        console.print(
+            f"  [dim]Parallel agents: {_parallel_elapsed:.1f}s (≈3× faster than sequential)[/dim]"
+        )
+    else:
+        console.print(f"  [dim]Research agents completed in {_parallel_elapsed:.1f}s[/dim]")
+    _market_source_backed = _has_source_backed_market_data(mkt)
+    if (not quick_mode) and market_status == "OK" and (not _market_source_backed):
+        market_status = "DEGRADED"
+    _research_source = "source_backed" if (market_status == "OK" and _market_source_backed) else "fallback"
+    _research_depth = "full" if _research_source == "source_backed" else "limited"
 
     # Post-process peer results (yfinance calls — sequential is fine)
     # target_sector comes from Fundamentals agent output for sector validation
@@ -1178,12 +1204,13 @@ def run_analysis(
                         if _is_mega_tech and _consumer_cnt < 1:
                             _missing_consumer_ecosystem_bucket = True
                             console.print(
-                                "  [yellow]Consumer hardware ecosystem peers limited; "
-                                "valuation relies on adjacent software/platform and infrastructure peers.[/yellow]"
+                                "  [yellow]Apple-like mega-cap consumer-hardware peers are limited; "
+                                "peer set is an adjacent reference set (platform/infrastructure), "
+                                "not a pure comparable set.[/yellow]"
                             )
                             sources.add_once(
                                 "Peer Bucket Coverage",
-                                "Consumer hardware ecosystem peers unavailable; adjacent peers used",
+                                "Consumer-hardware ecosystem peers limited at mega-cap scale; adjacent reference peers used",
                                 "peer_policy",
                                 "inferred",
                             )
@@ -2054,6 +2081,20 @@ def run_analysis(
         )
         log.end_step("thesis", t0)
         _done("Investment Thesis", t0)
+    elif cli_mode and _research_source != "source_backed":
+        thesis_status = "DEGRADED"
+        console.print(
+            "  [yellow]Research is fallback/partial; using conservative thesis template (no unsourced specifics).[/yellow]"
+        )
+        thesis = _build_fallback_thesis(
+            company=company,
+            sector=fund.sector or "",
+            recommendation=val.recommendation or "HOLD",
+            reason="research fallback mode (source-backed market context unavailable)",
+        )
+        thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
+        log.end_step("thesis", t0)
+        _done("Investment Thesis", t0)
     elif (time.time() - _run_started) > _total_budget_s:
         thesis_status = "TIMEOUT"
         console.print(
@@ -2388,11 +2429,15 @@ def run_analysis(
                     if _confidence_reasons
                     else "valuation inputs and enrichment are consistent"
                 ),
+                "research_source": _research_source,
+                "research_depth": _research_depth,
+                "market_data_source_backed": "yes" if _market_source_backed else "no",
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),
                 "fundamentals": log.step_times.get("fundamentals"),
                 "market_analysis": log.step_times.get("market_analysis"),
+                "peers": log.step_times.get("peers"),
                 "financials": log.step_times.get("financials"),
                 "valuation": log.step_times.get("valuation"),
                 "thesis": log.step_times.get("thesis"),

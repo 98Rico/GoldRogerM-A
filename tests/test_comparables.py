@@ -244,6 +244,72 @@ def test_networking_bucket_is_capped_for_premium_device_profile():
     assert net_weight <= 0.151
 
 
+def test_premium_device_platform_labels_software_peer_as_adjacent():
+    peers = [
+        _md("HARD1", "Technology", ev_ebitda=18.0, market_cap=1_500_000.0, industry="Consumer Electronics"),
+        _md("SOFT1", "Technology", ev_ebitda=22.0, market_cap=2_500_000.0, industry="Software - Infrastructure"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["HARD1", "SOFT1"],
+            target_sector="Technology",
+            target_industry="Consumer Electronics",
+            target_market_cap=4_000_000.0,
+            min_market_cap_ratio=0.05,
+            min_valuation_peers=1,
+        )
+    software = [p for p in result.peers if p.ticker == "SOFT1"][0]
+    assert software.role == "adjacent valuation peer"
+
+
+def test_tobacco_target_rejects_tech_peer_set():
+    peers = [
+        _md("BTI", "Consumer Defensive", ev_ebitda=10.5, market_cap=85_000.0, industry="Tobacco"),
+        _md("AAPL", "Technology", ev_ebitda=24.0, market_cap=3_000_000.0, industry="Consumer Electronics"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["BTI", "AAPL"],
+            target_sector="Consumer Defensive Tobacco",
+            target_industry="Tobacco",
+            min_valuation_peers=1,
+        )
+    assert all(p.ticker != "AAPL" for p in result.peers)
+    assert result.n_dropped_sector >= 1
+
+
+def test_energy_target_rejects_financial_peer_set():
+    peers = [
+        _md("XOM", "Energy", ev_ebitda=8.2, market_cap=450_000.0, industry="Oil & Gas"),
+        _md("JPM", "Financial Services", ev_ebitda=11.0, market_cap=600_000.0, industry="Banks"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["XOM", "JPM"],
+            target_sector="Energy",
+            target_industry="Oil & Gas",
+            min_valuation_peers=1,
+        )
+    assert all(p.ticker != "JPM" for p in result.peers)
+    assert result.n_dropped_sector >= 1
+
+
+def test_banking_target_rejects_technology_peer_set():
+    peers = [
+        _md("JPM", "Financial Services", ev_ebitda=11.0, market_cap=600_000.0, industry="Banks"),
+        _md("MSFT", "Technology", ev_ebitda=20.0, market_cap=2_800_000.0, industry="Software - Infrastructure"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["JPM", "MSFT"],
+            target_sector="Banking Financial Services",
+            target_industry="Banks",
+            min_valuation_peers=1,
+        )
+    assert all(p.ticker != "MSFT" for p in result.peers)
+    assert result.n_dropped_sector >= 1
+
+
 # ── resolve_peer_tickers ──────────────────────────────────────────────────────
 
 def test_resolve_with_ticker_provided():

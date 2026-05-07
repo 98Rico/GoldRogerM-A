@@ -467,9 +467,7 @@ class ValuationService:
                 notes.append(
                     f"Weak peer diversification guardrail: capped comps weight {_old:.0%}→{_cap:.0%}."
                 )
-            _low_conf_cap = 0.35
-            if dcf_materially_conservative and peer_count >= 3:
-                _low_conf_cap = 0.45
+            _low_conf_cap = 0.35 if (effective_peer_count > 0 and effective_peer_count < 5.0) else 0.40
             if low_conf_peer_set and weights.get("comps", 0.0) > _low_conf_cap:
                 _old = float(weights.get("comps", 0.0))
                 _shift = _old - _low_conf_cap
@@ -504,9 +502,7 @@ class ValuationService:
                 notes.append(
                     f"DCF conservative adjustment: shifted {shift:.0%} weight from DCF to comps."
                 )
-        _final_low_conf_cap = 0.35
-        if dcf_materially_conservative and peer_count >= 3:
-            _final_low_conf_cap = 0.45
+        _final_low_conf_cap = 0.35 if (effective_peer_count > 0 and effective_peer_count < 5.0) else 0.40
         if _is_mega_cap and (assumptions.get("low_confidence_comps") or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}) and weights.get("comps", 0.0) > _final_low_conf_cap:
             _old = float(weights.get("comps", 0.0))
             _shift = _old - _final_low_conf_cap
@@ -518,7 +514,13 @@ class ValuationService:
             notes.append(
                 f"Final low-confidence cap: comps weight {_old:.0%}→{_final_low_conf_cap:.0%}."
             )
-        if dcf_materially_conservative and peer_count >= 3 and weights.get("comps", 0.0) < 0.40:
+        if (
+            dcf_materially_conservative
+            and peer_count >= 3
+            and not low_conf_peer_set
+            and not (effective_peer_count > 0 and effective_peer_count < 5.0)
+            and weights.get("comps", 0.0) < 0.40
+        ):
             _old = float(weights.get("comps", 0.0))
             _shift = 0.40 - _old
             weights = {
@@ -530,7 +532,13 @@ class ValuationService:
                 "DCF materially conservative guardrail: raised comps floor to 40% "
                 "to avoid over-weighting punitive DCF."
             )
-        if dcf_materially_conservative and peer_count >= 3 and weights.get("dcf", 0.0) > 0.55:
+        if (
+            dcf_materially_conservative
+            and peer_count >= 3
+            and not low_conf_peer_set
+            and not (effective_peer_count > 0 and effective_peer_count < 5.0)
+            and weights.get("dcf", 0.0) > 0.55
+        ):
             _old = float(weights.get("dcf", 0.0))
             _shift = _old - 0.55
             weights = {
@@ -569,8 +577,12 @@ class ValuationService:
             and _live_mult_anchor
             and _implied_exit_mult < (0.50 * _applied_peer_anchor)
         ):
-            _target_dcf = 0.50 if low_conf_peer_set else 0.40
-            _target_comps = 0.50 if low_conf_peer_set else 0.60
+            if effective_peer_count > 0 and effective_peer_count < 5.0:
+                _target_dcf, _target_comps = 0.65, 0.35
+            elif low_conf_peer_set:
+                _target_dcf, _target_comps = 0.60, 0.40
+            else:
+                _target_dcf, _target_comps = 0.50, 0.50
             _old_dcf = float(weights.get("dcf", 0.0))
             _old_comps = float(weights.get("comps", 0.0))
             weights = {

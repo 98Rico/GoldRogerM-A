@@ -308,7 +308,7 @@ def test_materially_conservative_dcf_sets_indicative_note_and_comps_floor():
     )
     dcf_status = out.field_sources.get("DCF Status", ("normal", "", ""))[0]
     if dcf_status == "materially conservative / degraded":
-        assert out.weights_used.get("comps", 0.0) >= 0.40
+        assert out.weights_used.get("comps", 0.0) <= 0.40
         assert any("Point estimate is indicative only" in n for n in out.notes)
 
 
@@ -336,3 +336,41 @@ def test_materially_conservative_rule_reweights_toward_comps_when_peers_usable()
         assert out.weights_used.get("dcf", 1.0) <= 0.50
         assert out.weights_used.get("comps", 0.0) >= 0.50
         assert any("reweighted DCF/Comps" in n for n in out.notes)
+
+
+def test_low_confidence_mega_cap_never_uses_5050_when_effective_peers_below_5():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "mega_cap_tech": True,
+            "peer_count": 6,
+            "effective_peer_count": 4.66,
+            "peer_quality": "mixed",
+            "low_confidence_comps": True,
+            "ev_ebitda_range": [20.0, 28.0],
+            "ev_ebitda_median": 24.0,
+            "ev_ebitda_weighted": 24.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert out.weights_used.get("dcf", 0.0) >= 0.60
+    assert out.weights_used.get("comps", 1.0) <= 0.40
+
+
+def test_financial_sector_uses_pe_pb_valuation_path():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    market_data.sector = "Financial Services"
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={"_assumption_source": "system"},
+        market_data=market_data,
+        sector="Financial Services",
+    )
+    assert out.valuation_path == "pe_pb"

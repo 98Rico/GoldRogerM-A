@@ -846,9 +846,10 @@ def _peer_role(profile: str, bucket: str, ev_ebitda: float | None) -> str:
     if ev_ebitda is None:
         return "qualitative peer only"
     if profile == "premium_device_platform":
-        if bucket in {"consumer_hardware_ecosystem", "software_services_platform"}:
+        if bucket in {"consumer_hardware_ecosystem"}:
             return "core valuation peer"
         if bucket in {
+            "software_services_platform",
             "networking_infrastructure",
             "semiconductors",
             "semiconductor_equipment",
@@ -1082,7 +1083,14 @@ def build_peer_multiples(
         if _role == "core valuation peer":
             include_reason = "core: business model aligned"
         elif _role == "adjacent valuation peer":
-            include_reason = "adjacent: business-model/size fit"
+            if _bucket == "software_services_platform":
+                include_reason = "adjacent platform/services reference"
+            elif _bucket == "networking_infrastructure":
+                include_reason = "adjacent infrastructure reference"
+            elif _bucket in {"semiconductors", "semiconductor_equipment"}:
+                include_reason = "adjacent semiconductor/infrastructure reference"
+            else:
+                include_reason = "adjacent: business-model/size fit"
         elif _role == "qualitative peer only":
             include_reason = "qualitative only: EV/EBITDA unavailable"
         if _below_mega_valuation_floor:

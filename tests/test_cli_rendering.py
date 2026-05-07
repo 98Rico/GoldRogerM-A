@@ -27,12 +27,16 @@ def test_pipeline_status_block_is_normalized_and_compact():
             "confidence": "Low",
             "recommendation": "HOLD / LOW CONVICTION",
             "confidence_reason": "DCF/comps disagreement",
+            "research_source": "fallback",
+            "research_depth": "limited",
+            "market_data_source_backed": "no",
         }
     )
     assert "Research: PARTIAL" in block
     assert "Peers: DEGRADED" in block
     assert "Valuation: LOW_CONFIDENCE" in block
     assert "Recommendation: HOLD / LOW CONVICTION" in block
+    assert "Research source: fallback | Research depth: limited | Market data source-backed: no" in block
     assert reason == "DCF/comps disagreement"
 
 

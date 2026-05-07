@@ -534,6 +534,15 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         f"  Valuation: {valuation_state}\n"
         f"  Recommendation: {rec_state}"
     )
+    _r_src = str(pipeline_status.get("research_source", "") or "").strip()
+    _r_depth = str(pipeline_status.get("research_depth", "") or "").strip()
+    _r_backed = str(pipeline_status.get("market_data_source_backed", "") or "").strip()
+    if _r_src or _r_depth or _r_backed:
+        block += (
+            "\n  Research source: " + (_r_src or "n/a")
+            + " | Research depth: " + (_r_depth or "n/a")
+            + " | Market data source-backed: " + (_r_backed or "n/a")
+        )
     reason = str(pipeline_status.get("confidence_reason", "") or "").strip()
     return block, reason
 
@@ -635,6 +644,13 @@ def print_result(result, debug: bool = False):
         console.print(_status_block)
         if _status_reason:
             console.print(f"[dim]Why low confidence: {_status_reason}[/dim]")
+        _ms_plain = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")) or "N/A")
+        _fr_plain = str(_pipeline_status.get("recommendation", "N/A") or "N/A")
+        if _ms_plain not in {"N/A", ""} and _fr_plain not in {"N/A", ""} and _ms_plain != _fr_plain:
+            console.print(
+                f"[dim]Valuation signal: {_ms_plain}. Final recommendation: {_fr_plain}. "
+                "Reason: valuation downside and confidence guards are both applied.[/dim]"
+            )
         if debug:
             console.print(
                 "[dim]Diagnostics:\n"
@@ -663,7 +679,8 @@ def print_result(result, debug: bool = False):
             "[bold]Timing:[/bold]\n"
             f"  Market data: {_timings.get('market_data', 'N/A')}s\n"
             f"  Market analysis: {_timings.get('market_analysis', 'N/A')}s\n"
-            f"  Peers/financials: {_timings.get('financials', 'N/A')}s\n"
+            f"  Peers: {_timings.get('peers', 'N/A')}s\n"
+            f"  Financials: {_timings.get('financials', 'N/A')}s\n"
             f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"
             f"  Report: {_timings.get('thesis', 'N/A')}s\n"
             f"  Total: {_timings.get('total', 'N/A')}s"
@@ -679,9 +696,20 @@ def print_result(result, debug: bool = False):
         _tag_sh = footnotes.tag(_infer_source_note("Shares Outstanding", _sh_bridge, src_map))
         _tag_tp = footnotes.tag(_infer_source_note("Implied Target Price", _tp_bridge, src_map))
         _nd_txt = f" - Net Debt {_nd_bridge}" if _nd_bridge else ""
+        _tp_bridge_label = "Target"
+        _tp_bridge_show = _tp_bridge
+        if _is_low_conf:
+            _tp_bridge_label = "Indicative value"
+            _m_tp = re.search(r"([0-9][0-9,]*\.?[0-9]*)", str(_tp_bridge))
+            if _m_tp:
+                try:
+                    _v = float(_m_tp.group(1).replace(",", ""))
+                    _tp_bridge_show = f"~${_v:,.0f}"
+                except Exception:
+                    pass
         console.print(
             f"[dim]Bridge:[/] EV {_ev_bridge}{_tag_ev}{_nd_txt} = Equity {_eq_bridge}{_tag_eq} "
-            f"→ / Shares {_sh_bridge}{_tag_sh} = Target {_tp_bridge}{_tag_tp}"
+            f"→ / Shares {_sh_bridge}{_tag_sh} = {_tp_bridge_label} {_tp_bridge_show}{_tag_tp}"
         )
 
     # KPIs
