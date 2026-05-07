@@ -31,3 +31,16 @@ def test_infer_source_note_uses_alias_mapping():
 def test_infer_source_note_falls_back_to_estimate_tag():
     note = _infer_source_note("Gross Margin", "45.0% [estimated]", {})
     assert "model estimate (estimated)" in note
+
+
+def test_infer_source_note_for_indicative_midpoint_mentions_low_confidence_input():
+    src_map = {
+        "Implied Target Price": {
+            "value": "$217",
+            "source": "valuation_bridge",
+            "confidence": "verified",
+            "url": "",
+        }
+    }
+    note = _infer_source_note("Indicative midpoint", "~$217", src_map)
+    assert "verified calculation, low-confidence input" in note

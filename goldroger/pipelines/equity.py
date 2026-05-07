@@ -295,9 +295,9 @@ def _fallback_catalysts(company: str, sector: str) -> list[str]:
     _c = (company or "").upper()
     if "AAPL" in _c or "APPLE" in _c:
         return [
-            "Next earnings update: latest iPhone cycle demand and Services growth trajectory.",
-            "Apple Intelligence / AI adoption: device upgrade-cycle and ecosystem monetization implications.",
-            "Regulatory updates: App Store / DMA / platform-policy developments and monetization impact.",
+            "Next earnings update: demand, margins, and guidance.",
+            "Product/software update: evidence of device upgrade-cycle support.",
+            "Regulatory/platform-policy updates: impact on services monetization.",
         ]
     _s = (sector or "").lower()
     if "tech" in _s or "software" in _s:
@@ -319,13 +319,20 @@ def _fallback_catalysts(company: str, sector: str) -> list[str]:
     ]
 
 
-def _build_fallback_thesis(company: str, sector: str, recommendation: str, reason: str) -> InvestmentThesis:
+def _build_fallback_thesis(
+    company: str,
+    sector: str,
+    recommendation: str,
+    reason: str,
+    model_signal: str = "N/A",
+) -> InvestmentThesis:
     cats = _fallback_catalysts(company, sector)
     thesis = (
         f"Thesis:\n"
         f"- Moat: {company} retains strategic advantages in {sector or 'its sector'}.\n"
         f"- Growth: near-term trajectory depends on execution and demand resilience.\n"
-        f"- Valuation: signal currently {recommendation} with reduced confidence ({reason}).\n"
+        f"- Valuation: model signal is {model_signal}, but final recommendation is {recommendation} "
+        f"because valuation confidence is low and method dispersion is high ({reason}).\n"
         f"\nRisks:\n"
         f"- Demand: cyclical or customer-mix pressure.\n"
         f"- Regulation: policy/antitrust/compliance constraints.\n"
@@ -817,7 +824,10 @@ def run_analysis(
                 console.print(f"  [red]Market analysis failed: {e}[/red]")
             result = MarketAnalysis()
             status = "failed"
-        _finish_step("Market Analysis", _t, _cancel_market, "market_analysis")
+        _step_name = "Market Analysis"
+        if status in {"degraded_api_capacity", "failed"}:
+            _step_name = "Market Analysis (fallback/partial)"
+        _finish_step(_step_name, _t, _cancel_market, "market_analysis")
         return result, status
 
     def _do_peers():
@@ -1088,6 +1098,7 @@ def run_analysis(
     _research_depth = "full" if _research_source == "source_backed" else "limited"
 
     # Post-process peer results (yfinance calls — sequential is fine)
+    _peer_post_t0 = time.time()
     # target_sector comes from Fundamentals agent output for sector validation
     _target_sector = fund.sector or "" if fund else ""
     _target_industry = ""
@@ -1128,6 +1139,9 @@ def run_analysis(
             # Optional full-mode enrichment: merge validated LLM candidates (no overwrite).
             if (not quick_mode) and peer_tickers_seed:
                 peer_tickers = list(dict.fromkeys(peer_tickers + [t for t in peer_tickers_seed if t and t != _self_ticker]))
+            if quick_mode:
+                # Keep quick mode fast: trim candidate fetch set before yfinance validation loop.
+                peer_tickers = peer_tickers[:8]
 
             sources.add_once(
                 "Peer Selection Policy",
@@ -1345,6 +1359,14 @@ def run_analysis(
         else:
             peers_status = "FAILED"
             console.print(f"  [yellow]Peer finder skipped: {_peers_err}[/yellow]")
+    if _missing_consumer_ecosystem_bucket and peers_status == "OK":
+        peers_status = "OK_ADJACENT"
+    _peer_post_elapsed = round(time.time() - _peer_post_t0, 2)
+    try:
+        _peer_base = float(log.step_times.get("peers") or 0.0)
+        log.step_times["peers"] = round(_peer_base + _peer_post_elapsed, 2)
+    except Exception:
+        pass
 
     # Post-process transaction comps — cache + extract medians
     _tx_medians: dict = {}
@@ -2091,6 +2113,7 @@ def run_analysis(
             sector=fund.sector or "",
             recommendation=val.recommendation or "HOLD",
             reason="research fallback mode (source-backed market context unavailable)",
+            model_signal=_model_signal,
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -2105,6 +2128,7 @@ def run_analysis(
             sector=fund.sector or "",
             recommendation=val.recommendation or "HOLD",
             reason="global runtime budget reached",
+            model_signal=_model_signal,
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -2178,6 +2202,7 @@ def run_analysis(
                 sector=fund.sector or "",
                 recommendation=val.recommendation or "HOLD",
                 reason="thesis timeout",
+                model_signal=_model_signal,
             )
         except APICapacityError:
             thesis_status = "DEGRADED_API_CAPACITY"
@@ -2187,6 +2212,7 @@ def run_analysis(
                 sector=fund.sector or "",
                 recommendation=val.recommendation or "HOLD",
                 reason="report-writer API capacity",
+                model_signal=_model_signal,
             )
         except Exception as _th_err:
             thesis_status = "FAILED"
@@ -2196,6 +2222,7 @@ def run_analysis(
                 sector=fund.sector or "",
                 recommendation=val.recommendation or "HOLD",
                 reason="thesis generation failure",
+                model_signal=_model_signal,
             )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)

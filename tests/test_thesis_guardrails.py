@@ -46,6 +46,9 @@ def test_fallback_thesis_is_conservative_and_non_numeric():
         sector="Technology",
         recommendation="HOLD / LOW CONVICTION",
         reason="research fallback mode",
+        model_signal="SELL / NEGATIVE VALUATION SIGNAL",
     )
     assert "%" not in (th.thesis or "")
     assert "CAGR" not in (th.thesis or "")
+    assert "model signal is SELL / NEGATIVE VALUATION SIGNAL" in (th.thesis or "")
+    assert "final recommendation is HOLD / LOW CONVICTION" in (th.thesis or "")

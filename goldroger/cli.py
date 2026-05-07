@@ -357,6 +357,8 @@ def _metric_source_keys(metric: str) -> list[str]:
         "TAM": ["TAM", "Market Size"],
         "Market Growth": ["Market Growth"],
         "Target": ["Implied Target Price", "Target Price", "Implied EV"],
+        "Indicative midpoint": ["Implied Target Price", "Target Price", "Implied EV"],
+        "Indicative value per share": ["Implied Target Price", "Target Price", "Implied EV"],
         "Fair Value Range": ["Fair Value Range"],
         "Upside": ["Upside", "Upside/Downside"],
         "WACC": ["WACC"],
@@ -371,6 +373,16 @@ def _infer_source_note(metric: str, value: str, src_map: dict[str, dict[str, str
     for key in _metric_source_keys(metric):
         entry = src_map.get(key)
         if entry:
+            if metric in {"Indicative midpoint", "Indicative value per share"}:
+                conf = entry["confidence"]
+                if conf.lower() == "verified":
+                    conf = "verified calculation, low-confidence input"
+                else:
+                    conf = f"{conf} calculation, low-confidence input"
+                note = f"{metric}: {entry['source']} ({conf})"
+                if entry.get("url"):
+                    note += f" — {entry['url']}"
+                return note
             note = f"{metric}: {entry['source']} ({entry['confidence']})"
             if entry.get("url"):
                 note += f" — {entry['url']}"
@@ -617,7 +629,7 @@ def print_result(result, debug: bool = False):
     if _is_low_conf and _fv_range and v.target_price:
         _target_line = (
             f"Indicative Range: {_fv_label} | "
-            f"Midpoint reference: {_value_with_source('Target', _target_display)} | "
+            f"Midpoint reference: {_value_with_source('Indicative midpoint', _target_display)} | "
             f"Model-implied upside/downside: {_value_with_source('Upside', v.upside_downside)}"
         )
     else:
@@ -630,8 +642,13 @@ def print_result(result, debug: bool = False):
     if (not _is_inconclusive) and _pipeline_status.get("confidence"):
         _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
     _headline_tail = "" if _is_low_conf else f" | Upside: {_value_with_source('Upside', v.upside_downside)}"
+    _header_parts = [f"[bold]{f.company_name}[/]", f.sector or "Unknown"]
+    _hq = str(f.headquarters or "").strip()
+    if _hq and _hq.lower() not in {"none", "n/a", "unknown"}:
+        _header_parts.append(_hq)
+    _header_line = " | ".join(_header_parts)
     console.print(Panel(
-        f"[bold]{f.company_name}[/] | {f.sector} | {f.headquarters}\n"
+        f"{_header_line}\n"
         f"{f.description}\n\n"
         f"Recommendation: [{rec_color}]{v.recommendation}[/] | "
         f"{_target_line}{_headline_tail}",
@@ -642,6 +659,11 @@ def print_result(result, debug: bool = False):
     if _pipeline_status:
         _status_block, _status_reason = _render_pipeline_status_block(_pipeline_status)
         console.print(_status_block)
+        if (
+            str(_pipeline_status.get("research_source", "")).strip().lower() == "fallback"
+            and str(_pipeline_status.get("research_enrichment", "")).upper() != "SKIPPED_QUICK_MODE"
+        ):
+            console.print("[dim]Full research unavailable; report generated using fallback research template.[/dim]")
         if _status_reason:
             console.print(f"[dim]Why low confidence: {_status_reason}[/dim]")
         _ms_plain = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")) or "N/A")
@@ -675,14 +697,28 @@ def print_result(result, debug: bool = False):
         )
     _timings = (getattr(result, "data_quality", {}) or {}).get("timings_s", {})
     if _timings:
+        _known = 0.0
+        for _k in ("market_data", "fundamentals", "market_analysis", "peers", "financials", "valuation", "thesis"):
+            try:
+                _known += float(_timings.get(_k) or 0.0)
+            except Exception:
+                pass
+        _total = 0.0
+        try:
+            _total = float(_timings.get("total") or 0.0)
+        except Exception:
+            _total = 0.0
+        _hidden = round(max(0.0, _total - _known), 2)
         console.print(
             "[bold]Timing:[/bold]\n"
             f"  Market data: {_timings.get('market_data', 'N/A')}s\n"
+            f"  Fundamentals: {_timings.get('fundamentals', 'N/A')}s\n"
             f"  Market analysis: {_timings.get('market_analysis', 'N/A')}s\n"
             f"  Peers: {_timings.get('peers', 'N/A')}s\n"
             f"  Financials: {_timings.get('financials', 'N/A')}s\n"
             f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"
             f"  Report: {_timings.get('thesis', 'N/A')}s\n"
+            f"  Startup/orchestration: {_hidden}s\n"
             f"  Total: {_timings.get('total', 'N/A')}s"
         )
     _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
@@ -694,7 +730,8 @@ def print_result(result, debug: bool = False):
         _tag_ev = footnotes.tag(_infer_source_note("Enterprise Value (blended)", _ev_bridge, src_map))
         _tag_eq = footnotes.tag(_infer_source_note("Equity Value", _eq_bridge, src_map))
         _tag_sh = footnotes.tag(_infer_source_note("Shares Outstanding", _sh_bridge, src_map))
-        _tag_tp = footnotes.tag(_infer_source_note("Implied Target Price", _tp_bridge, src_map))
+        _tp_metric = "Indicative value per share" if _is_low_conf else "Implied Target Price"
+        _tag_tp = footnotes.tag(_infer_source_note(_tp_metric, _tp_bridge, src_map))
         _nd_txt = f" - Net Debt {_nd_bridge}" if _nd_bridge else ""
         _tp_bridge_label = "Target"
         _tp_bridge_show = _tp_bridge

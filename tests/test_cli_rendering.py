@@ -45,3 +45,16 @@ def test_status_normalizers():
     assert _normalize_research_status("degraded") == "PARTIAL"
     assert _normalize_valuation_status("ok", "Low") == "LOW_CONFIDENCE"
     assert _normalize_valuation_status("failed", "Medium") == "FAILED"
+
+
+def test_pipeline_status_preserves_ok_adjacent_peer_state():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "OK",
+            "peers": "OK_ADJACENT",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "HOLD / LOW CONVICTION",
+        }
+    )
+    assert "Peers: OK_ADJACENT" in block
