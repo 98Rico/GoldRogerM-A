@@ -498,6 +498,15 @@ def print_result(result):
         shown_raw = value or "N/A"
         note = _infer_source_note(metric, shown_raw, src_map)
         shown = _format_metric_value(metric, shown_raw)
+        if metric in {"TAM", "Market Growth"}:
+            _conf = None
+            for key in _metric_source_keys(metric):
+                entry = src_map.get(key)
+                if entry:
+                    _conf = (entry.get("confidence") or "").strip().lower()
+                    break
+            if _conf in {"estimated", "inferred"} and "[estimated]" not in shown.lower():
+                shown = f"{shown} [estimated]"
         return f"{shown}{footnotes.tag(note)}"
 
     def _source_value(metric: str) -> Optional[str]:

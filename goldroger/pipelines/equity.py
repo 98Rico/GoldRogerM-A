@@ -865,9 +865,12 @@ def run_analysis(
                 market_status = "SKIPPED_QUICK_MODE"
             else:
                 market_status = "OK"
+                _trend_vals = [str(t) for t in (mkt.key_trends or []) if str(t).strip()]
+                _has_placeholder_only = bool(_trend_vals) and all(_trend_is_placeholder(t) for t in _trend_vals)
                 if (
-                    _text_missing(mkt.market_size)
-                    and _text_missing(mkt.market_growth)
+                    (_text_missing(mkt.market_size) and _text_missing(mkt.market_growth))
+                    or (not _trend_vals)
+                    or _has_placeholder_only
                 ):
                     market_status = "DEGRADED"
         except FutureTimeoutError:
@@ -1636,9 +1639,12 @@ def run_analysis(
             pass
     # Always surface key DCF sanity diagnostics (not only in debug mode).
     _sanity_prefixes = (
+        "DCF calibration —",
         "DCF implied exit EV/EBITDA:",
         "DCF implied terminal FCF yield:",
         "Terminal value ",
+        "Multiple cross-check:",
+        "Normalized terminal multiple cross-check:",
         "Live EV/EBITDA check:",
     )
     for _n in (result.notes or []):
@@ -1651,6 +1657,8 @@ def run_analysis(
                 sources.add_once("DCF Implied Terminal FCF Yield", _txt.split(":", 1)[1].strip(), "valuation_engine", "inferred")
             elif _txt.startswith("Terminal value "):
                 sources.add_once("Terminal Value Share of DCF", _txt.replace("Terminal value", "").strip(), "valuation_engine", "inferred")
+            elif _txt.startswith("DCF calibration —"):
+                sources.add_once("DCF Calibration Snapshot", _txt.replace("DCF calibration —", "").strip(), "valuation_engine", "inferred")
     if debug:
         for note in result.notes:
             console.print(f"  [dim]• {note}[/dim]")
@@ -1892,7 +1900,9 @@ def run_analysis(
             f"Thesis:\n"
             f"- Moat: ecosystem, services, and vertical integration dynamics in {fund.sector or 'the sector'}.\n"
             f"- Growth: modeled revenue growth {_modeled_growth}; execution still tied to demand and product cycle.\n"
-            f"- Valuation: fair value {_fv_range}; signal {val.recommendation} ({val.upside_downside or 'N/A'}), low confidence if dispersion is high.\n"
+            f"- Valuation signal: {_model_signal} ({val.upside_downside or 'N/A'}); "
+            f"final recommendation {_rec} due to confidence/dispersion guardrails.\n"
+            f"- Indicative fair value: {_fv_range} (use range over point estimate when confidence is low).\n"
             f"\nRisks:\n"
             f"- iPhone and hardware demand-cycle volatility.\n"
             f"- Platform and App-Store regulatory pressure.\n"
@@ -2079,6 +2089,8 @@ def run_analysis(
         _research_quality_label = "skipped_quick_mode"
     else:
         _research_quality_score = 100
+        _market_sources = [str(s) for s in (mkt.sources or []) if str(s).strip()]
+        _has_source_backed_market = any(("http://" in s.lower()) or ("https://" in s.lower()) for s in _market_sources)
         if market_status in {"DEGRADED"}:
             _research_quality_score -= 45
         elif market_status in {"FAILED", "TIMEOUT"}:
@@ -2097,6 +2109,9 @@ def run_analysis(
             _research_quality_score -= 8
         if _tam_estimated or _growth_estimated:
             _research_quality_score = min(_research_quality_score, 85)
+        if not _has_source_backed_market:
+            _research_quality_score -= 10
+            _research_quality_score = min(_research_quality_score, 80)
         if thesis_status == "TIMEOUT":
             _research_quality_score -= 20
         elif thesis_status == "FAILED":

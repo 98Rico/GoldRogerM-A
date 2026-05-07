@@ -240,6 +240,14 @@ class ValuationService:
         try:
             _y5_ebitda = revenue_series[-1] * ebitda_margin if revenue_series else 0.0
             _y5_fcf = dcf_output.free_cash_flows[-1] if dcf_output.free_cash_flows else 0.0
+            _fcf0 = dcf_output.free_cash_flows[0] if dcf_output.free_cash_flows else 0.0
+            _terminal_fcf = _y5_fcf * (1 + terminal_growth) if _y5_fcf else 0.0
+            _tv_undisc = dcf_output.terminal_value * ((1 + wacc) ** len(revenue_series)) if revenue_series else 0.0
+            notes.append(
+                f"DCF calibration — Starting FCF: ${_fcf0:.0f}M; Year-5 FCF: ${_y5_fcf:.0f}M; "
+                f"Terminal FCF: ${_terminal_fcf:.0f}M; WACC: {wacc:.1%}; TG: {terminal_growth:.1%}; "
+                f"Terminal value (undiscounted): ${_tv_undisc:.0f}M."
+            )
             if _y5_ebitda and dcf_output.enterprise_value > 0:
                 _implied_exit = dcf_output.enterprise_value / _y5_ebitda
                 notes.append(f"DCF implied exit EV/EBITDA: {_implied_exit:.1f}x.")
@@ -292,6 +300,10 @@ class ValuationService:
                         notes.append(
                             f"Normalized terminal multiple cross-check: {_anchor_mult:.1f}x implies EV ${_anchor_ev:.0f}M."
                         )
+                        if _implied_exit < (0.6 * min(_anchor_candidates)):
+                            notes.append(
+                                "DCF appears materially conservative versus both live and applied-peer multiple anchors."
+                            )
             if _y5_fcf and dcf_output.enterprise_value > 0:
                 _fcf_yield = _y5_fcf / dcf_output.enterprise_value
                 notes.append(f"DCF implied terminal FCF yield: {_fcf_yield:.1%}.")
@@ -490,6 +502,18 @@ class ValuationService:
             notes.append(
                 "DCF materially conservative guardrail: raised comps floor to 40% "
                 "to avoid over-weighting punitive DCF."
+            )
+        if dcf_materially_conservative and peer_count >= 3 and weights.get("dcf", 0.0) > 0.55:
+            _old = float(weights.get("dcf", 0.0))
+            _shift = _old - 0.55
+            weights = {
+                "dcf": 0.55,
+                "comps": min(1.0, float(weights.get("comps", 0.0)) + _shift),
+                "transactions": float(weights.get("transactions", 0.0)),
+            }
+            notes.append(
+                "DCF materially conservative guardrail: capped DCF weight at 55% "
+                "to limit punitive terminal assumptions from dominating."
             )
         _disp_cap = 0.35
         if dcf_materially_conservative and peer_count >= 3:
