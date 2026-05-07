@@ -531,10 +531,11 @@ def print_result(result):
     )
     _fv_label = _value_with_source("Fair Value Range", _fv_range)
     if _fv_width:
-        _fv_label = f"{_fv_label} [wide; low confidence]"
+        _fv_label = f"{_fv_label} (wide; low confidence)"
+    _pt_label = "Indicative Value" if ((not _is_inconclusive) and _confidence == "low") else "Point Estimate"
     _target_line = (
         f"Fair Value Range: {_fv_label} | "
-        f"Point Estimate: {_value_with_source('Target', _target_display)}"
+        f"{_pt_label}: {_value_with_source('Target', _target_display)}"
         if _fv_range and v.target_price and not _is_inconclusive
         else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
     )

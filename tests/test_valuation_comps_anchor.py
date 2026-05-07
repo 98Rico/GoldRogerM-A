@@ -193,6 +193,7 @@ def test_live_multiple_vs_applied_peer_multiple_note_present():
         financials=financials,
         assumptions={
             "_assumption_source": "system",
+            "mega_cap_tech": True,
             "peer_count": 6,
             "peer_quality": "normal",
             "ev_ebitda_range": [20.0, 28.0],
@@ -247,3 +248,40 @@ def test_low_effective_peer_count_caps_comps_weight_aggressively():
     )
     assert out.weights_used["comps"] <= 0.15
     assert any("Weak peer diversification guardrail" in n for n in out.notes)
+
+
+def test_mega_cap_dcf_cross_checks_and_status_tiering():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "mega_cap_tech": True,
+            "peer_count": 6,
+            "peer_quality": "normal",
+            "ev_ebitda_range": [20.0, 28.0],
+            "ev_ebitda_median": 24.0,
+            "ev_ebitda_weighted": 24.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    assert any("Multiple cross-check:" in n for n in out.notes)
+    assert any("Normalized terminal multiple cross-check:" in n for n in out.notes)
+
+    implied = None
+    for n in out.notes:
+        if str(n).startswith("DCF implied exit EV/EBITDA:"):
+            try:
+                implied = float(str(n).split(":", 1)[1].replace("x.", "").replace("x", "").strip())
+            except Exception:
+                implied = None
+            break
+    assert implied is not None
+    dcf_status = out.field_sources.get("DCF Status", ("normal", "", ""))[0]
+    if implied < 10.0:
+        assert dcf_status == "materially conservative / degraded"
+    elif implied < 12.0:
+        assert dcf_status in {"conservative / degraded", "materially conservative / degraded"}

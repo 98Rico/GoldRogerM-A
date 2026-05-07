@@ -2049,6 +2049,16 @@ def run_analysis(
             _research_quality_score -= 10
         if _text_missing(mkt.market_growth):
             _research_quality_score -= 10
+        _ms_txt = str(mkt.market_size or "").lower()
+        _mg_txt = str(mkt.market_growth or "").lower()
+        _tam_estimated = any(tok in _ms_txt for tok in ("estimated", "inferred", "proxy", "approx"))
+        _growth_estimated = any(tok in _mg_txt for tok in ("estimated", "inferred", "proxy", "approx"))
+        if _tam_estimated:
+            _research_quality_score -= 8
+        if _growth_estimated:
+            _research_quality_score -= 8
+        if _tam_estimated or _growth_estimated:
+            _research_quality_score = min(_research_quality_score, 85)
         if thesis_status == "TIMEOUT":
             _research_quality_score -= 20
         elif thesis_status == "FAILED":

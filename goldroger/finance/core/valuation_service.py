@@ -235,6 +235,7 @@ class ValuationService:
         )
         dcf_output = compute_dcf(dcf_input)
         dcf_conservative = False
+        dcf_materially_conservative = False
         # DCF sanity diagnostics
         try:
             _y5_ebitda = revenue_series[-1] * ebitda_margin if revenue_series else 0.0
@@ -248,6 +249,12 @@ class ValuationService:
                         "DCF sanity flag: implied exit multiple appears low for mega-cap tech; "
                         "base case may be materially conservative."
                     )
+                    if _implied_exit < 10.0:
+                        dcf_materially_conservative = True
+                        notes.append(
+                            "DCF severity flag: implied exit multiple is <10x for mega-cap tech; "
+                            "do not treat this DCF as a normal base case."
+                        )
                     if market_data and market_data.ev_ebitda_market and _implied_exit < (0.55 * market_data.ev_ebitda_market):
                         notes.append(
                             "DCF base case appears materially conservative versus live trading multiple and cash-flow profile."
@@ -264,6 +271,26 @@ class ValuationService:
                         notes.append(
                             f"DCF conservative vs peer floor: implied exit {_implied_exit:.1f}x "
                             f"vs peer low {_peer_low:.1f}x."
+                        )
+                if assumptions.get("mega_cap_tech"):
+                    _live_mult = float(market_data.ev_ebitda_market) if (market_data and market_data.ev_ebitda_market) else None
+                    _applied_peer = assumptions.get("ev_ebitda_median")
+                    try:
+                        _applied_peer = float(_applied_peer) if _applied_peer is not None else None
+                    except Exception:
+                        _applied_peer = None
+                    _anchor_candidates = [x for x in (_live_mult, _applied_peer) if x and x > 0]
+                    if _anchor_candidates:
+                        _anchor_mult = sum(_anchor_candidates) / len(_anchor_candidates)
+                        _anchor_ev = _anchor_mult * _y5_ebitda
+                        _applied_txt = f"{_applied_peer:.1f}x" if _applied_peer is not None else "N/A"
+                        _live_txt = f"{_live_mult:.1f}x" if _live_mult is not None else "N/A"
+                        notes.append(
+                            f"Multiple cross-check: live {_live_txt}; applied peers {_applied_txt}; "
+                            f"DCF implied {_implied_exit:.1f}x."
+                        )
+                        notes.append(
+                            f"Normalized terminal multiple cross-check: {_anchor_mult:.1f}x implies EV ${_anchor_ev:.0f}M."
                         )
             if _y5_fcf and dcf_output.enterprise_value > 0:
                 _fcf_yield = _y5_fcf / dcf_output.enterprise_value
@@ -288,8 +315,13 @@ class ValuationService:
                     notes.append(f"Projected FCF CAGR: {_fcf_cagr:.1%}.")
         except Exception:
             pass
+        _dcf_status = "normal"
+        if dcf_materially_conservative:
+            _dcf_status = "materially conservative / degraded"
+        elif dcf_conservative:
+            _dcf_status = "conservative / degraded"
         field_sources["DCF Status"] = (
-            ("conservative / degraded" if dcf_conservative else "normal"),
+            _dcf_status,
             "valuation_engine",
             "inferred",
         )
@@ -395,16 +427,19 @@ class ValuationService:
                 notes.append(
                     f"Weak peer diversification guardrail: capped comps weight {_old:.0%}→{_cap:.0%}."
                 )
-            if low_conf_peer_set and weights.get("comps", 0.0) > 0.35:
+            _low_conf_cap = 0.35
+            if dcf_materially_conservative and peer_count >= 3:
+                _low_conf_cap = 0.45
+            if low_conf_peer_set and weights.get("comps", 0.0) > _low_conf_cap:
                 _old = float(weights.get("comps", 0.0))
-                _shift = _old - 0.35
+                _shift = _old - _low_conf_cap
                 weights = {
                     "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
-                    "comps": 0.35,
+                    "comps": _low_conf_cap,
                     "transactions": float(weights.get("transactions", 0.0)),
                 }
                 notes.append(
-                    f"Low-confidence peer guardrail: capped comps weight {_old:.0%}→35%."
+                    f"Low-confidence peer guardrail: capped comps weight {_old:.0%}→{_low_conf_cap:.0%}."
                 )
             if _pre_disp and _pre_disp > 2.0 and weights.get("comps", 0.0) > 0.35:
                 _old = float(weights.get("comps", 0.0))
@@ -429,27 +464,45 @@ class ValuationService:
                 notes.append(
                     f"DCF conservative adjustment: shifted {shift:.0%} weight from DCF to comps."
                 )
-        if _is_mega_cap and (assumptions.get("low_confidence_comps") or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}) and weights.get("comps", 0.0) > 0.35:
+        _final_low_conf_cap = 0.35
+        if dcf_materially_conservative and peer_count >= 3:
+            _final_low_conf_cap = 0.45
+        if _is_mega_cap and (assumptions.get("low_confidence_comps") or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}) and weights.get("comps", 0.0) > _final_low_conf_cap:
             _old = float(weights.get("comps", 0.0))
-            _shift = _old - 0.35
+            _shift = _old - _final_low_conf_cap
             weights = {
                 "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
-                "comps": 0.35,
+                "comps": _final_low_conf_cap,
                 "transactions": float(weights.get("transactions", 0.0)),
             }
             notes.append(
-                f"Final low-confidence cap: comps weight {_old:.0%}→35%."
+                f"Final low-confidence cap: comps weight {_old:.0%}→{_final_low_conf_cap:.0%}."
             )
-        if _is_mega_cap and _pre_disp and _pre_disp > 2.0 and weights.get("comps", 0.0) > 0.35:
+        if dcf_materially_conservative and peer_count >= 3 and weights.get("comps", 0.0) < 0.40:
             _old = float(weights.get("comps", 0.0))
-            _shift = _old - 0.35
+            _shift = 0.40 - _old
             weights = {
-                "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
-                "comps": 0.35,
+                "dcf": max(0.0, float(weights.get("dcf", 0.0)) - _shift),
+                "comps": 0.40,
                 "transactions": float(weights.get("transactions", 0.0)),
             }
             notes.append(
-                f"Final dispersion cap: comps weight {_old:.0%}→35%."
+                "DCF materially conservative guardrail: raised comps floor to 40% "
+                "to avoid over-weighting punitive DCF."
+            )
+        _disp_cap = 0.35
+        if dcf_materially_conservative and peer_count >= 3:
+            _disp_cap = 0.40
+        if _is_mega_cap and _pre_disp and _pre_disp > 2.0 and weights.get("comps", 0.0) > _disp_cap:
+            _old = float(weights.get("comps", 0.0))
+            _shift = _old - _disp_cap
+            weights = {
+                "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
+                "comps": _disp_cap,
+                "transactions": float(weights.get("transactions", 0.0)),
+            }
+            notes.append(
+                f"Final dispersion cap: comps weight {_old:.0%}→{_disp_cap:.0%}."
             )
         w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
         notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")
