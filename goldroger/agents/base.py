@@ -13,11 +13,13 @@ import re
 import threading
 import time
 from datetime import date
+import os
 
 import httpx
 from dotenv import load_dotenv
 
 from goldroger.config import DEFAULT_CONFIG as _cfg
+from .errors import APICapacityError, is_api_capacity_error
 from .llm_client import LLMProvider, build_llm_provider
 
 load_dotenv()
@@ -267,6 +269,8 @@ class BaseAgent:
         tools = [WEB_SEARCH_TOOL] if self.use_tools else None
         model = self._llm.resolve_model(self.model_tier)
         quick_mode = bool(context.get("quick_mode", False))
+        cli_mode = bool(context.get("cli_mode", False) or os.getenv("GOLDROGER_RUN_MODE", "").lower() == "cli")
+        debug_retries = bool(context.get("debug_retries", False))
         effective_retries = 1 if quick_mode else self.max_retries
         effective_tool_rounds = 1 if quick_mode else self.max_tool_rounds
         max_queries = int(context.get("max_queries", 5 if quick_mode else 6))
@@ -313,11 +317,17 @@ class BaseAgent:
                 return response.content
 
             except Exception as exc:
+                is_capacity = is_api_capacity_error(exc)
+                if cli_mode and is_capacity:
+                    raise APICapacityError(
+                        f"{self.name} capacity unavailable in CLI mode: {exc}"
+                    ) from exc
                 exc_str = str(exc).lower()
                 is_rate_limit = "429" in str(exc) or "rate_limit" in exc_str or "rate limit" in exc_str
                 if attempt < effective_retries:
                     wait = 60 if is_rate_limit else 2 ** attempt
-                    print(f"[{self.name}] Attempt {attempt + 1} failed: {exc} — retrying in {wait}s...")
+                    if debug_retries:
+                        print(f"[{self.name}] Attempt {attempt + 1} failed: {exc} — retrying in {wait}s...")
                     time.sleep(wait)
                 else:
                     raise

@@ -139,3 +139,67 @@ def test_agent_raises_after_max_retries():
     agent.max_retries = 1
     with pytest.raises(RuntimeError, match="persistent error"):
         agent.run("Acme Corp", "public")
+
+
+def test_agent_cli_mode_raises_capacity_immediately(monkeypatch):
+    """In CLI mode, capacity/rate-limit errors should not trigger long backoff retries."""
+    import pytest
+    import goldroger.agents.base as base_mod
+    from goldroger.agents.errors import APICapacityError
+    from goldroger.agents.specialists import FinancialModelerAgent
+
+    class _AlwaysRateLimited:
+        def resolve_model(self, tier): return "mock"
+        def format_assistant_with_tools(self, r): return {}
+        def format_tool_result(self, id, result): return {}
+        def complete(self, **kwargs):
+            raise RuntimeError('API error occurred: Status 429. code="3505" service_tier_capacity_exceeded')
+
+    sleep_calls = {"n": 0}
+
+    def _sleep_stub(_s):
+        sleep_calls["n"] += 1
+
+    monkeypatch.setattr(base_mod, "_MIN_CALL_GAP", 0.0, raising=False)
+    monkeypatch.setattr(base_mod.time, "sleep", _sleep_stub, raising=True)
+
+    agent = FinancialModelerAgent(client=_AlwaysRateLimited())
+    agent.max_retries = 2
+    with pytest.raises(APICapacityError):
+        agent.run("Acme Corp", "public", context={"cli_mode": True})
+    # No retry backoff sleeps should happen in CLI mode.
+    assert sleep_calls["n"] == 0
+
+
+def test_agent_non_cli_still_retries_on_capacity(monkeypatch):
+    """Outside CLI mode, transient capacity errors keep retry behavior."""
+    import goldroger.agents.base as base_mod
+    from goldroger.agents.specialists import FinancialModelerAgent
+
+    call_count = 0
+    sleep_calls = {"n": 0}
+
+    class _FailOnceCapacityThenSucceed:
+        def resolve_model(self, tier): return "mock"
+        def format_assistant_with_tools(self, r): return {}
+        def format_tool_result(self, id, result): return {}
+        def complete(self, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("429 rate_limited")
+            return LLMResponse(content=_FINANCIALS_JSON, tool_calls=[])
+
+    def _sleep_stub(_s):
+        sleep_calls["n"] += 1
+
+    monkeypatch.setattr(base_mod, "_MIN_CALL_GAP", 0.0, raising=False)
+    monkeypatch.setattr(base_mod.time, "sleep", _sleep_stub, raising=True)
+
+    agent = FinancialModelerAgent(client=_FailOnceCapacityThenSucceed())
+    agent.max_retries = 2
+    raw = agent.run("Acme Corp", "public", context={"cli_mode": False})
+    assert "revenue" in raw
+    assert call_count == 2
+    # One backoff sleep for the retry path.
+    assert sleep_calls["n"] == 1

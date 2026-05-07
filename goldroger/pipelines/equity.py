@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import date
+from threading import Event
 
 from dotenv import load_dotenv
 
@@ -20,6 +21,7 @@ from goldroger.agents.specialists import (
     TransactionCompsAgent,
     ValuationEngineAgent,
 )
+from goldroger.agents.errors import APICapacityError, is_api_capacity_error
 from goldroger.data.transaction_comps import (
     add_comps,
     load_cache,
@@ -361,6 +363,7 @@ def run_analysis(
     company_identifier: str = "",
     quick_mode: bool = False,
     debug: bool = False,
+    cli_mode: bool = False,
 ) -> AnalysisResult:
     log = new_run(company, company_type)
     _run_started = time.time()
@@ -609,9 +612,19 @@ def run_analysis(
 
     # ── 1. FUNDAMENTALS ───────────────────────────────────────────────────
     t0 = _step("Fundamentals")
-    fund = _parse_with_retry(
-        data_agent, company, company_type, {}, Fundamentals, _fund_fallback(company), log_raw_errors=debug
-    )
+    try:
+        fund = _parse_with_retry(
+            data_agent,
+            company,
+            company_type,
+            {"quick_mode": quick_mode, "cli_mode": cli_mode, "debug_retries": debug},
+            Fundamentals,
+            _fund_fallback(company),
+            log_raw_errors=debug,
+        )
+    except APICapacityError:
+        console.print("  [yellow]Fundamentals LLM unavailable; using deterministic fallback.[/yellow]")
+        fund = _fund_fallback(company)
     if market_data:
         if not fund.ticker:
             fund.ticker = market_data.ticker
@@ -725,13 +738,23 @@ def run_analysis(
         and market_data.market_cap
         and market_data.market_cap > _mega_cap_usd_m
     )
+    _cancel_market = Event()
+    _cancel_peers = Event()
+    _cancel_fin = Event()
+    _cancel_tx = Event()
+
+    def _finish_step(name: str, started_at: float, cancel_event: Event, log_key: str | None = None) -> None:
+        if cancel_event.is_set():
+            return
+        if log_key:
+            log.end_step(log_key, started_at)
+        _done(name, started_at)
 
     def _do_market():
         _t = _step("Market Analysis")
         if quick_mode:
             console.print("  [dim]Quick mode: skipping deep market analysis.[/dim]")
-            log.end_step("market_analysis", _t)
-            _done("Market Analysis", _t)
+            _finish_step("Market Analysis", _t, _cancel_market, "market_analysis")
             return MarketAnalysis(), "skipped_quick_mode"
         try:
             result = _parse_with_retry(
@@ -742,6 +765,8 @@ def run_analysis(
                     "run_date": date.today().isoformat(),
                     "current_year": date.today().year,
                     "quick_mode": quick_mode,
+                    "cli_mode": cli_mode,
+                    "debug_retries": debug,
                     "max_queries": 5,
                     "max_results": 3,
                 },
@@ -751,12 +776,15 @@ def run_analysis(
                 log_raw_errors=debug,
             )
             status = "ok"
+        except APICapacityError:
+            console.print("  [yellow]Market analysis LLM unavailable; using qualitative fallback.[/yellow]")
+            result = MarketAnalysis()
+            status = "degraded_api_capacity"
         except Exception as e:
             console.print(f"  [red]Market analysis failed: {e}[/red]")
             result = MarketAnalysis()
             status = "failed"
-        log.end_step("market_analysis", _t)
-        _done("Market Analysis", _t)
+        _finish_step("Market Analysis", _t, _cancel_market, "market_analysis")
         return result, status
 
     def _do_peers():
@@ -776,7 +804,7 @@ def run_analysis(
                 result = ({"mode": "quick_deterministic", "tickers": tickers}, None)
             except Exception as e:
                 result = (None, e)
-            _done("Peer Comparables", _t)
+            _finish_step("Peer Comparables", _t, _cancel_peers)
             return result
         try:
             raw = peer_agent.run(company, company_type, {
@@ -784,13 +812,31 @@ def run_analysis(
                 "description": fund.description or "",
                 "revenue_usd_m": _peer_rev,
                 "quick_mode": quick_mode,
+                "cli_mode": cli_mode,
+                "debug_retries": debug,
                 "max_queries": 5,
                 "max_results": 3,
             })
             result = (raw, None)
+        except APICapacityError as e:
+            console.print("  [yellow]PeerFinder LLM unavailable; using deterministic peer fallback.[/yellow]")
+            try:
+                _fallback = find_peers_deterministic_quick(
+                    target_md=market_data,
+                    target_sector=fund.sector or "",
+                    target_industry=(
+                        str((market_data.additional_metadata or {}).get("industry") or "")
+                        if market_data and isinstance(market_data.additional_metadata, dict)
+                        else ""
+                    ),
+                    target_peers=16,
+                )
+            except Exception:
+                _fallback = []
+            result = ({"mode": "quick_deterministic", "tickers": _fallback}, e)
         except Exception as e:
             result = (None, e)
-        _done("Peer Comparables", _t)
+        _finish_step("Peer Comparables", _t, _cancel_peers)
         return result
 
     def _do_financials():
@@ -811,24 +857,32 @@ def run_analysis(
             else:
                 f = _parse_with_retry(
                     fin_agent, company, company_type,
-                    {"sector": fund.sector or "", "description": fund.description, "quick_mode": quick_mode},
+                    {
+                        "sector": fund.sector or "",
+                        "description": fund.description,
+                        "quick_mode": quick_mode,
+                        "cli_mode": cli_mode,
+                        "debug_retries": debug,
+                    },
                     Financials, _fin_fallback(),
                     retry_on_fail=(not quick_mode),
                     log_raw_errors=debug,
                 )
                 # Normalise "~$700M", "€700 million", "1.2B" → plain USD-millions string
                 f.revenue_current = normalise_revenue_string(f.revenue_current)
+        except APICapacityError:
+            console.print("  [yellow]FinancialModeler LLM unavailable; using deterministic fallback.[/yellow]")
+            f = _fin_fallback()
         except Exception as e:
             console.print(f"  [yellow]Financials fallback: {e}[/yellow]")
             f = _fin_fallback()
-        log.end_step("financials", _t)
-        _done("Financials", _t)
+        _finish_step("Financials", _t, _cancel_fin, "financials")
         return f
 
     def _do_tx_comps():
         _t = _step("Transaction Comps")
         if quick_mode:
-            _done("Transaction Comps", _t)
+            _finish_step("Transaction Comps", _t, _cancel_tx)
             return (None, None)
         try:
             import datetime
@@ -836,13 +890,18 @@ def run_analysis(
                 "sector": fund.sector or "",
                 "current_year": str(datetime.date.today().year),
                 "quick_mode": quick_mode,
+                "cli_mode": cli_mode,
+                "debug_retries": debug,
                 "max_queries": 5,
                 "max_results": 3,
             })
             result = (raw, None)
+        except APICapacityError as e:
+            console.print("  [yellow]Transaction comps LLM unavailable; using cached/none fallback.[/yellow]")
+            result = (None, e)
         except Exception as e:
             result = (None, e)
-        _done("Transaction Comps", _t)
+        _finish_step("Transaction Comps", _t, _cancel_tx)
         return result
 
     market_analysis_failed = False
@@ -861,6 +920,8 @@ def run_analysis(
             if _mkt_status == "failed":
                 market_analysis_failed = True
                 market_status = "FAILED"
+            elif _mkt_status == "degraded_api_capacity":
+                market_status = "DEGRADED_API_CAPACITY"
             elif _mkt_status == "skipped_quick_mode":
                 market_status = "SKIPPED_QUICK_MODE"
             else:
@@ -877,21 +938,30 @@ def run_analysis(
             market_analysis_failed = True
             market_status = "TIMEOUT"
             mkt = MarketAnalysis()
+            _cancel_market.set()
             _fut_mkt.cancel()
             console.print(f"  [red]Market analysis failed: timeout > {_MARKET_ANALYSIS_TIMEOUT}s[/red]")
         try:
             _peers_raw, _peers_err = _fut_peers.result(timeout=_PEER_COMPS_TIMEOUT)
             peer_timeout_or_fail = bool(_peers_err)
-            peers_status = "FAILED" if _peers_err else "OK"
+            if _peers_err:
+                if isinstance(_peers_err, APICapacityError) or is_api_capacity_error(_peers_err):
+                    peers_status = "DEGRADED_API_CAPACITY"
+                else:
+                    peers_status = "FAILED"
+            else:
+                peers_status = "OK"
         except FutureTimeoutError:
             _peers_raw, _peers_err = None, TimeoutError("peer timeout")
             peer_timeout_or_fail = True
             peers_status = "TIMEOUT"
+            _cancel_peers.set()
             _fut_peers.cancel()
             console.print(f"  [red]Peer comparables failed: timeout > {_PEER_COMPS_TIMEOUT}s[/red]")
         try:
             fin = _fut_fin.result(timeout=_FINANCIALS_TIMEOUT)
         except FutureTimeoutError:
+            _cancel_fin.set()
             _fut_fin.cancel()
             console.print(f"  [yellow]Financials timeout > {_FINANCIALS_TIMEOUT}s — using fallback.[/yellow]")
             fin = _fin_fallback()
@@ -900,6 +970,7 @@ def run_analysis(
                 _tx_raw, _tx_err = _fut_tx.result(timeout=_TX_COMPS_TIMEOUT)
             except FutureTimeoutError:
                 _tx_raw, _tx_err = None, TimeoutError("tx comps timeout")
+                _cancel_tx.set()
                 _fut_tx.cancel()
                 console.print(f"  [yellow]Transaction comps timeout > {_TX_COMPS_TIMEOUT}s — skipped.[/yellow]")
         else:
@@ -1027,7 +1098,7 @@ def run_analysis(
 
                 if peer_multiples.n_valuation_peers > 0:
                     _eff_req = 3.0 if quick_mode else 5.0
-                    if peers_status in {"FAILED", "TIMEOUT"}:
+                    if peers_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
                         peers_status = "DEGRADED"
                     if peers_status == "OK" and peer_multiples.n_valuation_peers < 5:
                         peers_status = "DEGRADED"
@@ -1201,8 +1272,12 @@ def run_analysis(
             peers_status = "FAILED"
             console.print(f"  [yellow]Peer post-processing skipped: {e}[/yellow]")
     elif _peers_err:
-        peers_status = "FAILED"
-        console.print(f"  [yellow]Peer finder skipped: {_peers_err}[/yellow]")
+        if isinstance(_peers_err, APICapacityError) or is_api_capacity_error(_peers_err):
+            peers_status = "DEGRADED_API_CAPACITY"
+            console.print("  [yellow]PeerFinder LLM unavailable; using deterministic peer fallback.[/yellow]")
+        else:
+            peers_status = "FAILED"
+            console.print(f"  [yellow]Peer finder skipped: {_peers_err}[/yellow]")
 
     # Post-process transaction comps — cache + extract medians
     _tx_medians: dict = {}
@@ -1229,7 +1304,10 @@ def run_analysis(
         except Exception as e:
             console.print(f"  [yellow]Transaction comps post-processing skipped: {e}[/yellow]")
     elif _tx_err:
-        console.print(f"  [yellow]Transaction comps agent skipped: {_tx_err}[/yellow]")
+        if isinstance(_tx_err, APICapacityError) or is_api_capacity_error(_tx_err):
+            console.print("  [yellow]Transaction comps LLM unavailable; using cached fallback.[/yellow]")
+        else:
+            console.print(f"  [yellow]Transaction comps agent skipped: {_tx_err}[/yellow]")
         _tx_medians = sector_medians(load_cache(), fund.sector or "")
 
     # ── 4. ASSUMPTIONS ────────────────────────────────────────────────────
@@ -1976,6 +2054,8 @@ def run_analysis(
             "run_date": date.today().isoformat(),
             "recent_window_months": 6,
             "quick_mode": quick_mode,
+            "cli_mode": cli_mode,
+            "debug_retries": debug,
         }
         try:
             with ThreadPoolExecutor(max_workers=1) as _tp:
@@ -2001,6 +2081,15 @@ def run_analysis(
                 recommendation=val.recommendation or "HOLD",
                 reason="thesis timeout",
             )
+        except APICapacityError:
+            thesis_status = "DEGRADED_API_CAPACITY"
+            console.print("  [yellow]ReportWriter LLM unavailable; using structured fallback.[/yellow]")
+            thesis = _build_fallback_thesis(
+                company=company,
+                sector=fund.sector or "",
+                recommendation=val.recommendation or "HOLD",
+                reason="report-writer API capacity",
+            )
         except Exception as _th_err:
             thesis_status = "FAILED"
             console.print(f"  [yellow]Investment thesis failed: {_th_err}[/yellow]")
@@ -2019,7 +2108,7 @@ def run_analysis(
         thesis.bull_case = _sanitize_thesis_language(thesis.bull_case or "")
         thesis.base_case = _sanitize_thesis_language(thesis.base_case or "")
         thesis.bear_case = _sanitize_thesis_language(thesis.bear_case or "")
-        if market_status in {"DEGRADED", "FAILED", "TIMEOUT"}:
+        if market_status in {"DEGRADED", "DEGRADED_API_CAPACITY", "FAILED", "TIMEOUT"}:
             thesis.bull_case = _soften_unsourced_scenario_specificity(thesis.bull_case or "")
             thesis.base_case = _soften_unsourced_scenario_specificity(thesis.base_case or "")
             thesis.bear_case = _soften_unsourced_scenario_specificity(thesis.bear_case or "")
@@ -2064,13 +2153,17 @@ def run_analysis(
         quality.score = max(0, quality.score - 6)
         quality.warnings.append("Thesis generation timed out")
         quality.checks["thesis"] = "timeout"
+    elif thesis_status == "DEGRADED_API_CAPACITY":
+        quality.score = max(0, quality.score - 8)
+        quality.warnings.append("Thesis generation degraded (API capacity)")
+        quality.checks["thesis"] = "degraded_api_capacity"
     elif thesis_status == "FAILED":
         quality.score = max(0, quality.score - 10)
         quality.warnings.append("Thesis generation failed")
         quality.checks["thesis"] = "failed"
     else:
         quality.checks["thesis"] = "ok"
-    if market_status == "DEGRADED":
+    if market_status in {"DEGRADED", "DEGRADED_API_CAPACITY"}:
         quality.score = max(0, quality.score - 4)
     quality.score = max(0, min(100, quality.score))
     quality.tier = _quality_tier(quality.score)
@@ -2091,7 +2184,7 @@ def run_analysis(
         _research_quality_score = 100
         _market_sources = [str(s) for s in (mkt.sources or []) if str(s).strip()]
         _has_source_backed_market = any(("http://" in s.lower()) or ("https://" in s.lower()) for s in _market_sources)
-        if market_status in {"DEGRADED"}:
+        if market_status in {"DEGRADED", "DEGRADED_API_CAPACITY"}:
             _research_quality_score -= 45
         elif market_status in {"FAILED", "TIMEOUT"}:
             _research_quality_score -= 60
@@ -2114,6 +2207,8 @@ def run_analysis(
             _research_quality_score = min(_research_quality_score, 80)
         if thesis_status == "TIMEOUT":
             _research_quality_score -= 20
+        elif thesis_status == "DEGRADED_API_CAPACITY":
+            _research_quality_score -= 25
         elif thesis_status == "FAILED":
             _research_quality_score -= 30
         _research_quality_score = max(0, min(100, _research_quality_score))
@@ -2129,7 +2224,7 @@ def run_analysis(
                 _ic_penalty += 8
             elif valuation_status == "FAILED":
                 _ic_penalty += 20
-            if peers_status in {"FAILED", "TIMEOUT"}:
+            if peers_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
                 _ic_penalty += 8
             elif peers_status == "DEGRADED":
                 _ic_penalty += 5
@@ -2159,9 +2254,9 @@ def run_analysis(
         _confidence_reasons.append("high DCF/comps dispersion or method disagreement")
     if _dcf_sanity_fail:
         _confidence_reasons.append("conservative/degraded DCF sanity")
-    if market_status in {"FAILED", "TIMEOUT", "DEGRADED"}:
+    if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}:
         _confidence_reasons.append("limited market context")
-    if thesis_status in {"FAILED", "TIMEOUT"}:
+    if thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
         _confidence_reasons.append("thesis generation degraded")
     _dcf_status = "normal"
     _dcf_src = result.field_sources.get("DCF Status")
@@ -2198,7 +2293,7 @@ def run_analysis(
                     if valuation_status == "FAILED"
                     else (
                         "DEGRADED"
-                        if valuation_status == "DEGRADED" or peers_status in {"FAILED", "TIMEOUT", "DEGRADED"}
+                        if valuation_status == "DEGRADED" or peers_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
                         else "OK"
                     )
                 ),
@@ -2210,7 +2305,7 @@ def run_analysis(
                         if market_status == "SKIPPED_QUICK_MODE"
                         else (
                             "DEGRADED"
-                            if market_status in {"FAILED", "TIMEOUT", "DEGRADED"} or thesis_status in {"FAILED", "TIMEOUT"}
+                            if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"} or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
                             else "OK"
                         )
                     )
@@ -2225,9 +2320,9 @@ def run_analysis(
                     "Low"
                     if (
                         valuation_status in {"FAILED", "DEGRADED"}
-                        or peers_status in {"FAILED", "TIMEOUT", "DEGRADED"}
-                        or market_status in {"FAILED", "TIMEOUT", "DEGRADED"}
-                        or thesis_status in {"FAILED", "TIMEOUT"}
+                        or peers_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
+                        or market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
+                        or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
                     )
                     else "Medium"
                 ),

@@ -737,6 +737,10 @@ def print_result(result):
 
 
 def main():
+    # Signal interactive CLI execution so agent retry behavior can prefer
+    # immediate fallbacks over long capacity backoffs.
+    os.environ["GOLDROGER_RUN_MODE"] = "cli"
+
     parser = argparse.ArgumentParser(description="Gold Roger — AI-powered equity analysis")
     parser.add_argument("--company", "-c", required=False, help="Company name, ticker, or description")
     parser.add_argument("--siren", help="French SIREN — bypasses name resolution, calls Pappers directly")
@@ -840,7 +844,7 @@ def main():
             result = run_analysis(confirmed_company, args.type, llm=args.llm, siren=args.siren,
                                    interactive=args.interactive, data_sources=selected_sources,
                                    country_hint=country_hint, company_identifier=company_identifier,
-                                   quick_mode=args.quick, debug=args.debug)
+                                   quick_mode=args.quick, debug=args.debug, cli_mode=True)
             print_result(result)
 
         if args.output:
