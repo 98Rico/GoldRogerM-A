@@ -285,3 +285,28 @@ def test_mega_cap_dcf_cross_checks_and_status_tiering():
         assert dcf_status == "materially conservative / degraded"
     elif implied < 12.0:
         assert dcf_status in {"conservative / degraded", "materially conservative / degraded"}
+
+
+def test_materially_conservative_dcf_sets_indicative_note_and_comps_floor():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "mega_cap_tech": True,
+            "peer_count": 6,
+            "peer_quality": "mixed",
+            "low_confidence_comps": True,
+            "ev_ebitda_range": [20.0, 28.0],
+            "ev_ebitda_median": 24.0,
+            "ev_ebitda_weighted": 24.0,
+        },
+        market_data=market_data,
+        sector="Technology",
+    )
+    dcf_status = out.field_sources.get("DCF Status", ("normal", "", ""))[0]
+    if dcf_status == "materially conservative / degraded":
+        assert out.weights_used.get("comps", 0.0) >= 0.40
+        assert any("Point estimate is indicative only" in n for n in out.notes)

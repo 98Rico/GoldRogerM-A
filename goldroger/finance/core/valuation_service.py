@@ -367,6 +367,7 @@ class ValuationService:
         _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
         _is_mega_cap = bool(market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m)
         _pre_disp = None
+        low_conf_peer_set = False
         if dcf_output and comps_output and dcf_output.enterprise_value > 0 and comps_output.mid > 0:
             _pre_disp = max(dcf_output.enterprise_value, comps_output.mid) / min(
                 dcf_output.enterprise_value,
@@ -504,6 +505,10 @@ class ValuationService:
             notes.append(
                 f"Final dispersion cap: comps weight {_old:.0%}→{_disp_cap:.0%}."
             )
+        if dcf_materially_conservative and low_conf_peer_set:
+            notes.append(
+                "Point estimate is indicative only due to degraded DCF and imperfect peer set."
+            )
         w_pct = {k: f"{v:.0%}" for k, v in weights.items()}
         notes.append(f"Blend weights: DCF {w_pct['dcf']} / Comps {w_pct['comps']} / Tx {w_pct['transactions']}.")
         blended = compute_weighted_valuation(dcf_output, comps_output, tx_output, weights)
@@ -549,6 +554,10 @@ class ValuationService:
                 )
                 if assumptions.get("low_confidence_comps") or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}:
                     notes.append("Peer multiple comparison is low-confidence reference due to degraded peer set.")
+                if assumptions.get("missing_consumer_ecosystem_bucket"):
+                    notes.append(
+                        "Applied peer multiple is based on adjacent peers due to limited direct consumer-hardware ecosystem comparables."
+                    )
                 if _delta > 30 and (
                     assumptions.get("low_confidence_comps")
                     or str(assumptions.get("peer_quality") or "").lower() in {"weak", "mixed"}

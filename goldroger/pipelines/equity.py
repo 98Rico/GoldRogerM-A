@@ -205,6 +205,40 @@ def _sanitize_thesis_language(text: str) -> str:
     return txt
 
 
+def _trend_is_placeholder(text: str) -> bool:
+    t = str(text or "").strip().lower()
+    if not t:
+        return True
+    return any(
+        k in t
+        for k in (
+            "no market trend data available",
+            "not available",
+            "unavailable",
+            "insufficient data",
+            "no data",
+        )
+    )
+
+
+def _soften_unsourced_scenario_specificity(text: str) -> str:
+    txt = str(text or "")
+    if not txt:
+        return txt
+    # Remove unsupported precision when research enrichment is degraded.
+    txt = _re.sub(r"\b\d{1,2}(?:\.\d+)?\s*-\s*\d{1,2}(?:\.\d+)?%\s*CAGR\b", "growth acceleration", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(
+        r"\(?\s*~?\s*\d{1,2}(?:\.\d+)?\s*-\s*\d{1,2}(?:\.\d+)?%\s*\)?",
+        "resilient margins",
+        txt,
+        flags=_re.IGNORECASE,
+    )
+    txt = _re.sub(r"\b\d{1,2}(?:\.\d+)?%\s*CAGR\b", "growth trajectory", txt, flags=_re.IGNORECASE)
+    # Avoid stale product cycle specifics when unsourced.
+    txt = _re.sub(r"\bQ[1-4]\s+20\d{2}\s+earnings\b", "next earnings update", txt, flags=_re.IGNORECASE)
+    return txt
+
+
 def _text_missing(v) -> bool:
     if v is None:
         return True
@@ -1975,6 +2009,10 @@ def run_analysis(
         thesis.bull_case = _sanitize_thesis_language(thesis.bull_case or "")
         thesis.base_case = _sanitize_thesis_language(thesis.base_case or "")
         thesis.bear_case = _sanitize_thesis_language(thesis.bear_case or "")
+        if market_status in {"DEGRADED", "FAILED", "TIMEOUT"}:
+            thesis.bull_case = _soften_unsourced_scenario_specificity(thesis.bull_case or "")
+            thesis.base_case = _soften_unsourced_scenario_specificity(thesis.base_case or "")
+            thesis.bear_case = _soften_unsourced_scenario_specificity(thesis.bear_case or "")
 
     if football_field and thesis:
         if football_field.bear and thesis.bear_case:
@@ -2218,22 +2256,26 @@ def run_analysis(
             f"Competitive landscape: {'available' if _has_comp else 'unavailable'} | "
             f"Regulatory context: {'available' if _has_reg else 'unavailable'}"
         )
-        if not analysis.market.key_trends:
+        _existing_trends = [str(t) for t in (analysis.market.key_trends or []) if str(t).strip()]
+        _usable_trends = [t for t in _existing_trends if not _trend_is_placeholder(t)]
+        if not _usable_trends:
             _sec = (fund.sector or "").lower()
             if any(k in _sec for k in ("tech", "software", "technology", "communication")):
                 analysis.market.key_trends = [
-                    "Demand trend: mature device categories are replacement-cycle driven; services mix resilience remains key.",
-                    "Competitive trend: premium ecosystem competition and regional pressure (including China) can affect share dynamics.",
-                    "Regulatory trend: App Store, DMA/antitrust, and platform-policy changes can affect monetization.",
-                    "Segment trend: hardware growth moderates while software/services contribution drives margin durability.",
+                    "Market Context (qualitative fallback, not source-backed): demand trend — mature smartphone category remains upgrade-cycle driven.",
+                    "Market Context (qualitative fallback, not source-backed): competitive trend — premium Android and China-local OEM pressure can affect share.",
+                    "Market Context (qualitative fallback, not source-backed): regulatory trend — App Store / DMA / DOJ platform-policy developments can affect monetization.",
+                    "Market Context (qualitative fallback, not source-backed): product trend — AI feature adoption and services monetization remain key drivers.",
                 ]
             else:
                 analysis.market.key_trends = [
-                    "Demand trend context: limited direct TAM datapoints; monitor category demand proxies.",
-                    "Competitive trend context: incumbents and platform competitors remain active.",
-                    "Regulatory trend context: policy and antitrust dynamics can affect monetization.",
-                    "Segment trend context: mix-shift and category-level growth should be monitored.",
+                    "Market Context (qualitative fallback, not source-backed): demand trend — limited direct TAM datapoints; monitor category demand proxies.",
+                    "Market Context (qualitative fallback, not source-backed): competitive trend — incumbents and platform competitors remain active.",
+                    "Market Context (qualitative fallback, not source-backed): regulatory trend — policy and antitrust dynamics can affect monetization.",
+                    "Market Context (qualitative fallback, not source-backed): segment trend — mix-shift and category-level growth should be monitored.",
                 ]
+        else:
+            analysis.market.key_trends = _usable_trends
     elif market_analysis_failed:
         analysis.market.market_size = "Not available"
         analysis.market.market_growth = "Not available"

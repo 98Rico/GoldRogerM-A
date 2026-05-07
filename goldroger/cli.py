@@ -523,6 +523,15 @@ def print_result(result):
             except Exception:
                 pass
     _fv_range = _source_value("Fair Value Range")
+    if _fv_range and _confidence == "low":
+        _m = re.match(r"\$([0-9][0-9,]*\.?[0-9]*)\s*[–-]\s*\$([0-9][0-9,]*\.?[0-9]*)", str(_fv_range))
+        if _m:
+            try:
+                _lo = round(float(_m.group(1).replace(",", "")))
+                _hi = round(float(_m.group(2).replace(",", "")))
+                _fv_range = f"${_lo:,}–${_hi:,}"
+            except Exception:
+                pass
     _fv_width = _source_value("Fair Value Range Width")
     _ev_display = (
         f" | Implied EV: {v.implied_value}"
