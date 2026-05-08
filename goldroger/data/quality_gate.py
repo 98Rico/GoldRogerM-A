@@ -24,6 +24,7 @@ def assess_data_quality(
     market_data: Optional[MarketData],
     financials: dict,
     market_analysis: Optional[dict] = None,
+    market_context_optional: bool = False,
     proxy_growth_used: bool = False,
     peer_count: int = 0,
     market_analysis_failed: bool = False,
@@ -82,7 +83,7 @@ def assess_data_quality(
         score -= 5
     else:
         score, has_estimated_inputs = _score_market_context(
-            market_analysis, checks, warnings, score, has_estimated_inputs
+            market_analysis, checks, warnings, score, has_estimated_inputs, market_context_optional
         )
 
     if proxy_growth_used:
@@ -114,7 +115,7 @@ def assess_data_quality(
         checks["market_analysis"] = "failed"
     elif market_analysis_degraded:
         score -= 8
-        warnings.append("Market analysis degraded (no usable TAM/growth context)")
+        warnings.append("Market analysis degraded (source-backed market context unavailable)")
         checks["market_analysis"] = "degraded"
     elif market_analysis_skipped_quick:
         checks["market_analysis"] = "skipped_quick_mode"
@@ -199,7 +200,7 @@ def _score_private(market_data, checks, warnings, score: int, has_estimated_inpu
 
 
 def _score_market_context(
-    market_analysis, checks, warnings, score: int, has_estimated_inputs: bool
+    market_analysis, checks, warnings, score: int, has_estimated_inputs: bool, market_context_optional: bool = False
 ) -> tuple[int, bool]:
     if not isinstance(market_analysis, dict):
         checks["market_context"] = "not_provided"
@@ -211,23 +212,30 @@ def _score_market_context(
     market_segment = market_analysis.get("market_segment")
     key_trends = market_analysis.get("key_trends")
 
-    if _text_missing(market_size):
-        score -= 10
-        warnings.append("Missing TAM / market size context")
+    _missing_size = _text_missing(market_size)
+    _missing_growth = _text_missing(market_growth)
+    if _missing_size and _missing_growth:
+        score -= (4 if market_context_optional else 12)
+        warnings.append("Source-backed market context unavailable")
         checks["market_size"] = "missing"
-    else:
-        checks["market_size"] = "estimated"
-        score -= 5
-        has_estimated_inputs = True
-
-    if _text_missing(market_growth):
-        score -= 8
-        warnings.append("Missing market growth context")
         checks["market_growth"] = "missing"
     else:
-        checks["market_growth"] = "estimated"
-        score -= 5
-        has_estimated_inputs = True
+        if _missing_size:
+            score -= (2 if market_context_optional else 6)
+            warnings.append("Limited market context support")
+            checks["market_size"] = "missing"
+        else:
+            checks["market_size"] = "estimated"
+            score -= 4
+            has_estimated_inputs = True
+        if _missing_growth:
+            score -= (2 if market_context_optional else 6)
+            warnings.append("Limited market context support")
+            checks["market_growth"] = "missing"
+        else:
+            checks["market_growth"] = "estimated"
+            score -= 4
+            has_estimated_inputs = True
 
     if _text_missing(market_segment):
         score -= 6
@@ -238,7 +246,7 @@ def _score_market_context(
 
     if not isinstance(key_trends, list) or len([x for x in key_trends if str(x).strip()]) < 2:
         score -= 4
-        warnings.append("Missing key trend depth (need 2+ material trends)")
+        warnings.append("Limited trend/catalyst support")
         checks["key_trends"] = "thin"
     else:
         checks["key_trends"] = "ok"

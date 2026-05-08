@@ -265,6 +265,8 @@ def _sync_canonical_recommendation_text(
         f"- Recommendation: {final_recommendation}",
         txt,
     )
+    txt = _re.sub(r"(LOW CONVICTION)\(", r"\1 (", txt)
+    txt = _re.sub(r"(MODERATE CONVICTION)\(", r"\1 (", txt)
     canonical = (
         f"Valuation reference (canonical): fair value {fair_value_text}; "
         f"point estimate {point_estimate_text}; recommendation {final_recommendation}."
@@ -351,7 +353,8 @@ def _build_fallback_thesis(
         f"- Demand drivers: {_drivers}.\n"
         f"- Margin drivers: {_margins}.\n"
         f"- Valuation: model signal is {model_signal}, but final recommendation is {recommendation} "
-        f"because valuation confidence is low and method dispersion is high ({reason}).\n"
+        "because valuation confidence is low and source-backed market context is unavailable.\n"
+        f"- Confidence note: {reason}.\n"
         f"\nRisks:\n"
         f"- {_risks}.\n"
         f"- Because full research was unavailable, this thesis is intentionally conservative and based only on "
@@ -697,6 +700,74 @@ def run_analysis(
                     _ind = str(market_data.additional_metadata.get("industry") or "").strip()
                     if _ind:
                         sources.add_once("Industry", _ind, "yfinance", "verified")
+                    _country = str(market_data.additional_metadata.get("country") or "").strip()
+                    if _country:
+                        sources.add_once("Country", _country, "yfinance", "verified")
+                    _exch = str(market_data.additional_metadata.get("exchange") or "").strip()
+                    if _exch:
+                        sources.add_once("Exchange", _exch, "yfinance", "verified")
+                    _div_yld = market_data.additional_metadata.get("dividend_yield")
+                    if _div_yld is not None:
+                        try:
+                            _dy = float(_div_yld)
+                            if _dy >= 0:
+                                sources.add_once("Dividend Yield", f"{_dy:.1%}", "yfinance", "verified")
+                        except Exception:
+                            pass
+                    _div_rate = market_data.additional_metadata.get("dividend_rate")
+                    if _div_rate is not None:
+                        try:
+                            _dr = float(_div_rate)
+                            if _dr >= 0:
+                                sources.add_once("Dividend Rate", f"${_dr:.2f}", "yfinance", "verified")
+                        except Exception:
+                            pass
+                if market_data.fcf_ttm is not None and market_data.market_cap and market_data.market_cap > 0:
+                    try:
+                        _fcf_yield = float(market_data.fcf_ttm) / float(market_data.market_cap)
+                        if _fcf_yield == _fcf_yield:
+                            sources.add_once("FCF Yield", f"{_fcf_yield:.1%}", "derived_yfinance", "inferred")
+                    except Exception:
+                        pass
+                if (
+                    market_data.net_debt is not None
+                    and market_data.ebitda_ttm is not None
+                    and market_data.ebitda_ttm > 0
+                ):
+                    try:
+                        _ndebt_ebitda = float(market_data.net_debt) / float(market_data.ebitda_ttm)
+                        sources.add_once("Net Debt / EBITDA", f"{_ndebt_ebitda:.2f}x", "derived_yfinance", "inferred")
+                    except Exception:
+                        pass
+                if (
+                    market_data.ebit_ttm is not None
+                    and market_data.interest_expense is not None
+                    and market_data.interest_expense > 0
+                ):
+                    try:
+                        _int_cov = float(market_data.ebit_ttm) / float(market_data.interest_expense)
+                        sources.add_once("Interest Coverage", f"{_int_cov:.2f}x", "derived_yfinance", "inferred")
+                    except Exception:
+                        pass
+                if (
+                    market_data.fcf_ttm is not None
+                    and market_data.market_cap
+                    and market_data.market_cap > 0
+                    and isinstance(market_data.additional_metadata, dict)
+                ):
+                    _dy = market_data.additional_metadata.get("dividend_yield")
+                    try:
+                        _dyf = float(_dy) if _dy is not None else None
+                    except Exception:
+                        _dyf = None
+                    if _dyf is not None and _dyf > 0:
+                        try:
+                            _div_cash = float(market_data.market_cap) * _dyf
+                            if _div_cash > 0:
+                                _div_cov = float(market_data.fcf_ttm) / _div_cash
+                                sources.add_once("Dividend Coverage", f"{_div_cov:.2f}x", "derived_yfinance", "inferred")
+                        except Exception:
+                            pass
         log.end_step("market_data", t0)
         _done("Market Data", t0)
 
@@ -716,6 +787,15 @@ def run_analysis(
         console.print("  [yellow]Fundamentals LLM unavailable; using deterministic fallback.[/yellow]")
         fund = _fund_fallback(company)
     if market_data:
+        _fund_name = str(fund.company_name or "").strip()
+        _input_name = str(company or "").strip()
+        _ticker_name = str(market_data.ticker or "").strip()
+        if market_data.company_name and (
+            not _fund_name
+            or _fund_name.upper() in {_ticker_name.upper(), _input_name.upper()}
+            or _fund_name.lower() in {"unknown", "n/a", "na"}
+        ):
+            fund.company_name = market_data.company_name
         if not fund.ticker:
             fund.ticker = market_data.ticker
         if not fund.sector:
@@ -727,6 +807,20 @@ def run_analysis(
         _hq = ", ".join([x for x in [_addr.get("locality"), _addr.get("country")] if x])
         if _hq and not fund.headquarters:
             fund.headquarters = _hq
+        if not fund.headquarters:
+            _country = str(_meta.get("country") or "").strip()
+            if _country:
+                fund.headquarters = _country
+        if (
+            (not (fund.description or "").strip())
+            or "description not available" in (fund.description or "").lower()
+        ):
+            _ind = str(_meta.get("industry") or "").strip()
+            _ex = str(_meta.get("exchange") or "").strip()
+            _country = str(_meta.get("country") or "").strip()
+            _bits = [b for b in [_ind, _country, _ex] if b]
+            if _bits:
+                fund.description = f"{fund.company_name or market_data.company_name} is a publicly listed company ({' | '.join(_bits)})."
         _sic_details = _meta.get("sic_details") or []
         _sic_labels = [d.get("description") for d in _sic_details if d.get("description")]
         if _sic_labels and (
@@ -1295,12 +1389,17 @@ def run_analysis(
                     _shown = ", ".join(p.ticker for p in peer_multiples.peers[:_show_n])
                     if peer_multiples.n_peers > _show_n:
                         console.print(
-                            f"  [cyan]{peer_multiples.n_peers} validated peers, top {_show_n} shown:[/cyan] "
+                            f"  [cyan]{peer_multiples.n_peers} validated peers: "
+                            f"{peer_multiples.n_valuation_peers} valuation peers, "
+                            f"{peer_multiples.n_qualitative_peers} qualitative peer(s) "
+                            f"(top {_show_n} shown)[/cyan] "
                             + _shown + drop_note
                         )
                     else:
                         console.print(
-                            f"  [cyan]{peer_multiples.n_peers} validated peers:[/cyan] "
+                            f"  [cyan]{peer_multiples.n_peers} validated peers: "
+                            f"{peer_multiples.n_valuation_peers} valuation peers, "
+                            f"{peer_multiples.n_qualitative_peers} qualitative peer(s)[/cyan] "
                             + _shown + drop_note
                         )
                     _bucket_counts: dict[str, int] = {}
@@ -1533,11 +1632,24 @@ def run_analysis(
 
     # ── 5. VALUATION ENGINE ───────────────────────────────────────────────
     t0 = _step("Valuation Engine")
+    _dq_profile = detect_sector_profile(fund.sector or "", _target_industry)
+    _market_context_optional = _dq_profile in {
+        "consumer_staples_tobacco",
+        "consumer_staples_beverages",
+        "consumer_staples_household",
+        "financials_banks",
+        "financials_insurance",
+        "utilities",
+        "energy_oil_gas",
+        "materials_chemicals_mining",
+        "real_estate_reit",
+    }
     quality = assess_data_quality(
         company_type=company_type,
         market_data=market_data,
         financials=fin.model_dump(),
         market_analysis=mkt.model_dump(),
+        market_context_optional=_market_context_optional,
         proxy_growth_used=bool(
             market_data
             and market_data.forward_revenue_growth is not None
@@ -1838,7 +1950,7 @@ def run_analysis(
                 ]
                 _sotp = _compute_sotp(_segments)
                 _methods.append(
-                    ValuationMethod(name="SOTP", mid=str(round(_sotp.net_ev, 1)), weight=None)
+                    ValuationMethod(name="SOTP (reference only)", mid=str(round(_sotp.net_ev, 1)), weight=None)
                 )
                 console.print(
                     f"  [cyan]SOTP ({len(_segments)} segments): Net EV ${_sotp.net_ev:.0f}M "

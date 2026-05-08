@@ -356,6 +356,11 @@ def _metric_source_keys(metric: str) -> list[str]:
         "Free Cash Flow": ["Free Cash Flow"],
         "TAM": ["TAM", "Market Size"],
         "Market Growth": ["Market Growth"],
+        "Dividend Yield": ["Dividend Yield"],
+        "FCF Yield": ["FCF Yield"],
+        "Net Debt / EBITDA": ["Net Debt / EBITDA"],
+        "Dividend Coverage": ["Dividend Coverage"],
+        "Interest Coverage": ["Interest Coverage"],
         "Target": ["Implied Target Price", "Target Price", "Implied EV"],
         "Indicative midpoint": ["Implied Target Price", "Target Price", "Implied EV"],
         "Indicative value per share": ["Implied Target Price", "Target Price", "Implied EV"],
@@ -499,6 +504,8 @@ def _format_metric_value(metric: str, value: str) -> str:
     if metric in {"Revenue Growth", "Market Growth"}:
         return _fmt_percentish(raw, signed=True)
     if metric in {"Gross Margin", "EBITDA Margin", "Net Margin"}:
+        return _fmt_percentish(raw, signed=False)
+    if metric in {"Dividend Yield", "FCF Yield"}:
         return _fmt_percentish(raw, signed=False)
     return raw
 
@@ -838,7 +845,7 @@ def print_result(result, debug: bool = False):
             f"  Peer selection: {_timings.get('peer_selection', 'N/A')}s\n"
             f"  Peer validation/data fetch: {_timings.get('peer_validation', 'N/A')}s\n"
             f"  Peer total: {_timings.get('peers', 'N/A')}s\n"
-            f"  Research total (market+peer+tx): {_timings.get('research_total', 'N/A')}s\n"
+            f"  Research agent time sum (parallel; may exceed wall-clock): {_timings.get('research_total', 'N/A')}s\n"
             f"  Financials: {_timings.get('financials', 'N/A')}s\n"
             f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"
             f"  Report: {_timings.get('thesis', 'N/A')}s\n"
@@ -908,6 +915,25 @@ def print_result(result, debug: bool = False):
     ]:
         kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
     console.print(kpi_table)
+    _sector_ind = f"{f.sector or ''} {(_source_value('Industry') or '')}".lower()
+    if any(tok in _sector_ind for tok in ("tobacco", "nicotine")):
+        cash_table = Table(title="Cash Return & Leverage Metrics", show_header=True, header_style="bold magenta")
+        cash_table.add_column("Metric")
+        cash_table.add_column("Value")
+        _cash_rows = [
+            ("Dividend Yield", _source_value("Dividend Yield")),
+            ("FCF Yield", _source_value("FCF Yield")),
+            ("Net Debt / EBITDA", _source_value("Net Debt / EBITDA")),
+            ("Dividend Coverage", _source_value("Dividend Coverage")),
+            ("Interest Coverage", _source_value("Interest Coverage")),
+        ]
+        _has_cash_rows = False
+        for _m, _v in _cash_rows:
+            if _v:
+                _has_cash_rows = True
+                cash_table.add_row(_m, _value_with_source(_m, _v))
+        if _has_cash_rows:
+            console.print(cash_table)
     if m.key_trends:
         console.print("\n[bold]Market Context[/]")
         for trend in m.key_trends[:4]:

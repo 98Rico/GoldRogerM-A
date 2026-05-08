@@ -300,6 +300,30 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
                 "industry_key": info.get("industryKey"),
                 "industry": info.get("industry"),
                 "country": info.get("country"),
+                "exchange": info.get("exchange") or info.get("fullExchangeName"),
+                "dividend_yield": (
+                    float(info.get("dividendYield"))
+                    if info.get("dividendYield") is not None
+                    else (
+                        float(info.get("trailingAnnualDividendYield"))
+                        if info.get("trailingAnnualDividendYield") is not None
+                        else None
+                    )
+                ),
+                "dividend_rate": (
+                    float(info.get("dividendRate"))
+                    if info.get("dividendRate") is not None
+                    else (
+                        float(info.get("trailingAnnualDividendRate"))
+                        if info.get("trailingAnnualDividendRate") is not None
+                        else None
+                    )
+                ),
+                "payout_ratio": (
+                    float(info.get("payoutRatio"))
+                    if info.get("payoutRatio") is not None
+                    else None
+                ),
             },
         )
     except Exception as exc:
