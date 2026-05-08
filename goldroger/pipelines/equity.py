@@ -243,6 +243,35 @@ def _soften_unsourced_scenario_specificity(text: str) -> str:
     return txt
 
 
+def _sync_canonical_recommendation_text(
+    thesis_text: str,
+    fair_value_text: str,
+    point_estimate_text: str,
+    final_recommendation: str,
+) -> str:
+    txt = str(thesis_text or "").strip()
+    txt = _re.sub(
+        r"(?im)^Valuation reference \(canonical\):[^\n]*\n*",
+        "",
+        txt,
+    ).strip()
+    txt = _re.sub(
+        r"(?i)\bfinal recommendation(?: is)?\s+[A-Z][A-Z /-]*",
+        f"final recommendation is {final_recommendation}",
+        txt,
+    )
+    txt = _re.sub(
+        r"(?im)^\s*-\s*recommendation(?:\s*:|\s+is)?\s*[A-Z][A-Z /-]*\s*$",
+        f"- Recommendation: {final_recommendation}",
+        txt,
+    )
+    canonical = (
+        f"Valuation reference (canonical): fair value {fair_value_text}; "
+        f"point estimate {point_estimate_text}; recommendation {final_recommendation}."
+    )
+    return f"{canonical}\n\n{txt}".strip()
+
+
 def _text_missing(v) -> bool:
     if v is None:
         return True
@@ -1134,7 +1163,9 @@ def run_analysis(
                 _ma_txt = f"{float(_ma_t):.2f}s"
             except Exception:
                 _ma_txt = f"{_ma_t}s"
-            console.print(f"  [dim]Market analysis attempted: {_ma_txt}; fallback used.[/dim]")
+            console.print(
+                f"  [dim]Market analysis attempted: {_ma_txt}; source-backed context unavailable, fallback used.[/dim]"
+            )
 
     # Post-process peer results (yfinance calls — sequential is fine)
     _peer_post_t0 = time.time()
@@ -1810,7 +1841,14 @@ def run_analysis(
                     ValuationMethod(name="SOTP", mid=str(round(_sotp.net_ev, 1)), weight=None)
                 )
                 console.print(
-                    f"  [cyan]SOTP ({len(_segments)} segments): Net EV ${_sotp.net_ev:.0f}M[/cyan]"
+                    f"  [cyan]SOTP ({len(_segments)} segments): Net EV ${_sotp.net_ev:.0f}M "
+                    f"(reference only; unverified segment assumptions)[/cyan]"
+                )
+                sources.add_once(
+                    "SOTP",
+                    f"${_sotp.net_ev:.0f}M (reference only)",
+                    "analysis_output_unverified_segments",
+                    "inferred",
                 )
         except Exception as _sotp_err:
             console.print(f"  [dim]SOTP skipped: {_sotp_err}[/dim]")
@@ -2430,12 +2468,6 @@ def run_analysis(
                     f"point estimate {_pt_txt}",
                     thesis.thesis,
                 )
-        _canon = (
-            f"Valuation reference (canonical): fair value {_fv_txt}; "
-            f"point estimate {_pt_txt}; recommendation {val.recommendation or 'N/A'}."
-        )
-        if _canon not in (thesis.thesis or ""):
-            thesis.thesis = f"{_canon}\n\n{thesis.thesis or ''}".strip()
 
     # Final confidence adjustments after enrichment stage completes.
     if valuation_status == "DEGRADED":
@@ -2553,20 +2585,24 @@ def run_analysis(
         _pure_share = float(peer_multiples.pure_peer_weight_share or 0.0)
         _eff_disp = float(peer_multiples.effective_peer_count or 0.0)
         _low_div = bool(_eff_disp > 0 and _eff_disp < 5.0)
-        if _pure_share >= 0.65 and not _low_div:
+        if _pure_share >= 0.80 and not _low_div:
             _peers_display_status = "PURE_COMPS_OK"
-        elif _pure_share >= 0.25:
+        elif _pure_share >= 0.50:
             _peers_display_status = "MIXED_COMPS_OK"
+        elif _pure_share > 0.0 and not _low_div:
+            _peers_display_status = "ADJACENT_COMPS"
         elif _low_div:
             _peers_display_status = "ADJACENT_COMPS_LOW_DIVERSITY"
         elif _pure_share > 0.0 or _missing_consumer_ecosystem_bucket:
             _peers_display_status = "ADJACENT_COMPS_OK"
         else:
-            _peers_display_status = "PEERS_DEGRADED"
+            _peers_display_status = "NO_PURE_COMPS"
     _peers_is_low_conf = _peers_display_status in {
         "ADJACENT_COMPS_LOW_DIVERSITY",
+        "ADJACENT_COMPS",
         "ADJACENT_COMPS_OK",
         "MIXED_COMPS_OK",
+        "NO_PURE_COMPS",
         "PEERS_DEGRADED",
         "PEERS_FAILED",
     }
@@ -2578,10 +2614,16 @@ def run_analysis(
         if peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < 5.0:
             _peer_quality_score -= 10
         _pure_share = float(peer_multiples.pure_peer_weight_share or 0.0)
-        if _pure_share < 0.15:
-            _peer_quality_score -= 10
-        elif _pure_share < 0.35:
-            _peer_quality_score -= 10
+        if _pure_share <= 0.0:
+            _peer_quality_score = min(_peer_quality_score, 62)
+        elif _pure_share < 0.25:
+            _peer_quality_score = min(_peer_quality_score, 65)
+        elif _pure_share < 0.50:
+            _peer_quality_score = min(_peer_quality_score, 75)
+        elif _pure_share < 0.80:
+            _peer_quality_score = min(_peer_quality_score, 85)
+        else:
+            _peer_quality_score = min(_peer_quality_score, 100)
     else:
         _peer_quality_score -= 40
     if _missing_consumer_ecosystem_bucket:
@@ -2638,7 +2680,7 @@ def run_analysis(
         (not _confidence_is_low)
         and (
             _method_dispersion_ratio >= 1.4
-            or _peers_display_status in {"MIXED_COMPS_OK", "ADJACENT_COMPS_OK"}
+            or _peers_display_status in {"MIXED_COMPS_OK", "ADJACENT_COMPS", "ADJACENT_COMPS_OK", "NO_PURE_COMPS"}
             or str(_research_source) != "source_backed"
         )
     )
@@ -2681,6 +2723,21 @@ def run_analysis(
         if (not quick_mode) and str(_research_source) != "source_backed" and _rec in {"BUY", "SELL", "BUY / MODERATE CONVICTION", "SELL / MODERATE CONVICTION"}:
             _rec = "BUY / LOW CONVICTION" if _raw_signal_label.startswith("Positive") else "HOLD / LOW CONVICTION"
         val.recommendation = _rec
+    elif valuation_failed:
+        _rec = val.recommendation or "INCONCLUSIVE"
+
+    # Final canonical sync after confidence guardrails so every module uses the same recommendation string.
+    if thesis and val:
+        _fv_src = result.field_sources.get("Fair Value Range")
+        _fv_txt = _fv_src[0] if _fv_src and _fv_src[0] else "N/A"
+        _pt_txt = val.target_price or "N/A"
+        _final_rec = val.recommendation or _rec or "N/A"
+        thesis.thesis = _sync_canonical_recommendation_text(
+            thesis.thesis or "",
+            _fv_txt,
+            _pt_txt,
+            _final_rec,
+        )
 
     analysis = AnalysisResult(
         company=company,

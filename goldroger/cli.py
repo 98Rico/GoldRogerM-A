@@ -556,6 +556,8 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         peers_state = "PEERS_FAILED"
     if peers_state in {"FAILED", "TIMEOUT", "DEGRADED"}:
         peers_state = "PEERS_DEGRADED"
+    if peers_state == "ADJACENT_REFERENCE_SET":
+        peers_state = "ADJACENT_COMPS_OK"
     valuation_state = _normalize_valuation_status(
         str(pipeline_status.get("valuation", "N/A")),
         str(pipeline_status.get("confidence", "")),
@@ -597,7 +599,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _disp_ratio = pipeline_status.get("method_dispersion_ratio")
     if _disp_level:
         try:
-            _disp_txt = f"{_disp_level} ({float(_disp_ratio):.2f}x spread)"
+            _disp_txt = f"{_disp_level} — valuation range high/low = {float(_disp_ratio):.2f}x"
         except Exception:
             _disp_txt = _disp_level
         block += f"\n  Method dispersion: {_disp_txt}"
@@ -613,6 +615,35 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             pass
     reason = str(pipeline_status.get("confidence_reason", "") or "").strip()
     return block, reason
+
+
+def _confidence_improvement_actions(
+    sector: str,
+    confidence_reason: str,
+    research_state: str,
+    peers_state: str,
+) -> list[str]:
+    sec = (sector or "").lower()
+    rs = (research_state or "").upper()
+    ps = (peers_state or "").upper()
+    reasons = (confidence_reason or "").lower()
+    tips: list[str] = []
+    if rs in {"PARTIAL_FALLBACK", "FAILED"}:
+        tips.append("add source-backed market context (trends/catalysts) instead of fallback-only research")
+    if ps in {"ADJACENT_COMPS_LOW_DIVERSITY", "ADJACENT_COMPS", "ADJACENT_COMPS_OK", "NO_PURE_COMPS", "PEERS_DEGRADED"}:
+        tips.append("improve peer purity/diversification (more core peers, less adjacent concentration)")
+    if "dispersion" in reasons:
+        tips.append("reduce method dispersion by stress-testing DCF and comps assumptions")
+    if "dcf" in reasons:
+        tips.append("recalibrate DCF (terminal assumptions, growth fade, and discount-rate sensitivity)")
+    if "tobacco" in sec:
+        tips.append("add tobacco cash-return inputs (FCF yield, dividend coverage, leverage trends)")
+    if "technology" in sec or "consumer electronics" in sec:
+        tips.append("add segment-level hardware/services assumptions and Apple-like peer context")
+    if not tips:
+        tips.append("collect higher-quality source-backed inputs for market context and peers")
+    # Keep concise and deterministic.
+    return tips[:4]
 
 
 def print_result(result, debug: bool = False):
@@ -721,6 +752,18 @@ def print_result(result, debug: bool = False):
         console.print(_status_block)
         if _status_reason:
             console.print(f"[dim]Why low confidence: {_status_reason}[/dim]")
+        _research_state_for_tips = _normalize_research_status(str(_pipeline_status.get("research_enrichment", "OK")))
+        _peers_state_for_tips = str(_pipeline_status.get("peers", "N/A"))
+        _tips = _confidence_improvement_actions(
+            sector=f.sector or "",
+            confidence_reason=_status_reason,
+            research_state=_research_state_for_tips,
+            peers_state=_peers_state_for_tips,
+        )
+        if _tips and str(_pipeline_status.get("confidence", "")).lower() == "low":
+            console.print("[bold]What Would Improve Confidence:[/bold]")
+            for _tip in _tips:
+                console.print(f"  • {_tip}")
         _ms_plain = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")) or "N/A")
         _fr_plain = str(_pipeline_status.get("recommendation", "N/A") or "N/A")
         _conf_plain = str(_pipeline_status.get("confidence", "")).strip()
@@ -876,7 +919,20 @@ def print_result(result, debug: bool = False):
         peer_table = Table(title="Peer Set (Top Validated Peers)", show_header=True, header_style="bold cyan")
         for _col in _peer_table_headers(debug=debug):
             peer_table.add_column(_col)
-        for p in result.peer_comps.peers:
+        _role_rank = {
+            "core valuation peer": 0,
+            "adjacent valuation peer": 1,
+            "qualitative peer only": 2,
+            "excluded": 3,
+        }
+        _sorted_peers = sorted(
+            list(result.peer_comps.peers),
+            key=lambda p: (
+                _role_rank.get(str(getattr(p, "role", "")).strip().lower(), 9),
+                -float(_to_float(getattr(p, "weight", None)) or 0.0),
+            ),
+        )
+        for p in _sorted_peers:
             if debug:
                 peer_table.add_row(
                     p.ticker or "—",
@@ -901,6 +957,10 @@ def print_result(result, debug: bool = False):
                     p.weight or "—",
                 )
         console.print(peer_table)
+        console.print(
+            "[dim]Peer role legend: core peer = same business model; adjacent peer = related/capped weight; "
+            "qualitative peer = context only (0% valuation weight).[/dim]"
+        )
 
     # Valuation methods
     if v.methods and not _is_inconclusive:

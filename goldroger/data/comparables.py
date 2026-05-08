@@ -336,6 +336,35 @@ def _econ_similarity(
 
 def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
     s = f"{sector or ''} {industry or ''} {name or ''}".lower()
+    # Technology buckets first to avoid false "materials_general" classification
+    # for semiconductor-equipment names/industries (e.g., "Semiconductor Equipment & Materials").
+    if any(k in s for k in (
+        "semiconductor equipment", "semiconductor equipment & materials",
+        "lithography", "wafer fab", "eda", "design automation",
+        "test equipment", "metrology", "lam research", "applied materials", "asml", "kla", "klac", "amat", "lrcx",
+    )):
+        return "semiconductor_equipment"
+    if any(k in s for k in (
+        "semiconductor", "chip", "foundry", "memory", "gpu", "fabless", "wafer",
+    )):
+        return "semiconductors"
+    if any(k in s for k in (
+        "network", "networking", "communications equipment", "communication equipment",
+        "router", "switch", "telecom equipment",
+    )):
+        return "networking_infrastructure"
+    if any(k in s for k in (
+        "consumer electronics", "hardware", "computer", "smartphone",
+        "pc", "devices", "peripherals", "wearable", "tablet",
+    )):
+        return "consumer_hardware_ecosystem"
+    if any(k in s for k in (
+        "internet content", "internet retail", "interactive media",
+        "communication services", "platform", "search", "social media",
+        "cloud", "application software", "software infrastructure",
+        "software", "it services", "consulting", "saas",
+    )):
+        return "software_services_platform"
     # Consumer staples / tobacco-specific buckets
     if any(k in s for k in ("tobacco", "nicotine", "cigarette", "vape", "smoke-free", "oral nicotine")):
         return "tobacco_nicotine"
@@ -368,36 +397,20 @@ def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
         return "telecom_media"
     if "industrial" in s:
         return "industrials_general"
-    # Technology buckets
-    if any(k in s for k in (
-        "network", "networking", "communications equipment", "communication equipment",
-        "router", "switch", "telecom equipment",
-    )):
-        return "networking_infrastructure"
-    if any(k in s for k in (
-        "semiconductor equipment", "lithography", "wafer fab", "eda", "design automation",
-        "test equipment", "metrology",
-    )):
-        return "semiconductor_equipment"
-    if any(k in s for k in (
-        "semiconductor", "chip", "foundry", "memory", "gpu", "fabless", "wafer",
-    )):
-        return "semiconductors"
-    if any(k in s for k in (
-        "consumer electronics", "hardware", "computer", "smartphone",
-        "pc", "devices", "peripherals", "wearable", "tablet",
-    )):
-        return "consumer_hardware_ecosystem"
-    if any(k in s for k in (
-        "internet content", "internet retail", "interactive media",
-        "communication services", "platform", "search", "social media",
-        "cloud", "application software", "software infrastructure",
-        "software", "it services", "consulting", "saas",
-    )):
-        return "software_services_platform"
     if _sector_group(s or "") in {"tech", "comms", "consumer"}:
         return "other_adjacent_tech"
     return "other_adjacent"
+
+
+def _normalize_bucket_for_profile(profile: str, bucket: str) -> str:
+    b = bucket or "other_adjacent"
+    if profile == "consumer_staples_tobacco" and b == "other_adjacent_tech":
+        return "consumer_staples_adjacent"
+    if profile == "consumer_staples_general" and b == "other_adjacent_tech":
+        return "consumer_staples_adjacent"
+    if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} and b == "other_adjacent_tech":
+        return "software_services_platform"
+    return b
 
 
 def _target_profile(target_sector: str, target_industry: str) -> str:
@@ -1305,6 +1318,7 @@ def build_peer_multiples(
         if isinstance(md.additional_metadata, dict):
             _industry = str(md.additional_metadata.get("industry") or "")
         _bucket = _classify_peer_bucket(md.sector or "", _industry, md.company_name or "")
+        _bucket = _normalize_bucket_for_profile(profile, _bucket)
         _business_sim = _business_similarity(
             target_sector=target_sector,
             peer_sector=md.sector or "",
@@ -1563,10 +1577,14 @@ def build_peer_multiples(
         if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0 and (p.role or "") == "adjacent valuation peer"
     )
     _pure_share = _pure_weight / (_pure_weight + _adj_weight) if (_pure_weight + _adj_weight) > 0 else 0.0
-    if _pure_share >= 0.65:
+    if _pure_share >= 0.80:
         _peer_set_type = "PURE_COMPS_OK"
-    elif _pure_share >= 0.25:
+    elif _pure_share >= 0.50:
         _peer_set_type = "MIXED_COMPS_OK"
+    elif _pure_share > 0.0:
+        _peer_set_type = "ADJACENT_COMPS"
+    elif _n_valuation > 0:
+        _peer_set_type = "NO_PURE_COMPS"
     else:
         _peer_set_type = "ADJACENT_REFERENCE_SET"
 
