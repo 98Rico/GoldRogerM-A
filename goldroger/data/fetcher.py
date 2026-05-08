@@ -4,7 +4,8 @@ Real financial data fetcher using yfinance.
 For public companies: pulls verified, structured data directly from Yahoo Finance.
 For private companies: returns None — caller falls back to LLM estimation.
 
-All monetary values are stored in USD millions for consistency.
+All monetary values are stored in source-feed currency millions unless
+explicitly normalized downstream.
 Confidence levels: "verified" (yfinance), "estimated" (LLM), "inferred" (defaults).
 
 Results are cached in-process for 1 hour to avoid redundant network calls.
@@ -34,16 +35,16 @@ class MarketData:
 
     # Price & market structure
     current_price: Optional[float] = None
-    market_cap: Optional[float] = None          # USD millions
+    market_cap: Optional[float] = None          # source-feed currency millions
     shares_outstanding: Optional[float] = None  # millions
 
-    # Capital structure (USD millions)
+    # Capital structure (source-feed currency millions)
     total_debt: Optional[float] = None
     cash_and_equivalents: Optional[float] = None
     net_debt: Optional[float] = None
     enterprise_value: Optional[float] = None    # market-implied EV
 
-    # Income statement TTM (USD millions)
+    # Income statement TTM (source-feed currency millions)
     revenue_ttm: Optional[float] = None
     ebitda_ttm: Optional[float] = None
     ebit_ttm: Optional[float] = None
@@ -54,24 +55,24 @@ class MarketData:
     ebitda_margin: Optional[float] = None
     net_margin: Optional[float] = None
 
-    # Cash flow TTM (USD millions)
+    # Cash flow TTM (source-feed currency millions)
     fcf_ttm: Optional[float] = None
     capex_ttm: Optional[float] = None
     da_ttm: Optional[float] = None
 
-    # Historical annual revenue oldest-first (USD millions, up to 5 years)
+    # Historical annual revenue oldest-first (source-feed currency millions, up to 5 years)
     revenue_history: list[float] = field(default_factory=list)
     revenue_growth_yoy: Optional[float] = None  # most recent TTM YoY (decimal)
 
     # Forward / consensus estimates
     forward_revenue_growth: Optional[float] = None  # analyst forward 1Y growth
-    forward_revenue_1y: Optional[float] = None      # USD millions
+    forward_revenue_1y: Optional[float] = None      # source-feed currency millions
     earnings_growth: Optional[float] = None          # fwd EPS growth (decimal)
     forward_eps: Optional[float] = None
 
     # Balance sheet (for P/B valuation)
     book_value_per_share: Optional[float] = None    # total equity / shares
-    total_equity: Optional[float] = None            # USD millions
+    total_equity: Optional[float] = None            # source-feed currency millions
 
     # Tax
     effective_tax_rate: Optional[float] = None
@@ -90,7 +91,7 @@ class MarketData:
     analyst_recommendation: Optional[str] = None
 
     # Cost of debt proxy
-    interest_expense: Optional[float] = None        # USD millions TTM
+    interest_expense: Optional[float] = None        # source-feed currency millions TTM
 
     confidence: str = "verified"
     data_source: str = "yfinance"
@@ -301,6 +302,22 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
                 "industry": info.get("industry"),
                 "country": info.get("country"),
                 "exchange": info.get("exchange") or info.get("fullExchangeName"),
+                "quote_currency": info.get("currency"),
+                "financial_currency": info.get("financialCurrency"),
+                "market_cap_currency": info.get("currency"),
+                "quote_type": info.get("quoteType"),
+                "underlying_symbol": info.get("underlyingSymbol"),
+                "adr_ratio": (
+                    info.get("sharesPerUnderlying")
+                    if info.get("sharesPerUnderlying") is not None
+                    else info.get("conversionRatio")
+                ),
+                "is_adr_hint": bool(
+                    (info.get("currency") == "USD")
+                    and info.get("financialCurrency")
+                    and info.get("financialCurrency") != "USD"
+                    and str(info.get("country") or "").strip().lower() not in {"united states", "usa", "us"}
+                ),
                 "dividend_yield": (
                     float(info.get("dividendYield"))
                     if info.get("dividendYield") is not None

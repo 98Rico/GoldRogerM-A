@@ -658,6 +658,27 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             )
         except Exception:
             pass
+    _norm_status = str(pipeline_status.get("normalization_status", "") or "").strip()
+    if _norm_status:
+        _q_ccy = str(pipeline_status.get("quote_currency", "") or "unknown")
+        _f_ccy = str(pipeline_status.get("financial_statement_currency", "") or "unknown")
+        _m_ccy = str(pipeline_status.get("market_cap_currency", "") or "unknown")
+        _share_basis = str(pipeline_status.get("share_count_basis", "") or "unknown")
+        _adr = bool(pipeline_status.get("adr_detected", False))
+        _adr_ratio = pipeline_status.get("adr_ratio")
+        _norm_reason = str(pipeline_status.get("normalization_reason", "") or "").strip()
+        block += (
+            f"\n  Data normalization: {_norm_status}"
+            f"\n    Quote/market cap currency: {_q_ccy}/{_m_ccy}"
+            f"\n    Financial statement currency: {_f_ccy}"
+            f"\n    Share basis: {_share_basis}"
+            f"\n    ADR detected: {'yes' if _adr else 'no'}"
+            + (f" (ratio: {_adr_ratio})" if _adr and _adr_ratio else "")
+        )
+        if _norm_reason:
+            block += f"\n    Normalization note: {_norm_reason}"
+    if pipeline_status.get("sanity_breaker_triggered"):
+        block += "\n  Recommendation suppressed by sanity breaker: data check required."
     reason = str(pipeline_status.get("confidence_reason", "") or "").strip()
     return block, reason
 

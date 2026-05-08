@@ -133,6 +133,56 @@ class ValuationService:
         notes: list[str] = []
         use_financial_path = is_financial_sector(sector)
 
+        # Hard safety gate: do not run valuation math when currency/share normalization fails.
+        if assumptions.get("normalization_blocked"):
+            reason = str(assumptions.get("normalization_reason") or "currency/share normalization failed")
+            wacc, wacc_confidence = self._resolve_wacc(assumptions, market_data, sector_m, notes)
+            tg = self._resolve_terminal_growth(assumptions, sector_m, wacc, notes)
+            notes.append(
+                "Valuation blocked by data-normalization gate; recommendation suppressed pending currency/share-basis checks."
+            )
+            notes.append(f"Normalization blocker: {reason}.")
+            _w0 = compute_valuation_weights(sector, company_type, market_data)
+            rec = RecommendationOutput(
+                recommendation="NO RATING / DATA CHECK REQUIRED",
+                upside_pct=None,
+                intrinsic_price=None,
+                current_price=(market_data.current_price if market_data else None),
+                market_cap=(market_data.market_cap if market_data else None),
+                ev_blended=0.0,
+            )
+            field_sources = {
+                "Normalization Status": (
+                    str(assumptions.get("normalization_status") or "FAILED"),
+                    "normalization_audit",
+                    "verified",
+                ),
+                "Normalization Reason": (
+                    reason,
+                    "normalization_audit",
+                    "inferred",
+                ),
+                "WACC": (f"{wacc:.2%}", "capm_model", wacc_confidence),
+            }
+            return FullValuationOutput(
+                dcf=None,
+                comps=None,
+                transactions=None,
+                blended=None,
+                lbo=None,
+                recommendation=rec,
+                sensitivity=None,
+                wacc_used=wacc,
+                terminal_growth_used=tg,
+                data_confidence="missing",
+                sector=sector or "Unknown",
+                valuation_path=("pe_pb" if use_financial_path else "ev_ebitda"),
+                has_revenue=False,
+                weights_used=_w0,
+                notes=notes,
+                field_sources=field_sources,
+            )
+
         # ── 1. Core inputs ────────────────────────────────────────────────
         field_sources: dict = {}
         revenue_series, rev_confidence = self._build_revenue_series(

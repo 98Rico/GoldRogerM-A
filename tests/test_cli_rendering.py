@@ -131,6 +131,31 @@ def test_pipeline_status_adds_range_hint_under_high_dispersion_low_confidence():
     assert "Use range over midpoint due to low confidence and high method dispersion." in block
 
 
+def test_pipeline_status_renders_normalization_audit_and_suppression():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "PARTIAL_FALLBACK",
+            "peers": "PEERS_FAILED",
+            "valuation": "FAILED",
+            "confidence": "Low",
+            "recommendation": "NO RATING / DATA CHECK REQUIRED",
+            "normalization_status": "FAILED",
+            "normalization_reason": "currency mismatch without FX normalization",
+            "quote_currency": "USD",
+            "financial_statement_currency": "NOK",
+            "market_cap_currency": "USD",
+            "share_count_basis": "adr_equivalent",
+            "adr_detected": True,
+            "adr_ratio": None,
+            "sanity_breaker_triggered": True,
+        }
+    )
+    assert "Data normalization: FAILED" in block
+    assert "Quote/market cap currency: USD/USD" in block
+    assert "Financial statement currency: NOK" in block
+    assert "Recommendation suppressed by sanity breaker: data check required." in block
+
+
 def test_infer_source_note_range_and_midpoint_are_bridge_explicit():
     src_map = {
         "Fair Value Range": {

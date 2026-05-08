@@ -398,3 +398,26 @@ def test_financial_sector_uses_pe_pb_valuation_path():
         sector="Financial Services",
     )
     assert out.valuation_path == "pe_pb"
+
+
+def test_normalization_block_hard_stops_valuation_math_and_suppresses_rating():
+    svc = ValuationService()
+    financials = _base_financials()
+    market_data = _base_market_data()
+    out = svc.run_full_valuation(
+        financials=financials,
+        assumptions={
+            "_assumption_source": "system",
+            "normalization_blocked": True,
+            "normalization_status": "FAILED",
+            "normalization_reason": "currency mismatch without FX normalization",
+        },
+        market_data=market_data,
+        sector="Materials",
+    )
+    assert out.blended is None
+    assert out.dcf is None
+    assert out.comps is None
+    assert out.transactions is None
+    assert out.recommendation.recommendation == "NO RATING / DATA CHECK REQUIRED"
+    assert any("Valuation blocked by data-normalization gate" in n for n in out.notes)
