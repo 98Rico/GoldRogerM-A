@@ -845,6 +845,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
     retail_cap = 0.15 if profile == "consumer_staples_tobacco" else None
     if profile == "consumer_staples_tobacco":
         single_cap = 0.45
+    core_weights = [float(p.weight or 0.0) for p in vals if (p.role or "").strip().lower() == "core valuation peer"]
+    adjacent_cap_from_core = max(core_weights) if core_weights else None
 
     excess = 0.0
     for p in vals:
@@ -855,6 +857,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             cap = min(cap, semi_cap)
         if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
             cap = min(cap, retail_cap)
+        if adjacent_cap_from_core is not None and (p.role or "").strip().lower() == "adjacent valuation peer":
+            cap = min(cap, adjacent_cap_from_core)
         w = float(p.weight or 0.0)
         if w > cap:
             excess += (w - cap)
@@ -872,6 +876,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             cap = min(cap, semi_cap)
         if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
             cap = min(cap, retail_cap)
+        if adjacent_cap_from_core is not None and (p.role or "").strip().lower() == "adjacent valuation peer":
+            cap = min(cap, adjacent_cap_from_core)
         if float(p.weight or 0.0) + 1e-9 < cap:
             recipients.append(p)
     if not recipients:
@@ -886,6 +892,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             p_cap = min(p_cap, semi_cap)
         if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
             p_cap = min(p_cap, retail_cap)
+        if adjacent_cap_from_core is not None and (p.role or "").strip().lower() == "adjacent valuation peer":
+            p_cap = min(p_cap, adjacent_cap_from_core)
         room += max(0.0, p_cap - float(p.weight or 0.0))
     if room <= 0:
         return peers
@@ -898,6 +906,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             p_cap = min(p_cap, semi_cap)
         if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
             p_cap = min(p_cap, retail_cap)
+        if adjacent_cap_from_core is not None and (p.role or "").strip().lower() == "adjacent valuation peer":
+            p_cap = min(p_cap, adjacent_cap_from_core)
         p_room = max(0.0, p_cap - float(p.weight or 0.0))
         if p_room <= 0:
             continue

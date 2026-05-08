@@ -222,7 +222,8 @@ def _score_market_context(
     else:
         if _missing_size:
             score -= (2 if market_context_optional else 6)
-            warnings.append("Limited market context support")
+            if "Limited market context support" not in warnings:
+                warnings.append("Limited market context support")
             checks["market_size"] = "missing"
         else:
             checks["market_size"] = "estimated"
@@ -230,7 +231,8 @@ def _score_market_context(
             has_estimated_inputs = True
         if _missing_growth:
             score -= (2 if market_context_optional else 6)
-            warnings.append("Limited market context support")
+            if "Limited market context support" not in warnings:
+                warnings.append("Limited market context support")
             checks["market_growth"] = "missing"
         else:
             checks["market_growth"] = "estimated"

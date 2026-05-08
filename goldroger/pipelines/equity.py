@@ -103,6 +103,27 @@ def _peer_similarity_score(target_mcap: float | None, peer_mcap: float | None, t
     return round(min(score, 1.0), 2)
 
 
+def _normalize_dividend_yield(raw) -> float | None:
+    """Normalize dividend yield to decimal and enforce sanity bounds.
+    Returns None when suspicious/unusable.
+    """
+    if raw is None:
+        return None
+    try:
+        y = float(raw)
+    except Exception:
+        return None
+    if y < 0:
+        return None
+    # Some feeds can return percent-like 5.75 instead of 0.0575.
+    if y > 1.0:
+        y = y / 100.0
+    # Hard sanity gate: >25% is almost always bad parse/noisy field.
+    if y > 0.25:
+        return None
+    return y
+
+
 def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> list[str]:
     """Enforce time-aware catalyst labels:
     - 'Upcoming' only for future-dated events
@@ -687,7 +708,13 @@ def run_analysis(
                 if market_data.net_margin is not None:
                     sources.add("Net Margin", f"{market_data.net_margin:.1%}", "yfinance", "verified")
                 if market_data.fcf_ttm is not None:
-                    sources.add("Free Cash Flow", f"${market_data.fcf_ttm:.0f}M", "yfinance", "verified")
+                    _fcf_val = f"${market_data.fcf_ttm:.0f}M"
+                    _md_country = ""
+                    if isinstance(market_data.additional_metadata, dict):
+                        _md_country = str(market_data.additional_metadata.get("country") or "").strip().lower()
+                    if _md_country and _md_country not in {"united states", "usa", "us"}:
+                        _fcf_val += " [check currency/ADR basis]"
+                    sources.add("Free Cash Flow", _fcf_val, "yfinance", "verified")
                 if market_data.net_debt is not None:
                     sources.add("Net Debt", f"${market_data.net_debt:.0f}M", "yfinance", "verified")
                 if market_data.shares_outstanding is not None:
@@ -707,13 +734,16 @@ def run_analysis(
                     if _exch:
                         sources.add_once("Exchange", _exch, "yfinance", "verified")
                     _div_yld = market_data.additional_metadata.get("dividend_yield")
-                    if _div_yld is not None:
-                        try:
-                            _dy = float(_div_yld)
-                            if _dy >= 0:
-                                sources.add_once("Dividend Yield", f"{_dy:.1%}", "yfinance", "verified")
-                        except Exception:
-                            pass
+                    _dy = _normalize_dividend_yield(_div_yld)
+                    if _dy is not None:
+                        sources.add_once("Dividend Yield", f"{_dy:.1%}", "yfinance", "verified")
+                    elif _div_yld is not None:
+                        sources.add_once(
+                            "Dividend Yield",
+                            "unavailable (yfinance field failed sanity check)",
+                            "yfinance",
+                            "inferred",
+                        )
                     _div_rate = market_data.additional_metadata.get("dividend_rate")
                     if _div_rate is not None:
                         try:
@@ -726,7 +756,7 @@ def run_analysis(
                     try:
                         _fcf_yield = float(market_data.fcf_ttm) / float(market_data.market_cap)
                         if _fcf_yield == _fcf_yield:
-                            sources.add_once("FCF Yield", f"{_fcf_yield:.1%}", "derived_yfinance", "inferred")
+                            sources.add_once("FCF Yield on Market Cap", f"{_fcf_yield:.1%}", "derived_yfinance", "inferred")
                     except Exception:
                         pass
                 if (
@@ -755,19 +785,30 @@ def run_analysis(
                     and market_data.market_cap > 0
                     and isinstance(market_data.additional_metadata, dict)
                 ):
-                    _dy = market_data.additional_metadata.get("dividend_yield")
-                    try:
-                        _dyf = float(_dy) if _dy is not None else None
-                    except Exception:
-                        _dyf = None
+                    _dyf = _normalize_dividend_yield(market_data.additional_metadata.get("dividend_yield"))
                     if _dyf is not None and _dyf > 0:
                         try:
                             _div_cash = float(market_data.market_cap) * _dyf
                             if _div_cash > 0:
                                 _div_cov = float(market_data.fcf_ttm) / _div_cash
-                                sources.add_once("Dividend Coverage", f"{_div_cov:.2f}x", "derived_yfinance", "inferred")
+                                if _div_cov > 0:
+                                    sources.add_once("Dividend Coverage", f"{_div_cov:.2f}x", "derived_yfinance", "inferred")
+                                else:
+                                    sources.add_once(
+                                        "Dividend Coverage",
+                                        "unavailable (insufficient verified dividend cash paid)",
+                                        "derived_yfinance",
+                                        "inferred",
+                                    )
                         except Exception:
                             pass
+                    else:
+                        sources.add_once(
+                            "Dividend Coverage",
+                            "unavailable (insufficient verified dividend cash paid)",
+                            "derived_yfinance",
+                            "inferred",
+                        )
         log.end_step("market_data", t0)
         _done("Market Data", t0)
 
@@ -1698,7 +1739,7 @@ def run_analysis(
         )
     _core_quality_score = quality.score
     console.print(
-        f"  [bold]Data quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
+        f"  [bold]Valuation input quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
         + (" [yellow]limited-confidence mode[/yellow]" if quality.is_blocked else "")
     )
     for _warn in quality.warnings[:3]:

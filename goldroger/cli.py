@@ -357,7 +357,8 @@ def _metric_source_keys(metric: str) -> list[str]:
         "TAM": ["TAM", "Market Size"],
         "Market Growth": ["Market Growth"],
         "Dividend Yield": ["Dividend Yield"],
-        "FCF Yield": ["FCF Yield"],
+        "FCF Yield": ["FCF Yield", "FCF Yield on Market Cap"],
+        "FCF Yield on Market Cap": ["FCF Yield on Market Cap", "FCF Yield"],
         "Net Debt / EBITDA": ["Net Debt / EBITDA"],
         "Dividend Coverage": ["Dividend Coverage"],
         "Interest Coverage": ["Interest Coverage"],
@@ -505,7 +506,7 @@ def _format_metric_value(metric: str, value: str) -> str:
         return _fmt_percentish(raw, signed=True)
     if metric in {"Gross Margin", "EBITDA Margin", "Net Margin"}:
         return _fmt_percentish(raw, signed=False)
-    if metric in {"Dividend Yield", "FCF Yield"}:
+    if metric in {"Dividend Yield", "FCF Yield", "FCF Yield on Market Cap"}:
         return _fmt_percentish(raw, signed=False)
     return raw
 
@@ -922,7 +923,7 @@ def print_result(result, debug: bool = False):
         cash_table.add_column("Value")
         _cash_rows = [
             ("Dividend Yield", _source_value("Dividend Yield")),
-            ("FCF Yield", _source_value("FCF Yield")),
+            ("FCF Yield on Market Cap", _source_value("FCF Yield on Market Cap")),
             ("Net Debt / EBITDA", _source_value("Net Debt / EBITDA")),
             ("Dividend Coverage", _source_value("Dividend Coverage")),
             ("Interest Coverage", _source_value("Interest Coverage")),
