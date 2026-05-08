@@ -758,7 +758,7 @@ def run_analysis(
                         if _fcf_yield == _fcf_yield:
                             _fcf_yield_val = f"{_fcf_yield:.1%}"
                             if _md_country and _md_country not in {"united states", "usa", "us"}:
-                                _fcf_yield_val += " [yfinance FCF basis; verify ADR/reporting currency]"
+                                _fcf_yield_val += " (yfinance FCF basis)"
                             sources.add_once("FCF Yield on Market Cap", _fcf_yield_val, "derived_yfinance", "inferred")
                     except Exception:
                         pass
@@ -797,7 +797,7 @@ def run_analysis(
                                 if _div_cov > 0:
                                     sources.add_once(
                                         "Dividend Coverage",
-                                        f"{_div_cov:.2f}x [low-confidence derived metric; verify payout basis]",
+                                        f"{_div_cov:.2f}x (verify payout basis)",
                                         "derived_yfinance",
                                         "inferred; payout basis may differ",
                                     )
@@ -1668,9 +1668,11 @@ def run_analysis(
                 _tx_medians = sector_medians(load_cache(), fund.sector or "")
                 _tx_source_verified = bool((_tx_medians.get("n_deals") or 0) >= 3)
                 if _tx_medians.get("n_deals"):
+                    _n_cached = int(_tx_medians["n_deals"])
+                    _deal_word = "deal" if _n_cached == 1 else "deals"
                     console.print(
-                        f"  [dim]Transaction comps: using {_tx_medians['n_deals']} "
-                        f"cached deals for sector[/dim]"
+                        f"  [dim]Transaction comps: {_n_cached} sector-relevant cached {_deal_word} "
+                        "used as reference only; not included in blended valuation.[/dim]"
                     )
         except Exception as e:
             console.print(f"  [yellow]Transaction comps post-processing skipped: {e}[/yellow]")
@@ -1769,6 +1771,14 @@ def run_analysis(
         quality.warnings.append(
             f"Low effective peer diversification ({_effective_peer_count:.2f}) — confidence reduced."
         )
+    if (not quick_mode) and str(_research_source) == "fallback":
+        if quality.score > 79:
+            quality.score = 79
+        quality.tier = _quality_tier(quality.score)
+        if quality.tier == "A":
+            quality.tier = "B"
+        if "Source-backed market context unavailable; valuation input quality capped." not in quality.warnings:
+            quality.warnings.append("Source-backed market context unavailable; valuation input quality capped.")
     _core_quality_score = quality.score
     console.print(
         f"  [bold]Valuation input quality:[/bold] {quality.score}/100 (Tier {quality.tier})"
@@ -2683,7 +2693,8 @@ def run_analysis(
         quality.tier = _quality_tier(quality.score)
         if quality.tier == "A":
             quality.tier = "B"
-        quality.warnings.append("Source-backed market context unavailable; valuation input quality capped.")
+        if "Source-backed market context unavailable; valuation input quality capped." not in quality.warnings:
+            quality.warnings.append("Source-backed market context unavailable; valuation input quality capped.")
     sources.add(
         "Data Quality Score",
         f"{quality.score}/100 (Tier {quality.tier})",
@@ -2878,8 +2889,8 @@ def run_analysis(
         )
     )
     _confidence_level = "Low" if _confidence_is_low else ("Medium" if _confidence_is_medium else "High")
-    if (not quick_mode) and str(_research_source) == "fallback" and _confidence_level == "High":
-        _confidence_level = "Medium"
+    if (not quick_mode) and str(_research_source) == "fallback":
+        _confidence_level = "Low"
     if market_status == "SKIPPED_QUICK_MODE":
         _research_status_enum = "RESEARCH_SKIPPED_QUICK_MODE"
     elif market_status in {"FAILED", "TIMEOUT"} and thesis_status in {"FAILED", "TIMEOUT"}:

@@ -541,10 +541,15 @@ def _fmt_timing_s(v) -> str:
 def _normalize_sector_label(sector: str, industry: str | None = None) -> str:
     s = (sector or "").strip()
     i = (industry or "").strip()
-    if s.lower() == "consumer staples":
+    _sl = s.lower()
+    if _sl in {"consumer staples", "consumer staples - tobacco", "consumer goods - tobacco"}:
         s = "Consumer Staples"
     if i.lower() in {"consumer goods - tobacco", "tobacco products", "tobacco"}:
         i = "Tobacco"
+    if s.lower().endswith("/ tobacco") or s.lower().endswith("- tobacco"):
+        s = "Consumer Staples"
+        if not i:
+            i = "Tobacco"
     if i and i.lower() not in {"none", "n/a", "unknown"}:
         return f"{s} / {i}" if s else i
     return s or "Unknown"

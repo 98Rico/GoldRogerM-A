@@ -1384,7 +1384,9 @@ def build_peer_multiples(
 
         _role = _peer_role(profile, _bucket, ev_ebitda)
         if profile in {"premium_device_platform", "consumer_hardware_ecosystem", "software_services_ecosystem"} and ticker.upper() == "PLTR":
-            _role = "qualitative peer only"
+            n_sector += 1
+            excluded.append("PLTR: filtered for Apple-like profiles (AI/software context only)")
+            continue
         _stage = _relaxation_stage(profile, _bucket)
         _valuation_scale_ok = not _below_mega_valuation_floor
         if _below_mega_valuation_floor:
@@ -1412,8 +1414,6 @@ def build_peer_multiples(
                 include_reason = "adjacent: business-model/size fit"
         elif _role == "qualitative peer only":
             include_reason = "qualitative only: EV/EBITDA unavailable"
-            if profile in {"premium_device_platform", "consumer_hardware_ecosystem", "software_services_ecosystem"} and ticker.upper() == "PLTR":
-                include_reason = "qualitative only: AI/software optionality context"
         if _below_mega_valuation_floor:
             include_reason = (
                 f"qualitative only: below mega-cap valuation floor "

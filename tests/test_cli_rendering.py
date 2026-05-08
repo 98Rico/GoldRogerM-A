@@ -113,6 +113,7 @@ def test_fmt_timing_s_hides_none_like_values():
 
 def test_normalize_sector_label_tobacco():
     assert _normalize_sector_label("Consumer Staples", "Consumer Goods - Tobacco") == "Consumer Staples / Tobacco"
+    assert _normalize_sector_label("Consumer Staples - Tobacco", "Tobacco") == "Consumer Staples / Tobacco"
 
 
 def test_pipeline_status_adds_range_hint_under_high_dispersion_low_confidence():
