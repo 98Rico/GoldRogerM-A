@@ -38,6 +38,7 @@ from goldroger.data.comparables import (
 from goldroger.data.fetcher import MarketData, fetch_market_data, resolve_ticker
 from goldroger.data.private_quality import merge_private_market_data
 from goldroger.data.quality_gate import assess_data_quality
+from goldroger.data.sector_profiles import get_sector_profile, detect_sector_profile
 from goldroger.utils.json_parser import normalise_revenue_string
 from goldroger.data.registry import DEFAULT_REGISTRY
 from goldroger.finance.core.scenarios import run_scenarios
@@ -291,31 +292,14 @@ def _quality_tier(score: int) -> str:
     return "D"
 
 
-def _fallback_catalysts(company: str, sector: str) -> list[str]:
-    _c = (company or "").upper()
-    if "AAPL" in _c or "APPLE" in _c:
-        return [
-            "Next earnings update: demand, margins, and guidance.",
-            "Product/software update: evidence of device upgrade-cycle support.",
-            "Regulatory/platform-policy updates: impact on services monetization.",
-        ]
-    _s = (sector or "").lower()
-    if "tech" in _s or "software" in _s:
-        return [
-            f"{company}: next earnings release and forward guidance update",
-            f"{company}: latest product/AI feature adoption commentary",
-            f"{company}: regulatory and platform-policy developments",
-        ]
-    if "energy" in _s:
-        return [
-            f"{company}: next regulatory tariff/price-cap update",
-            f"{company}: customer growth and margin update at next filing",
-            f"{company}: power/commodity hedging and supply update",
-        ]
+def _fallback_catalysts(company: str, sector: str, industry: str = "") -> list[str]:
+    prof = get_sector_profile(sector or "", industry or "")
+    if prof.fallback_catalysts:
+        return [str(x) for x in prof.fallback_catalysts]
     return [
-        f"{company}: next earnings/filing update",
-        f"{company}: product/strategy execution update",
-        f"{company}: macro and regulatory developments",
+        "Next earnings/filing update: demand, margins, and guidance.",
+        "Strategy/product execution update: evidence of growth durability.",
+        "Macro/regulatory developments: potential impact on assumptions.",
     ]
 
 
@@ -325,18 +309,24 @@ def _build_fallback_thesis(
     recommendation: str,
     reason: str,
     model_signal: str = "N/A",
+    industry: str = "",
 ) -> InvestmentThesis:
-    cats = _fallback_catalysts(company, sector)
+    prof = get_sector_profile(sector or "", industry or "")
+    cats = _fallback_catalysts(company, sector, industry)
+    _drivers = ", ".join(prof.demand_drivers[:3]) if prof.demand_drivers else "demand resilience and execution discipline"
+    _margins = ", ".join(prof.margin_drivers[:3]) if prof.margin_drivers else "mix and operating leverage"
+    _risks = ", ".join(prof.common_risks[:3]) if prof.common_risks else "competition, regulation, and macro volatility"
     thesis = (
         f"Thesis:\n"
-        f"- Moat: {company} retains strategic advantages in {sector or 'its sector'}.\n"
-        f"- Growth: near-term trajectory depends on execution and demand resilience.\n"
+        f"- Sector profile: {prof.label if prof.label else (sector or 'Default fallback')}.\n"
+        f"- Demand drivers: {_drivers}.\n"
+        f"- Margin drivers: {_margins}.\n"
         f"- Valuation: model signal is {model_signal}, but final recommendation is {recommendation} "
         f"because valuation confidence is low and method dispersion is high ({reason}).\n"
         f"\nRisks:\n"
-        f"- Demand: cyclical or customer-mix pressure.\n"
-        f"- Regulation: policy/antitrust/compliance constraints.\n"
-        f"- Competition: share shifts and pricing intensity."
+        f"- {_risks}.\n"
+        f"- Because full research was unavailable, this thesis is intentionally conservative and based only on "
+        "verified financials, sector profile, and peer valuation outputs."
     )
     return InvestmentThesis(
         thesis=thesis,
@@ -347,6 +337,33 @@ def _build_fallback_thesis(
             "What near-term datapoint would change conviction?",
         ],
     )
+
+
+def _enforce_profile_context_guard(text: str, profile_key: str) -> str:
+    txt = str(text or "")
+    if not txt:
+        return txt
+    forbidden_map = {
+        "consumer_staples_tobacco": (
+            "app store",
+            "platform/services monetization",
+            "device upgrade cycle",
+            "hardware demand",
+        ),
+        "technology_consumer_electronics": (
+            "excise tax",
+            "combustible volume decline",
+            "nicotine pouch",
+            "plain packaging",
+        ),
+    }
+    for token in forbidden_map.get(profile_key, ()):
+        if token in txt.lower():
+            return (
+                "Fallback Market Context — sector profile only, not source-backed. "
+                "Used for qualitative framing only, not valuation inputs."
+            )
+    return txt
 
 
 def _country_hint_from_market_data(market_data: MarketData | None) -> str:
@@ -645,6 +662,12 @@ def run_analysis(
                     sources.add("Shares Outstanding", f"{market_data.shares_outstanding:.0f}M", "yfinance", "verified")
                 if market_data.current_price is not None:
                     sources.add("Current Price", f"${market_data.current_price:.2f}", "yfinance", "verified")
+                if market_data.sector:
+                    sources.add_once("Sector", str(market_data.sector), "yfinance", "verified")
+                if isinstance(market_data.additional_metadata, dict):
+                    _ind = str(market_data.additional_metadata.get("industry") or "").strip()
+                    if _ind:
+                        sources.add_once("Industry", _ind, "yfinance", "verified")
         log.end_step("market_data", t0)
         _done("Market Data", t0)
 
@@ -949,7 +972,7 @@ def run_analysis(
     def _do_tx_comps():
         _t = _step("Transaction Comps")
         if quick_mode:
-            _finish_step("Transaction Comps", _t, _cancel_tx)
+            _finish_step("Transaction Comps", _t, _cancel_tx, "tx_comps")
             return (None, None)
         try:
             import datetime
@@ -969,7 +992,7 @@ def run_analysis(
             result = (None, e)
         except Exception as e:
             result = (None, e)
-        _finish_step("Transaction Comps", _t, _cancel_tx)
+        _finish_step("Transaction Comps", _t, _cancel_tx, "tx_comps")
         return result
 
     market_analysis_failed = False
@@ -1051,6 +1074,7 @@ def run_analysis(
                 console.print("  [dim]Skipped in quick mode (tx comps disabled).[/dim]")
             else:
                 console.print("  [dim]Skipped for mega-cap public company (tx weight forced to 0%).[/dim]")
+            log.step_times["tx_comps"] = 0.0
             _done("Transaction Comps", time.time())
     finally:
         # Best-effort cancellation: do not block on timed-out side tasks.
@@ -1255,6 +1279,10 @@ def run_analysis(
                     if _bucket_counts:
                         _mix = ", ".join(f"{k}={v}" for k, v in sorted(_bucket_counts.items(), key=lambda kv: kv[0]))
                         console.print(f"  [dim]Peer mix by business model bucket: {_mix}[/dim]")
+                        console.print(
+                            f"  [dim]Pure peer weight: {float(peer_multiples.pure_peer_weight_share or 0.0):.1%} | "
+                            f"Adjacent peer weight: {float(peer_multiples.adjacent_peer_weight_share or 0.0):.1%}[/dim]"
+                        )
                         _consumer_cnt = _bucket_counts.get("consumer_hardware_ecosystem", 0)
                         if _is_mega_tech and _consumer_cnt < 1:
                             _missing_consumer_ecosystem_bucket = True
@@ -1268,6 +1296,11 @@ def run_analysis(
                                 "Consumer-hardware ecosystem peers limited at mega-cap scale; adjacent reference peers used",
                                 "peer_policy",
                                 "inferred",
+                            )
+                        if detect_sector_profile(_target_sector, _target_industry) == "consumer_staples_tobacco":
+                            console.print(
+                                "  [yellow]Tobacco valuation uses core nicotine peers plus adjacent consumer-staples references; "
+                                "adjacent weights are capped to preserve peer purity.[/yellow]"
                             )
                     if debug and peer_multiples.excluded_details:
                         console.print("  [dim]Excluded peers (debug):[/dim]")
@@ -1413,12 +1446,14 @@ def run_analysis(
 
     # Post-process transaction comps — cache + extract medians
     _tx_medians: dict = {}
+    _tx_source_verified = False
     if _tx_raw:
         try:
             new_comps = parse_tx_output(_tx_raw, fund.sector or "")
             if new_comps:
                 all_comps = add_comps(new_comps)
                 _tx_medians = sector_medians(all_comps, fund.sector or "")
+                _tx_source_verified = bool((_tx_medians.get("n_deals") or 0) >= 3)
                 console.print(
                     f"  [cyan]Transaction comps:[/cyan] {len(new_comps)} new deals cached "
                     f"({_tx_medians.get('n_deals', 0)} total in sector) "
@@ -1428,6 +1463,7 @@ def run_analysis(
             else:
                 # Use cached comps for the sector even if agent returned nothing usable
                 _tx_medians = sector_medians(load_cache(), fund.sector or "")
+                _tx_source_verified = bool((_tx_medians.get("n_deals") or 0) >= 3)
                 if _tx_medians.get("n_deals"):
                     console.print(
                         f"  [dim]Transaction comps: using {_tx_medians['n_deals']} "
@@ -1441,6 +1477,22 @@ def run_analysis(
         else:
             console.print(f"  [yellow]Transaction comps agent skipped: {_tx_err}[/yellow]")
         _tx_medians = sector_medians(load_cache(), fund.sector or "")
+        _tx_source_verified = bool((_tx_medians.get("n_deals") or 0) >= 3)
+
+    if _tx_source_verified:
+        sources.add_once(
+            "Transaction Comps Data Quality",
+            f"verified deals={int(_tx_medians.get('n_deals') or 0)}",
+            "transaction_comps_cache",
+            "verified",
+        )
+    else:
+        sources.add_once(
+            "Transaction Comps Data Quality",
+            "source not logged or insufficient verified deals",
+            "transaction_comps_cache",
+            "inferred",
+        )
 
     # ── 4. ASSUMPTIONS ────────────────────────────────────────────────────
     # Policy: valuation assumptions used by the deterministic engine must be reproducible.
@@ -1544,6 +1596,8 @@ def run_analysis(
         _is_mega_cap and any(tok in (fund.sector or "").lower() for tok in ("technology", "tech", "software", "semiconductor"))
     )
     assumptions_dict["missing_consumer_ecosystem_bucket"] = bool(_missing_consumer_ecosystem_bucket)
+    assumptions_dict["transaction_comps_verified"] = bool(_tx_source_verified)
+    assumptions_dict["transaction_comps_n_deals"] = int(_tx_medians.get("n_deals") or 0)
     _peer_quality = "weak"
     if peer_multiples and peer_multiples.peers:
         _valuation_only = [p for p in peer_multiples.peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
@@ -1556,9 +1610,10 @@ def run_analysis(
             if (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}
         )
         _semi_share = (_semi_w / _total_w) if _total_w > 0 else 0.0
-        if peer_multiples.n_valuation_peers >= 8 and _avg_sim >= 0.75 and _semi_share <= 0.20 and _eff_peer_count >= (3.0 if quick_mode else 5.0):
+        _pure_share = float(peer_multiples.pure_peer_weight_share or 0.0)
+        if peer_multiples.n_valuation_peers >= 8 and _avg_sim >= 0.75 and _semi_share <= 0.20 and _pure_share >= 0.60 and _eff_peer_count >= (3.0 if quick_mode else 5.0):
             _peer_quality = "strong"
-        elif peer_multiples.n_valuation_peers >= 5 and _avg_sim >= 0.65 and _semi_share <= 0.25 and _eff_peer_count >= (3.0 if quick_mode else 5.0):
+        elif peer_multiples.n_valuation_peers >= 5 and _avg_sim >= 0.65 and _semi_share <= 0.30 and _pure_share >= 0.25 and _eff_peer_count >= (3.0 if quick_mode else 5.0):
             _peer_quality = "normal"
         elif peer_multiples.n_valuation_peers >= 3:
             _peer_quality = "mixed"
@@ -1566,10 +1621,19 @@ def run_analysis(
             _peer_quality = "weak"
         assumptions_dict["peer_avg_similarity"] = _avg_sim
         assumptions_dict["peer_semi_weight_share"] = _semi_share
+        assumptions_dict["pure_peer_weight_share"] = _pure_share
+        assumptions_dict["adjacent_peer_weight_share"] = float(peer_multiples.adjacent_peer_weight_share or (1.0 - _pure_share))
         assumptions_dict["effective_peer_count"] = _eff_peer_count
         sources.add_once("Peer Quality", _peer_quality, "peer_quality_model", "inferred")
         sources.add_once("Peer Avg Similarity", f"{_avg_sim:.2f}", "peer_quality_model", "inferred")
         sources.add_once("Peer Semi Weight Share", f"{_semi_share:.1%}", "peer_quality_model", "inferred")
+        sources.add_once("Pure Peer Weight", f"{_pure_share:.1%}", "peer_quality_model", "inferred")
+        sources.add_once(
+            "Adjacent Peer Weight",
+            f"{float(peer_multiples.adjacent_peer_weight_share or (1.0 - _pure_share)):.1%}",
+            "peer_quality_model",
+            "inferred",
+        )
         if _eff_peer_count > 0:
             sources.add_once("Effective Peer Count", f"{_eff_peer_count:.2f}", "peer_quality_model", "inferred")
     assumptions_dict["peer_quality"] = _peer_quality
@@ -1609,6 +1673,28 @@ def run_analysis(
         market_data=market_data,
         sector=fund.sector or "",
         company_type=company_type,
+    )
+    _method_values: list[float] = []
+    if result.dcf and result.dcf.enterprise_value and result.dcf.enterprise_value > 0:
+        _method_values.append(float(result.dcf.enterprise_value))
+    if result.comps and result.comps.mid and result.comps.mid > 0:
+        _method_values.append(float(result.comps.mid))
+    if result.transactions and result.transactions.implied_value and result.transactions.implied_value > 0:
+        _method_values.append(float(result.transactions.implied_value))
+    _method_dispersion_ratio = 1.0
+    if len(_method_values) >= 2 and min(_method_values) > 0:
+        _method_dispersion_ratio = max(_method_values) / min(_method_values)
+    if _method_dispersion_ratio >= 2.0:
+        _method_dispersion_level = "High"
+    elif _method_dispersion_ratio >= 1.4:
+        _method_dispersion_level = "Medium"
+    else:
+        _method_dispersion_level = "Low"
+    sources.add_once(
+        "Method Dispersion",
+        f"{_method_dispersion_level} ({_method_dispersion_ratio:.2f}x spread)",
+        "valuation_engine",
+        "inferred",
     )
     blended_ev = result.blended.blended if result.blended else None
     rec = result.recommendation
@@ -1746,17 +1832,23 @@ def run_analysis(
     _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if result.has_revenue else "N/A"
     _model_signal = _raw_rec
+    _raw_signal_label = "Neutral valuation signal"
     if result.has_revenue and rec.upside_pct is not None:
         if rec.upside_pct <= -0.30:
             _model_signal = "SELL / NEGATIVE VALUATION SIGNAL"
+            _raw_signal_label = "Negative valuation signal"
         elif -0.30 < rec.upside_pct <= -0.15:
             _model_signal = "HOLD / NEGATIVE BIAS"
+            _raw_signal_label = "Negative valuation signal"
         elif -0.15 < rec.upside_pct < 0.15:
             _model_signal = "HOLD"
+            _raw_signal_label = "Neutral valuation signal"
         elif 0.15 <= rec.upside_pct < 0.30:
             _model_signal = "BUY / POSITIVE BIAS"
+            _raw_signal_label = "Positive valuation signal"
         elif rec.upside_pct >= 0.30:
             _model_signal = "BUY / POSITIVE VALUATION SIGNAL"
+            _raw_signal_label = "Positive valuation signal"
     _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
     if peer_multiples and peer_multiples.n_valuation_peers < 3:
         _low_conviction = True
@@ -1785,7 +1877,12 @@ def run_analysis(
     else:
         _rec = _raw_rec
     if _low_conviction and _rec in {"BUY", "SELL", "HOLD"}:
-        _rec = f"{_rec} / LOW CONVICTION"
+        if _rec == "SELL":
+            _rec = "HOLD / LOW CONVICTION"
+        elif _rec == "BUY":
+            _rec = "BUY / LOW CONVICTION"
+        else:
+            _rec = "HOLD / LOW CONVICTION"
     if (not valuation_failed) and _low_conviction and valuation_status == "OK":
         valuation_status = "DEGRADED"
     if valuation_failed:
@@ -2130,21 +2227,37 @@ def run_analysis(
     if quick_mode:
         _modeled_growth = (result.field_sources.get("Modeled Revenue Growth") or ("N/A", "", ""))[0]
         _fv_range = (result.field_sources.get("Fair Value Range") or ("N/A", "", ""))[0]
+        _prof = get_sector_profile(
+            fund.sector or "",
+            _target_industry if "_target_industry" in locals() else "",
+        )
+        _drivers = ", ".join(_prof.demand_drivers[:2]) if _prof.demand_drivers else "demand resilience and execution discipline"
+        _margins = ", ".join(_prof.margin_drivers[:2]) if _prof.margin_drivers else "mix and operating leverage"
+        _risk_list = list(_prof.common_risks[:3]) if _prof.common_risks else [
+            "demand-cycle volatility",
+            "regulatory/policy pressure",
+            "peer-vs-DCF valuation dispersion",
+        ]
         _quick_text = (
-            f"Thesis:\n"
-            f"- Moat: ecosystem, services, and vertical integration dynamics in {fund.sector or 'the sector'}.\n"
-            f"- Growth: modeled revenue growth {_modeled_growth}; execution still tied to demand and product cycle.\n"
+            "Thesis:\n"
+            f"- Sector profile: {_prof.label or (fund.sector or 'Default fallback')}.\n"
+            f"- Demand drivers: {_drivers}.\n"
+            f"- Margin drivers: {_margins}.\n"
             f"- Valuation signal: {_model_signal_for_text} ({val.upside_downside or 'N/A'}); "
             f"final recommendation {_rec} due to confidence/dispersion guardrails.\n"
             f"- Indicative fair value: {_fv_range} (use range over point estimate when confidence is low).\n"
-            f"\nRisks:\n"
-            f"- iPhone and hardware demand-cycle volatility.\n"
-            f"- Platform and App-Store regulatory pressure.\n"
-            f"- Peer-vs-DCF valuation dispersion."
-        )
+            "\nRisks:\n"
+            + "".join(f"- {r}.\n" for r in _risk_list)
+        ).rstrip()
         thesis = InvestmentThesis(
             thesis=_quick_text,
-            catalysts=_sanitize_catalysts(_fallback_catalysts(company, fund.sector or ""))[:3],
+            catalysts=_sanitize_catalysts(
+                _fallback_catalysts(
+                    company,
+                    fund.sector or "",
+                    _target_industry if "_target_industry" in locals() else "",
+                )
+            )[:3],
             key_questions=[
                 "What metric would move conviction most next quarter?",
                 "How robust is margin durability vs peers?",
@@ -2164,6 +2277,7 @@ def run_analysis(
             recommendation=val.recommendation or "HOLD",
             reason="research fallback mode (source-backed market context unavailable)",
             model_signal=_model_signal_for_text,
+            industry=_target_industry if "_target_industry" in locals() else "",
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -2179,6 +2293,7 @@ def run_analysis(
             recommendation=val.recommendation or "HOLD",
             reason="global runtime budget reached",
             model_signal=_model_signal_for_text,
+            industry=_target_industry if "_target_industry" in locals() else "",
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -2279,7 +2394,9 @@ def run_analysis(
         _done("Investment Thesis", t0)
 
     if thesis:
+        _prof_key = detect_sector_profile(fund.sector or "", _target_industry if '_target_industry' in locals() else "")
         thesis.thesis = _sanitize_thesis_language(thesis.thesis or "")
+        thesis.thesis = _enforce_profile_context_guard(thesis.thesis, _prof_key)
         thesis.bull_case = _sanitize_thesis_language(thesis.bull_case or "")
         thesis.base_case = _sanitize_thesis_language(thesis.base_case or "")
         thesis.bear_case = _sanitize_thesis_language(thesis.bear_case or "")
@@ -2359,14 +2476,23 @@ def run_analysis(
         _research_quality_score = 100
         _market_sources = [str(s) for s in (mkt.sources or []) if str(s).strip()]
         _has_source_backed_market = any(("http://" in s.lower()) or ("https://" in s.lower()) for s in _market_sources)
+        _rq_profile = detect_sector_profile(fund.sector or "", _target_industry if '_target_industry' in locals() else "")
+        _tam_optional_profiles = {
+            "consumer_staples_tobacco",
+            "financials_banks",
+            "financials_insurance",
+            "utilities",
+            "energy_oil_gas",
+            "materials_chemicals_mining",
+        }
         if market_status in {"DEGRADED", "DEGRADED_API_CAPACITY"}:
             _research_quality_score -= 45
         elif market_status in {"FAILED", "TIMEOUT"}:
             _research_quality_score -= 60
         if _text_missing(mkt.market_size):
-            _research_quality_score -= 10
+            _research_quality_score -= (3 if _rq_profile in _tam_optional_profiles else 10)
         if _text_missing(mkt.market_growth):
-            _research_quality_score -= 10
+            _research_quality_score -= (3 if _rq_profile in _tam_optional_profiles else 10)
         _ms_txt = str(mkt.market_size or "").lower()
         _mg_txt = str(mkt.market_growth or "").lower()
         _tam_estimated = any(tok in _ms_txt for tok in ("estimated", "inferred", "proxy", "approx"))
@@ -2424,19 +2550,23 @@ def run_analysis(
     elif not peer_multiples or peer_multiples.n_valuation_peers <= 0:
         _peers_display_status = "PEERS_FAILED"
     else:
-        _adjacent = bool(_missing_consumer_ecosystem_bucket)
+        _pure_share = float(peer_multiples.pure_peer_weight_share or 0.0)
         _eff_disp = float(peer_multiples.effective_peer_count or 0.0)
         _low_div = bool(_eff_disp > 0 and _eff_disp < 5.0)
-        if _adjacent and _low_div:
-            _peers_display_status = "ADJACENT_COMPS_LOW_DIVERSITY"
-        elif _adjacent:
-            _peers_display_status = "ADJACENT_COMPS_OK"
-        elif peers_status == "DEGRADED" or _low_div:
-            _peers_display_status = "PEERS_DEGRADED"
-        else:
+        if _pure_share >= 0.65 and not _low_div:
             _peers_display_status = "PURE_COMPS_OK"
+        elif _pure_share >= 0.25:
+            _peers_display_status = "MIXED_COMPS_OK"
+        elif _low_div:
+            _peers_display_status = "ADJACENT_COMPS_LOW_DIVERSITY"
+        elif _pure_share > 0.0 or _missing_consumer_ecosystem_bucket:
+            _peers_display_status = "ADJACENT_COMPS_OK"
+        else:
+            _peers_display_status = "PEERS_DEGRADED"
     _peers_is_low_conf = _peers_display_status in {
         "ADJACENT_COMPS_LOW_DIVERSITY",
+        "ADJACENT_COMPS_OK",
+        "MIXED_COMPS_OK",
         "PEERS_DEGRADED",
         "PEERS_FAILED",
     }
@@ -2444,13 +2574,18 @@ def run_analysis(
     _peer_quality_score = 100
     if peer_multiples:
         if peer_multiples.n_valuation_peers < (3 if quick_mode else 5):
-            _peer_quality_score -= 20
+            _peer_quality_score -= 15
         if peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < 5.0:
-            _peer_quality_score -= 20
+            _peer_quality_score -= 10
+        _pure_share = float(peer_multiples.pure_peer_weight_share or 0.0)
+        if _pure_share < 0.15:
+            _peer_quality_score -= 10
+        elif _pure_share < 0.35:
+            _peer_quality_score -= 10
     else:
         _peer_quality_score -= 40
     if _missing_consumer_ecosystem_bucket:
-        _peer_quality_score -= 15
+        _peer_quality_score -= 10
     if _peers_display_status == "PEERS_FAILED":
         _peer_quality_score = min(_peer_quality_score, 45)
     _peer_quality_score = max(0, min(100, _peer_quality_score))
@@ -2480,6 +2615,8 @@ def run_analysis(
         _confidence_reasons.append("high DCF/comps dispersion or method disagreement")
     if _dcf_sanity_fail:
         _confidence_reasons.append("conservative/degraded DCF sanity")
+    if _method_dispersion_ratio >= 2.0:
+        _confidence_reasons.append(f"high method dispersion ({_method_dispersion_ratio:.1f}x)")
     if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}:
         _confidence_reasons.append("limited market context")
     if thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
@@ -2490,6 +2627,60 @@ def run_analysis(
         _dcf_status = str(_dcf_src[0])
     elif _dcf_sanity_fail:
         _dcf_status = "conservative / degraded"
+
+    _confidence_is_low = bool(
+        valuation_status in {"FAILED", "DEGRADED"}
+        or _peers_is_low_conf
+        or market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
+        or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
+    )
+    _confidence_is_medium = bool(
+        (not _confidence_is_low)
+        and (
+            _method_dispersion_ratio >= 1.4
+            or _peers_display_status in {"MIXED_COMPS_OK", "ADJACENT_COMPS_OK"}
+            or str(_research_source) != "source_backed"
+        )
+    )
+    _confidence_level = "Low" if _confidence_is_low else ("Medium" if _confidence_is_medium else "High")
+    if market_status == "SKIPPED_QUICK_MODE":
+        _research_status_enum = "RESEARCH_SKIPPED_QUICK_MODE"
+    elif market_status in {"FAILED", "TIMEOUT"} and thesis_status in {"FAILED", "TIMEOUT"}:
+        _research_status_enum = "RESEARCH_FAILED"
+    elif _research_source == "source_backed" and market_status == "OK" and thesis_status not in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
+        _research_status_enum = "RESEARCH_OK"
+    elif _research_source == "source_backed":
+        _research_status_enum = "RESEARCH_PARTIAL_SOURCE_BACKED"
+    else:
+        _research_status_enum = "RESEARCH_PARTIAL_FALLBACK"
+
+    # Deterministic recommendation policy: separate raw valuation signal from final recommendation.
+    if not valuation_failed and company_type == "public":
+        if _confidence_level == "Low":
+            if _raw_signal_label.startswith("Positive"):
+                _rec = "BUY / LOW CONVICTION"
+            elif _raw_signal_label.startswith("Negative"):
+                _rec = "HOLD / LOW CONVICTION"
+            else:
+                _rec = "HOLD / LOW CONVICTION"
+        elif _confidence_level == "Medium":
+            if _raw_signal_label.startswith("Positive"):
+                _rec = "BUY / MODERATE CONVICTION"
+            elif _raw_signal_label.startswith("Negative"):
+                _rec = "SELL / MODERATE CONVICTION"
+            else:
+                _rec = "HOLD"
+        else:
+            if _raw_signal_label.startswith("Positive"):
+                _rec = "BUY"
+            elif _raw_signal_label.startswith("Negative"):
+                _rec = "SELL"
+            else:
+                _rec = "HOLD"
+        # Full-mode fallback should never output high-conviction calls.
+        if (not quick_mode) and str(_research_source) != "source_backed" and _rec in {"BUY", "SELL", "BUY / MODERATE CONVICTION", "SELL / MODERATE CONVICTION"}:
+            _rec = "BUY / LOW CONVICTION" if _raw_signal_label.startswith("Positive") else "HOLD / LOW CONVICTION"
+        val.recommendation = _rec
 
     analysis = AnalysisResult(
         company=company,
@@ -2524,41 +2715,19 @@ def run_analysis(
                     )
                 ),
                 "research_enrichment": (
-                    "FAILED"
-                    if market_status in {"FAILED", "TIMEOUT"} and thesis_status in {"FAILED", "TIMEOUT"}
-                    else (
-                        "SKIPPED_QUICK_MODE"
-                        if market_status == "SKIPPED_QUICK_MODE"
-                        else (
-                            "PARTIAL_FALLBACK"
-                            if (
-                                _research_source != "source_backed"
-                                and (market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"} or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY", "DEGRADED"})
-                            )
-                            else (
-                                "DEGRADED"
-                                if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"} or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
-                                else "OK"
-                            )
-                        )
-                    )
+                    _research_status_enum
                 ),
-                "model_signal": _model_signal,
-                "model_signal_raw": _raw_rec,
-                "model_signal_detail": _model_signal,
+                "model_signal": _raw_signal_label,
+                "model_signal_raw": _model_signal,
+                "model_signal_detail": _raw_signal_label,
                 "recommendation": _rec,
                 "dcf_status": _dcf_status,
+                "method_dispersion_ratio": round(_method_dispersion_ratio, 3),
+                "method_dispersion_level": _method_dispersion_level,
                 "effective_peer_count": (round(_eff_peer_count, 2) if _eff_peer_count > 0 else None),
-                "confidence": (
-                    "Low"
-                    if (
-                        valuation_status in {"FAILED", "DEGRADED"}
-                        or _peers_is_low_conf
-                        or market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
-                        or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
-                    )
-                    else "Medium"
-                ),
+                "pure_peer_weight": (round(float(peer_multiples.pure_peer_weight_share or 0.0), 4) if peer_multiples else None),
+                "adjacent_peer_weight": (round(float(peer_multiples.adjacent_peer_weight_share or 0.0), 4) if peer_multiples else None),
+                "confidence": _confidence_level,
                 "confidence_reason": (
                     "; ".join(_confidence_reasons)
                     if _confidence_reasons
@@ -2577,6 +2746,13 @@ def run_analysis(
                 "peer_selection": log.step_times.get("peer_selection"),
                 "peer_validation": log.step_times.get("peer_validation"),
                 "peers": log.step_times.get("peers"),
+                "tx_comps": log.step_times.get("tx_comps"),
+                "research_total": round(
+                    float(log.step_times.get("market_analysis") or 0.0)
+                    + float(log.step_times.get("peer_selection") or 0.0)
+                    + float(log.step_times.get("tx_comps") or 0.0),
+                    2,
+                ),
                 "financials": log.step_times.get("financials"),
                 "valuation": log.step_times.get("valuation"),
                 "thesis": log.step_times.get("thesis"),
@@ -2618,32 +2794,31 @@ def run_analysis(
         )
         _existing_trends = [str(t) for t in (analysis.market.key_trends or []) if str(t).strip()]
         _usable_trends = [t for t in _existing_trends if not _trend_is_placeholder(t)]
+        _prof = get_sector_profile(fund.sector or "", _target_industry if '_target_industry' in locals() else "")
         if not _source_backed:
-            analysis.market.key_trends = [
-                "Fallback Market Context — not source-backed; used for thesis framing, not valuation inputs.",
-                "Demand trend: hardware demand remains replacement-cycle driven.",
-                "Platform/services trend: monetization remains a key valuation driver.",
-                "Regulatory trend: platform-policy and antitrust pressure remain material risks.",
-                "Product trend: roadmap execution and user engagement are key watch items.",
+            _fallback_ctx = list(_prof.fallback_market_context) if _prof.fallback_market_context else [
+                "Demand trend: category demand visibility is limited in this run.",
+                "Competitive trend: peer positioning should be interpreted with caution.",
+                "Regulatory trend: policy and macro conditions remain external variables.",
             ]
+            analysis.market.key_trends = [
+                "Fallback Market Context — sector profile only, not source-backed. Used for qualitative framing only, not valuation inputs.",
+                *_fallback_ctx[:4],
+            ]
+            _prof_key = detect_sector_profile(fund.sector or "", _target_industry if '_target_industry' in locals() else "")
+            analysis.market.key_trends = [_enforce_profile_context_guard(t, _prof_key) for t in analysis.market.key_trends]
         elif not _usable_trends:
-            _sec = (fund.sector or "").lower()
-            if any(k in _sec for k in ("tech", "software", "technology", "communication")):
-                analysis.market.key_trends = [
-                    "Market Context — qualitative fallback (not source-backed).",
-                    "Demand trend: mature smartphone category remains upgrade-cycle driven.",
-                    "Competitive trend: premium Android and China-local OEM pressure can affect share.",
-                    "Regulatory trend: App Store / DMA / DOJ platform-policy developments can affect monetization.",
-                    "Product trend: roadmap execution and services monetization remain key drivers.",
-                ]
-            else:
-                analysis.market.key_trends = [
-                    "Market Context — qualitative fallback (not source-backed).",
-                    "Demand trend: limited direct TAM datapoints; monitor category demand proxies.",
-                    "Competitive trend: incumbents and platform competitors remain active.",
-                    "Regulatory trend: policy and antitrust dynamics can affect monetization.",
-                    "Segment trend: mix-shift and category-level growth should be monitored.",
-                ]
+            _fallback_ctx = list(_prof.fallback_market_context) if _prof.fallback_market_context else [
+                "Demand trend: category demand visibility is limited in this run.",
+                "Competitive trend: peer positioning should be interpreted with caution.",
+                "Regulatory trend: policy and macro conditions remain external variables.",
+            ]
+            analysis.market.key_trends = [
+                "Fallback Market Context — sector profile only, not source-backed. Used for qualitative framing only, not valuation inputs.",
+                *_fallback_ctx[:4],
+            ]
+            _prof_key = detect_sector_profile(fund.sector or "", _target_industry if '_target_industry' in locals() else "")
+            analysis.market.key_trends = [_enforce_profile_context_guard(t, _prof_key) for t in analysis.market.key_trends]
         else:
             analysis.market.key_trends = _usable_trends
     elif market_analysis_failed:

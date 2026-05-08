@@ -523,15 +523,19 @@ def _peer_table_headers(debug: bool = False) -> list[str]:
 
 def _normalize_research_status(raw: str) -> str:
     s = (raw or "").upper()
-    if s == "SKIPPED_QUICK_MODE":
+    if s in {"RESEARCH_SKIPPED_QUICK_MODE", "SKIPPED_QUICK_MODE"}:
         return "SKIPPED_QUICK_MODE"
-    if s == "PARTIAL_FALLBACK":
+    if s in {"RESEARCH_PARTIAL_FALLBACK", "PARTIAL_FALLBACK"}:
         return "PARTIAL_FALLBACK"
+    if s in {"RESEARCH_PARTIAL_SOURCE_BACKED", "PARTIAL_SOURCE_BACKED"}:
+        return "PARTIAL_SOURCE_BACKED"
+    if s in {"RESEARCH_OK", "OK"}:
+        return "OK"
+    if s in {"RESEARCH_FAILED", "FAILED", "TIMEOUT"}:
+        return "FAILED"
     if s in {"FAILED", "TIMEOUT"}:
         return "FAILED"
-    if s in {"DEGRADED", "DEGRADED_API_CAPACITY"}:
-        return "PARTIAL"
-    return "OK"
+    return "PARTIAL_FALLBACK"
 
 
 def _normalize_valuation_status(raw_status: str, confidence: str) -> str:
@@ -557,6 +561,8 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         str(pipeline_status.get("confidence", "")),
     )
     rec_state = str(pipeline_status.get("recommendation", "N/A"))
+    _used_in_valuation = "no" if research_state in {"SKIPPED_QUICK_MODE", "PARTIAL_FALLBACK", "FAILED"} else "yes"
+    _used_in_thesis = "conservative template only" if research_state in {"PARTIAL_FALLBACK", "FAILED"} else "yes"
     block = (
         "[bold]Pipeline status:[/bold]\n"
         f"  Market data: {market_data_state}\n"
@@ -574,11 +580,37 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             + " | Research depth: " + (_r_depth or "n/a")
             + " | Market context source-backed: " + (_r_backed or "n/a")
         )
+    block += (
+        "\n  Research used in valuation: " + _used_in_valuation
+        + " | Research used in thesis: " + _used_in_thesis
+    )
     if research_state == "PARTIAL_FALLBACK":
         block += (
             "\n  Full research unavailable; report generated from verified market data, "
             "deterministic peer set, and conservative fallback thesis template."
         )
+    elif research_state == "SKIPPED_QUICK_MODE":
+        block += (
+            "\n  Quick mode: deep research skipped by design; output is indicative, not full research-backed."
+        )
+    _disp_level = str(pipeline_status.get("method_dispersion_level", "") or "").strip()
+    _disp_ratio = pipeline_status.get("method_dispersion_ratio")
+    if _disp_level:
+        try:
+            _disp_txt = f"{_disp_level} ({float(_disp_ratio):.2f}x spread)"
+        except Exception:
+            _disp_txt = _disp_level
+        block += f"\n  Method dispersion: {_disp_txt}"
+    _pure_w = pipeline_status.get("pure_peer_weight")
+    _adj_w = pipeline_status.get("adjacent_peer_weight")
+    if _pure_w is not None and _adj_w is not None:
+        try:
+            block += (
+                f"\n  Pure peer weight: {float(_pure_w):.1%} | "
+                f"Adjacent peer weight: {float(_adj_w):.1%}"
+            )
+        except Exception:
+            pass
     reason = str(pipeline_status.get("confidence_reason", "") or "").strip()
     return block, reason
 
@@ -666,7 +698,11 @@ def print_result(result, debug: bool = False):
     if (not _is_inconclusive) and _pipeline_status.get("confidence"):
         _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
     _headline_tail = "" if _is_low_conf else f" | Upside: {_value_with_source('Upside', v.upside_downside)}"
-    _header_parts = [f"[bold]{f.company_name}[/]", f.sector or "Unknown"]
+    _industry = (src_map.get("Industry", {}) or {}).get("value") if src_map else None
+    _sector_label = f.sector or "Unknown"
+    if _industry and str(_industry).strip().lower() not in {"none", "n/a", "unknown"}:
+        _sector_label = f"{_sector_label} / {_industry}"
+    _header_parts = [f"[bold]{f.company_name}[/]", _sector_label]
     _hq = str(f.headquarters or "").strip()
     if _hq and _hq.lower() not in {"none", "n/a", "unknown"}:
         _header_parts.append(_hq)
@@ -687,13 +723,14 @@ def print_result(result, debug: bool = False):
             console.print(f"[dim]Why low confidence: {_status_reason}[/dim]")
         _ms_plain = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")) or "N/A")
         _fr_plain = str(_pipeline_status.get("recommendation", "N/A") or "N/A")
-        if str(_pipeline_status.get("confidence", "")).strip().lower() == "low":
-            if _ms_plain.upper().startswith("SELL /"):
-                _ms_plain = "NEGATIVE VALUATION SIGNAL"
+        _conf_plain = str(_pipeline_status.get("confidence", "")).strip()
         if _ms_plain not in {"N/A", ""} and _fr_plain not in {"N/A", ""} and _ms_plain != _fr_plain:
+            _reason_txt = "confidence guardrails are applied."
+            if _conf_plain.lower() == "low":
+                _reason_txt = "the raw model signal is capped due to low valuation confidence."
             console.print(
-                f"[dim]Valuation signal: {_ms_plain}. Final recommendation: {_fr_plain}. "
-                "Reason: valuation downside and confidence guards are both applied.[/dim]"
+                f"[dim]Raw valuation signal: {_ms_plain}. Final recommendation: {_fr_plain}. "
+                f"Reason: {_reason_txt}[/dim]"
             )
         if debug:
             console.print(
@@ -729,6 +766,7 @@ def print_result(result, debug: bool = False):
             "market_analysis",
             "peer_selection",
             "peer_validation",
+            "tx_comps",
             "financials",
             "valuation",
             "thesis",
@@ -757,6 +795,7 @@ def print_result(result, debug: bool = False):
             f"  Peer selection: {_timings.get('peer_selection', 'N/A')}s\n"
             f"  Peer validation/data fetch: {_timings.get('peer_validation', 'N/A')}s\n"
             f"  Peer total: {_timings.get('peers', 'N/A')}s\n"
+            f"  Research total (market+peer+tx): {_timings.get('research_total', 'N/A')}s\n"
             f"  Financials: {_timings.get('financials', 'N/A')}s\n"
             f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"
             f"  Report: {_timings.get('thesis', 'N/A')}s\n"
@@ -792,9 +831,20 @@ def print_result(result, debug: bool = False):
         )
     _mcap_val = src_map.get("Market Cap", {}).get("value")
     if (not _is_inconclusive) and _mcap_val and _eq_bridge:
+        _interp = "fairly valued"
+        try:
+            _u_txt = str(v.upside_downside or "").replace("%", "")
+            _u_val = float(_u_txt)
+            if _u_val <= -10:
+                _interp = "market appears overvalued vs model"
+            elif _u_val >= 10:
+                _interp = "market appears undervalued vs model"
+        except Exception:
+            pass
         console.print(
             f"[dim]Market cap: {_mcap_val} | Model equity value: {_eq_bridge} | "
-            f"Model-implied upside/downside: {v.upside_downside or 'N/A'}[/dim]"
+            f"Model-implied upside/downside: {v.upside_downside or 'N/A'} | "
+            f"Interpretation: {_interp}[/dim]"
         )
 
     # KPIs
@@ -906,6 +956,7 @@ def print_result(result, debug: bool = False):
         console.print("\n[bold]Catalysts:[/]")
         for c in t.catalysts:
             console.print(f"  → {c}")
+    console.print("\n[dim]This is a model-based valuation screen, not investment advice.[/dim]")
 
 
 def main():

@@ -33,18 +33,20 @@ def test_pipeline_status_block_is_normalized_and_compact():
             "market_data_source_backed": "no",
         }
     )
-    assert "Research: PARTIAL" in block
+    assert "Research: PARTIAL_FALLBACK" in block
     assert "Peers: PEERS_FAILED" in block
     assert "Valuation: LOW_CONFIDENCE" in block
     assert "Recommendation: HOLD / LOW CONVICTION" in block
     assert "Research source: fallback | Research depth: limited | Market context source-backed: no" in block
+    assert "Research used in valuation: no | Research used in thesis: conservative template only" in block
     assert reason == "DCF/comps disagreement"
 
 
 def test_status_normalizers():
     assert _normalize_research_status("skipped_quick_mode") == "SKIPPED_QUICK_MODE"
-    assert _normalize_research_status("degraded") == "PARTIAL"
+    assert _normalize_research_status("degraded") == "PARTIAL_FALLBACK"
     assert _normalize_research_status("partial_fallback") == "PARTIAL_FALLBACK"
+    assert _normalize_research_status("research_partial_source_backed") == "PARTIAL_SOURCE_BACKED"
     assert _normalize_valuation_status("ok", "Low") == "LOW_CONFIDENCE"
     assert _normalize_valuation_status("failed", "Medium") == "FAILED"
 

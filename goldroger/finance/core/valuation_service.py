@@ -427,6 +427,28 @@ class ValuationService:
             company_type=company_type,
             market_data=market_data,
         )
+        # Hard source requirement for transaction comps in public-company runs:
+        # if deal-level source quality is unavailable, tx comps are reference-only (0% weight).
+        if company_type == "public" and not bool(assumptions.get("transaction_comps_verified")):
+            _old_tx = float(weights.get("transactions", 0.0))
+            if _old_tx > 0:
+                _dcf = float(weights.get("dcf", 0.0))
+                _comps = float(weights.get("comps", 0.0))
+                _base = _dcf + _comps
+                if _base > 0:
+                    _dcf = _dcf / _base
+                    _comps = _comps / _base
+                else:
+                    _dcf, _comps = 1.0, 0.0
+                weights = {"dcf": _dcf, "comps": _comps, "transactions": 0.0}
+                notes.append(
+                    "Transaction comps not source-verified: weight set to 0% (reference only)."
+                )
+            field_sources["Transaction Comps"] = (
+                "not weighted (source not logged or insufficient verified deals)",
+                "transaction_comps_policy",
+                "inferred",
+            )
         _mega_cap_usd_m = _cfg.lbo.mega_cap_skip_usd_bn * 1000
         _is_mega_cap = bool(market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m)
         _pre_disp = None

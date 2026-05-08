@@ -28,6 +28,7 @@ import httpx
 import yfinance as yf
 
 from goldroger.data.fetcher import fetch_market_data, resolve_ticker, MarketData
+from goldroger.data.sector_profiles import detect_sector_profile
 from goldroger.utils.cache import peer_universe_cache
 
 MIN_VALID_PEERS = 3
@@ -155,6 +156,9 @@ class PeerMultiples:
     n_valuation_peers: int = 0
     n_qualitative_peers: int = 0
     effective_peer_count: float = 0.0
+    pure_peer_weight_share: float = 0.0
+    adjacent_peer_weight_share: float = 0.0
+    peer_set_type: str = "adjacent_reference_set"
     source: str = "yfinance_peers"
 
     # Validation metadata — useful for CLI output and debugging
@@ -332,6 +336,39 @@ def _econ_similarity(
 
 def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
     s = f"{sector or ''} {industry or ''} {name or ''}".lower()
+    # Consumer staples / tobacco-specific buckets
+    if any(k in s for k in ("tobacco", "nicotine", "cigarette", "vape", "smoke-free", "oral nicotine")):
+        return "tobacco_nicotine"
+    if any(k in s for k in ("beverage", "soft drink", "brewer", "distiller")):
+        return "beverages_adjacent"
+    if any(k in s for k in ("household", "personal care", "home care", "hygiene")):
+        return "household_products_adjacent"
+    if any(k in s for k in ("retail", "supermarket", "discount store", "warehouse club", "grocery")):
+        return "retail_adjacent"
+    if any(k in s for k in ("consumer defensive", "consumer staples", "packaged foods", "snacks")):
+        return "consumer_staples_adjacent"
+    # Healthcare / financial / industrial coverage buckets
+    if any(k in s for k in ("pharma", "pharmaceutical", "biotech", "drug")):
+        return "healthcare_pharma"
+    if any(k in s for k in ("medtech", "medical device", "healthcare equipment")):
+        return "healthcare_medtech"
+    if any(k in s for k in ("bank", "banking", "financial services", "consumer finance")):
+        return "financials_banks"
+    if "insurance" in s:
+        return "financials_insurance"
+    if any(k in s for k in ("oil", "gas", "energy", "upstream", "downstream")):
+        return "energy_oil_gas"
+    if any(k in s for k in ("utility", "electric", "water", "power")):
+        return "utilities_general"
+    if any(k in s for k in ("reit", "real estate", "property")):
+        return "real_estate_reit"
+    if any(k in s for k in ("chemical", "mining", "metals", "materials")):
+        return "materials_general"
+    if any(k in s for k in ("telecom", "wireless", "media", "communication services")):
+        return "telecom_media"
+    if "industrial" in s:
+        return "industrials_general"
+    # Technology buckets
     if any(k in s for k in (
         "network", "networking", "communications equipment", "communication equipment",
         "router", "switch", "telecom equipment",
@@ -360,19 +397,27 @@ def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
         return "software_services_platform"
     if _sector_group(s or "") in {"tech", "comms", "consumer"}:
         return "other_adjacent_tech"
-    return "other_adjacent_tech"
+    return "other_adjacent"
 
 
 def _target_profile(target_sector: str, target_industry: str) -> str:
-    t = f"{target_sector or ''} {target_industry or ''}".lower()
-    if any(k in t for k in ("semiconductor", "chip", "foundry", "memory", "gpu", "fabless")):
+    _profile_key = detect_sector_profile(target_sector, target_industry)
+    if _profile_key == "technology_semiconductors":
         return "semiconductors"
-    if any(k in t for k in ("consumer electronics", "hardware", "devices", "smartphone", "pc", "tablet", "consumer tech")) and (
-        "tech" in t or "technology" in t
-    ):
+    if _profile_key == "technology_consumer_electronics":
         return "premium_device_platform"
-    if any(k in t for k in ("software", "internet", "platform", "communication services", "cloud")):
+    if _profile_key == "technology_software":
         return "software_services_ecosystem"
+    if _profile_key == "consumer_staples_tobacco":
+        return "consumer_staples_tobacco"
+    if _profile_key.startswith("consumer_staples"):
+        return "consumer_staples_general"
+    if _profile_key.startswith("financials"):
+        return "financials"
+    if _profile_key.startswith("healthcare"):
+        return "healthcare"
+    if _profile_key in {"energy_oil_gas", "utilities", "real_estate_reit", "materials_chemicals_mining", "telecom_media", "industrials"}:
+        return _profile_key
     return "general_tech"
 
 
@@ -413,6 +458,22 @@ def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
             "semiconductor_equipment": 0.45,
             "other_adjacent_tech": 0.55,
         }.get(bucket, 0.55)
+    if profile == "consumer_staples_tobacco":
+        return {
+            "tobacco_nicotine": 1.00,
+            "consumer_staples_adjacent": 0.70,
+            "beverages_adjacent": 0.55,
+            "household_products_adjacent": 0.55,
+            "retail_adjacent": 0.40,
+        }.get(bucket, 0.30)
+    if profile == "consumer_staples_general":
+        return {
+            "consumer_staples_adjacent": 1.00,
+            "beverages_adjacent": 0.80,
+            "household_products_adjacent": 0.80,
+            "retail_adjacent": 0.60,
+            "tobacco_nicotine": 0.55,
+        }.get(bucket, 0.35)
     return {
         "software_services_platform": 0.88,
         "consumer_hardware_ecosystem": 0.82,
@@ -420,6 +481,11 @@ def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
         "semiconductors": 0.68,
         "semiconductor_equipment": 0.55,
         "other_adjacent_tech": 0.60,
+        "tobacco_nicotine": 0.55,
+        "consumer_staples_adjacent": 0.60,
+        "beverages_adjacent": 0.58,
+        "household_products_adjacent": 0.58,
+        "retail_adjacent": 0.50,
     }.get(bucket, 0.60)
 
 
@@ -460,6 +526,22 @@ def _bucket_similarity_factor(profile: str, bucket: str) -> float:
             "semiconductor_equipment": 0.40,
             "other_adjacent_tech": 0.50,
         }.get(bucket, 0.55)
+    if profile == "consumer_staples_tobacco":
+        return {
+            "tobacco_nicotine": 1.00,
+            "consumer_staples_adjacent": 0.72,
+            "beverages_adjacent": 0.58,
+            "household_products_adjacent": 0.55,
+            "retail_adjacent": 0.42,
+        }.get(bucket, 0.25)
+    if profile == "consumer_staples_general":
+        return {
+            "consumer_staples_adjacent": 1.00,
+            "beverages_adjacent": 0.82,
+            "household_products_adjacent": 0.82,
+            "retail_adjacent": 0.62,
+            "tobacco_nicotine": 0.58,
+        }.get(bucket, 0.30)
     return {
         "software_services_platform": 0.90,
         "consumer_hardware_ecosystem": 0.80,
@@ -467,6 +549,11 @@ def _bucket_similarity_factor(profile: str, bucket: str) -> float:
         "semiconductors": 0.62,
         "semiconductor_equipment": 0.48,
         "other_adjacent_tech": 0.55,
+        "tobacco_nicotine": 0.55,
+        "consumer_staples_adjacent": 0.58,
+        "beverages_adjacent": 0.55,
+        "household_products_adjacent": 0.55,
+        "retail_adjacent": 0.45,
     }.get(bucket, 0.58)
 
 
@@ -507,6 +594,22 @@ def _bucket_budgets(profile: str) -> dict[str, float]:
             "semiconductor_equipment": 0.10,
             "other_adjacent_tech": 0.05,
         }
+    if profile == "consumer_staples_tobacco":
+        return {
+            "tobacco_nicotine": 0.60,
+            "consumer_staples_adjacent": 0.25,
+            "beverages_adjacent": 0.08,
+            "household_products_adjacent": 0.05,
+            "retail_adjacent": 0.02,
+        }
+    if profile == "consumer_staples_general":
+        return {
+            "consumer_staples_adjacent": 0.50,
+            "beverages_adjacent": 0.20,
+            "household_products_adjacent": 0.20,
+            "retail_adjacent": 0.08,
+            "tobacco_nicotine": 0.02,
+        }
     return {
         "software_services_platform": 0.35,
         "consumer_hardware_ecosystem": 0.25,
@@ -528,7 +631,8 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
 
     # Activate only buckets that actually have peers.
     active = {b for b, arr in buckets.items() if arr}
-    target = {b: (budgets.get(b, 0.0) if b in active else 0.0) for b in budgets}
+    all_keys = set(active) | set(budgets.keys())
+    target = {b: (budgets.get(b, 0.0) if b in active else 0.0) for b in all_keys}
     active_sum = sum(target.values())
 
     # If some budgeted buckets are missing, redistribute to active buckets first.
@@ -541,7 +645,14 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
             "semiconductors",
             "semiconductor_equipment",
             "other_adjacent_tech",
+            "tobacco_nicotine",
+            "consumer_staples_adjacent",
+            "beverages_adjacent",
+            "household_products_adjacent",
+            "retail_adjacent",
         ) if b in active]
+        if not pref:
+            pref = sorted(active)
         if pref:
             denom = sum(max(target.get(b, 0.0), 0.01) for b in pref)
             for b in pref:
@@ -718,6 +829,9 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
     single_cap = 0.35 if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} else 0.50
     semi_cap = 0.15 if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} else None
     network_cap = 0.20 if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} else None
+    retail_cap = 0.15 if profile == "consumer_staples_tobacco" else None
+    if profile == "consumer_staples_tobacco":
+        single_cap = 0.45
 
     excess = 0.0
     for p in vals:
@@ -726,6 +840,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             cap = min(cap, network_cap)
         if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
             cap = min(cap, semi_cap)
+        if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
+            cap = min(cap, retail_cap)
         w = float(p.weight or 0.0)
         if w > cap:
             excess += (w - cap)
@@ -741,6 +857,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             cap = min(cap, network_cap)
         if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
             cap = min(cap, semi_cap)
+        if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
+            cap = min(cap, retail_cap)
         if float(p.weight or 0.0) + 1e-9 < cap:
             recipients.append(p)
     if not recipients:
@@ -753,6 +871,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             p_cap = min(p_cap, network_cap)
         if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
             p_cap = min(p_cap, semi_cap)
+        if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
+            p_cap = min(p_cap, retail_cap)
         room += max(0.0, p_cap - float(p.weight or 0.0))
     if room <= 0:
         return peers
@@ -763,6 +883,8 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
             p_cap = min(p_cap, network_cap)
         if semi_cap is not None and (p.bucket or "") in {"semiconductors", "semiconductor_equipment"}:
             p_cap = min(p_cap, semi_cap)
+        if retail_cap is not None and (p.bucket or "") == "retail_adjacent":
+            p_cap = min(p_cap, retail_cap)
         p_room = max(0.0, p_cap - float(p.weight or 0.0))
         if p_room <= 0:
             continue
@@ -927,15 +1049,22 @@ def find_peers_deterministic_quick(
         candidates.extend(_search_yahoo_tickers("global device ecosystem leaders equities", limit=10))
         candidates.extend(_search_yahoo_tickers("technology mega cap equities", limit=12))
         candidates.extend(_search_yahoo_tickers("semiconductor infrastructure mega cap equities", limit=8))
+    elif _profile == "consumer_staples_tobacco":
+        candidates.extend(_search_yahoo_tickers("global tobacco equities", limit=16))
+        candidates.extend(_search_yahoo_tickers("nicotine products companies equities", limit=12))
+        candidates.extend(_search_yahoo_tickers("consumer staples tobacco peers", limit=12))
+        candidates.extend(_search_yahoo_tickers("defensive consumer staples large cap equities", limit=12))
+
+    profile_reserve: dict[str, list[str]] = {
+        "premium_device_platform": ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU"],
+        "consumer_staples_tobacco": ["PM", "MO", "BTI", "IMBBY", "JAPAY"],
+    }
 
     # Deduplicate, remove self ticker, and cap.
     out = [t for t in dict.fromkeys(candidates) if t and t != self_ticker]
-
-    # Stability guard for Apple quick/full fallback:
-    # keep a deterministic reserve to avoid collapsing into a 3-name high-beta basket.
-    if self_ticker == "AAPL":
-        reserve = ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU", "INTC"]
-        if len(out) < 5:
+    reserve = profile_reserve.get(_profile, [])
+    if reserve:
+        if len(out) < min(5, target_peers):
             out = reserve + out
         else:
             out = reserve + [t for t in out if t not in reserve]
@@ -981,7 +1110,26 @@ def _peer_role(profile: str, bucket: str, ev_ebitda: float | None) -> str:
         if bucket in {"semiconductors", "semiconductor_equipment"}:
             return "core valuation peer"
         return "adjacent valuation peer"
+    if profile == "consumer_staples_tobacco":
+        if bucket == "tobacco_nicotine":
+            return "core valuation peer"
+        if bucket in {
+            "consumer_staples_adjacent",
+            "beverages_adjacent",
+            "household_products_adjacent",
+            "retail_adjacent",
+        }:
+            return "adjacent valuation peer"
+        return "qualitative peer only"
+    if profile == "consumer_staples_general":
+        if bucket in {"consumer_staples_adjacent", "beverages_adjacent", "household_products_adjacent"}:
+            return "core valuation peer"
+        if bucket in {"retail_adjacent", "tobacco_nicotine"}:
+            return "adjacent valuation peer"
+        return "qualitative peer only"
     if bucket in {"software_services_platform", "consumer_hardware_ecosystem"}:
+        return "core valuation peer"
+    if bucket in {"tobacco_nicotine", "consumer_staples_adjacent", "beverages_adjacent", "household_products_adjacent"}:
         return "core valuation peer"
     return "adjacent valuation peer"
 
@@ -1028,7 +1176,27 @@ def _relaxation_stage(profile: str, bucket: str) -> int:
         if bucket == "consumer_hardware_ecosystem":
             return 3
         return 4
+    if profile == "consumer_staples_tobacco":
+        if bucket == "tobacco_nicotine":
+            return 1
+        if bucket == "consumer_staples_adjacent":
+            return 2
+        if bucket in {"beverages_adjacent", "household_products_adjacent"}:
+            return 3
+        if bucket == "retail_adjacent":
+            return 4
+        return 5
+    if profile == "consumer_staples_general":
+        if bucket in {"consumer_staples_adjacent", "beverages_adjacent", "household_products_adjacent"}:
+            return 1
+        if bucket == "retail_adjacent":
+            return 2
+        if bucket == "tobacco_nicotine":
+            return 3
+        return 4
     if bucket in {"software_services_platform", "consumer_hardware_ecosystem"}:
+        return 2
+    if bucket in {"consumer_staples_adjacent", "beverages_adjacent", "household_products_adjacent", "tobacco_nicotine"}:
         return 2
     if bucket == "networking_infrastructure":
         return 3
@@ -1384,6 +1552,23 @@ def build_peer_multiples(
         _w_sum_sq = sum((float(w) ** 2) for w in ev_ebitda_w if w and w > 0)
         if _w_sum_sq > 0:
             _effective_peer_count = 1.0 / _w_sum_sq
+    _pure_weight = sum(
+        float(p.weight or 0.0)
+        for p in peers
+        if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0 and (p.role or "") == "core valuation peer"
+    )
+    _adj_weight = sum(
+        float(p.weight or 0.0)
+        for p in peers
+        if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0 and (p.role or "") == "adjacent valuation peer"
+    )
+    _pure_share = _pure_weight / (_pure_weight + _adj_weight) if (_pure_weight + _adj_weight) > 0 else 0.0
+    if _pure_share >= 0.65:
+        _peer_set_type = "PURE_COMPS_OK"
+    elif _pure_share >= 0.25:
+        _peer_set_type = "MIXED_COMPS_OK"
+    else:
+        _peer_set_type = "ADJACENT_REFERENCE_SET"
 
     return PeerMultiples(
         peers=peers,
@@ -1402,6 +1587,9 @@ def build_peer_multiples(
         n_valuation_peers=_n_valuation,
         n_qualitative_peers=_n_qual,
         effective_peer_count=_effective_peer_count,
+        pure_peer_weight_share=_pure_share,
+        adjacent_peer_weight_share=max(0.0, 1.0 - _pure_share) if (_pure_weight + _adj_weight) > 0 else 0.0,
+        peer_set_type=_peer_set_type,
         n_dropped_no_data=n_no_data,
         n_dropped_sector=n_sector,
         n_dropped_sanity=n_sanity,

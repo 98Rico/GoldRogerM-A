@@ -1,5 +1,6 @@
 from goldroger.pipelines.equity import (
     _build_fallback_thesis,
+    _enforce_profile_context_guard,
     _sanitize_catalysts,
     _trend_is_placeholder,
     _soften_unsourced_scenario_specificity,
@@ -52,3 +53,9 @@ def test_fallback_thesis_is_conservative_and_non_numeric():
     assert "CAGR" not in (th.thesis or "")
     assert "model signal is SELL / NEGATIVE VALUATION SIGNAL" in (th.thesis or "")
     assert "final recommendation is HOLD / LOW CONVICTION" in (th.thesis or "")
+
+
+def test_profile_context_guard_blocks_cross_sector_leakage():
+    leaked = "Platform/services monetization and App Store policy are key."
+    out = _enforce_profile_context_guard(leaked, "consumer_staples_tobacco")
+    assert "sector profile only, not source-backed" in out

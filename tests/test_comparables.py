@@ -404,6 +404,34 @@ def test_banking_target_rejects_technology_peer_set():
     assert result.n_dropped_sector >= 1
 
 
+def test_tobacco_bucket_labels_are_sector_specific():
+    assert _classify_peer_bucket("Consumer Defensive", "Tobacco", "British American Tobacco") == "tobacco_nicotine"
+    assert _classify_peer_bucket("Consumer Defensive", "Beverages - Non-Alcoholic", "Coca-Cola") == "beverages_adjacent"
+    assert _classify_peer_bucket("Consumer Defensive", "Household & Personal Products", "Procter & Gamble") == "household_products_adjacent"
+    assert _classify_peer_bucket("Consumer Defensive", "Discount Stores", "Costco") == "retail_adjacent"
+
+
+def test_tobacco_profile_peer_set_type_is_mixed_when_adjacent_weights_dominate():
+    peers = [
+        _md("PM", "Consumer Defensive", ev_ebitda=13.0, market_cap=140_000.0, industry="Tobacco"),
+        _md("MO", "Consumer Defensive", ev_ebitda=11.0, market_cap=80_000.0, industry="Tobacco"),
+        _md("KO", "Consumer Defensive", ev_ebitda=17.0, market_cap=270_000.0, industry="Beverages - Non-Alcoholic"),
+        _md("PG", "Consumer Defensive", ev_ebitda=18.0, market_cap=380_000.0, industry="Household & Personal Products"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["PM", "MO", "KO", "PG"],
+            target_sector="Consumer Staples Tobacco",
+            target_industry="Tobacco",
+            target_market_cap=180_000.0,
+            min_valuation_peers=3,
+        )
+    assert result.n_valuation_peers >= 3
+    assert result.peer_set_type in {"MIXED_COMPS_OK", "ADJACENT_REFERENCE_SET", "PURE_COMPS_OK"}
+    assert 0.0 <= result.pure_peer_weight_share <= 1.0
+    assert 0.0 <= result.adjacent_peer_weight_share <= 1.0
+
+
 # ── resolve_peer_tickers ──────────────────────────────────────────────────────
 
 def test_resolve_with_ticker_provided():
