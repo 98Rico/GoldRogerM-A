@@ -111,7 +111,7 @@ def assess_data_quality(
             checks["peer_set"] = "ok"
     if market_analysis_failed:
         score -= 15
-        warnings.append("Market analysis failed")
+        warnings.append("Market analysis unavailable; fallback used")
         checks["market_analysis"] = "failed"
     elif market_analysis_degraded:
         score -= 8

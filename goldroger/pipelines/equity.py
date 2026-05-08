@@ -792,7 +792,12 @@ def run_analysis(
                             if _div_cash > 0:
                                 _div_cov = float(market_data.fcf_ttm) / _div_cash
                                 if _div_cov > 0:
-                                    sources.add_once("Dividend Coverage", f"{_div_cov:.2f}x", "derived_yfinance", "inferred")
+                                    sources.add_once(
+                                        "Dividend Coverage",
+                                        f"{_div_cov:.2f}x [derived; check cash dividend basis]",
+                                        "derived_yfinance",
+                                        "inferred",
+                                    )
                                 else:
                                     sources.add_once(
                                         "Dividend Coverage",
@@ -1008,7 +1013,10 @@ def run_analysis(
             status = "degraded_api_capacity"
         except Exception as e:
             if not _cancel_market.is_set():
-                console.print(f"  [red]Market analysis failed: {e}[/red]")
+                console.print(
+                    "  [yellow]Market analysis unavailable; using sector-profile fallback for thesis only "
+                    f"({e}).[/yellow]"
+                )
             result = MarketAnalysis()
             status = "failed"
         _step_name = "Market Analysis"
@@ -1198,7 +1206,10 @@ def run_analysis(
             mkt = MarketAnalysis()
             _cancel_market.set()
             _fut_mkt.cancel()
-            console.print(f"  [red]Market analysis failed: timeout > {_MARKET_ANALYSIS_TIMEOUT}s[/red]")
+            console.print(
+                "  [yellow]Market analysis unavailable after timeout; using sector-profile fallback for thesis only "
+                f"(>{_MARKET_ANALYSIS_TIMEOUT}s).[/yellow]"
+            )
         try:
             _peers_raw, _peers_err = _fut_peers.result(timeout=_PEER_COMPS_TIMEOUT)
             peer_timeout_or_fail = bool(_peers_err)
@@ -1291,13 +1302,20 @@ def run_analysis(
     else:
         _research_source = "source_backed" if (market_status == "OK" and _market_source_backed) else "fallback"
         _research_depth = "full" if _research_source == "source_backed" else "limited"
+
+    def _fmt_elapsed_for_status(value: object) -> str | None:
+        try:
+            _v = float(value)
+        except Exception:
+            return None
+        if _v < 0:
+            return None
+        return f"{_v:.2f}s"
+
     if (not quick_mode) and _research_source == "fallback":
         _ma_t = log.step_times.get("market_analysis")
-        if _ma_t is not None:
-            try:
-                _ma_txt = f"{float(_ma_t):.2f}s"
-            except Exception:
-                _ma_txt = f"{_ma_t}s"
+        _ma_txt = _fmt_elapsed_for_status(_ma_t)
+        if _ma_txt:
             console.print(
                 f"  [dim]Market analysis attempted: {_ma_txt}; source-backed context unavailable, fallback used.[/dim]"
             )
@@ -1454,6 +1472,11 @@ def run_analysis(
                             f"  [dim]Pure peer weight: {float(peer_multiples.pure_peer_weight_share or 0.0):.1%} | "
                             f"Adjacent peer weight: {float(peer_multiples.adjacent_peer_weight_share or 0.0):.1%}[/dim]"
                         )
+                        if _is_mega_tech and float(peer_multiples.pure_peer_weight_share or 0.0) <= 0.001:
+                            console.print(
+                                "  [yellow]AAPL-like peer set has no high-purity public comps; "
+                                "trading comps are reference multiples, not direct comparable valuation.[/yellow]"
+                            )
                         _consumer_cnt = _bucket_counts.get("consumer_hardware_ecosystem", 0)
                         if _is_mega_tech and _consumer_cnt < 1:
                             _missing_consumer_ecosystem_bucket = True

@@ -85,3 +85,23 @@ def test_quality_cap_at_90_when_estimates_present():
         proxy_growth_used=True,
     )
     assert out.score <= 90
+
+
+def test_market_analysis_failed_warning_uses_fallback_wording():
+    md = MarketData(
+        ticker="BTI",
+        company_name="British American Tobacco",
+        sector="Consumer Staples",
+        revenue_ttm=30000.0,
+        ebitda_margin=0.35,
+        market_cap=120000.0,
+        ev_ebitda_market=9.0,
+        beta=0.8,
+    )
+    out = assess_data_quality(
+        "public",
+        md,
+        {"revenue_current": 30000.0},
+        market_analysis_failed=True,
+    )
+    assert "Market analysis unavailable; fallback used" in out.warnings

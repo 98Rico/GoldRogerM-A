@@ -1,4 +1,5 @@
 from goldroger.cli import (
+    _fmt_timing_s,
     _infer_source_note,
     _normalize_research_status,
     _normalize_valuation_status,
@@ -99,6 +100,14 @@ def test_pipeline_status_skipped_quick_mode_uses_skipped_research_source():
     )
     assert "Research: SKIPPED_QUICK_MODE" in block
     assert "Research source: skipped | Research depth: none | Market context source-backed: no" in block
+
+
+def test_fmt_timing_s_hides_none_like_values():
+    assert _fmt_timing_s(None) == "N/A"
+    assert _fmt_timing_s("None") == "N/A"
+    assert _fmt_timing_s("") == "N/A"
+    assert _fmt_timing_s("nan") == "N/A"
+    assert _fmt_timing_s(6.2) == "6.20s"
 
 
 def test_infer_source_note_range_and_midpoint_are_bridge_explicit():

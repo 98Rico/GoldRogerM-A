@@ -10,6 +10,7 @@ Usage:
 import argparse
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -520,6 +521,23 @@ def _format_valuation_cell(value: Optional[str]) -> str:
     return _fmt_money_m(n)
 
 
+def _fmt_timing_s(v) -> str:
+    if v is None:
+        return "N/A"
+    try:
+        if isinstance(v, str) and not v.strip():
+            return "N/A"
+        n = float(v)
+        if not math.isfinite(n):
+            return "N/A"
+        return f"{n:.2f}s"
+    except Exception:
+        s = str(v).strip()
+        if not s or s.lower() in {"none", "n/a", "nan"}:
+            return "N/A"
+        return s
+
+
 def _peer_table_headers(debug: bool = False) -> list[str]:
     if debug:
         return [
@@ -840,18 +858,22 @@ def print_result(result, debug: bool = False):
         _hidden = round(max(0.0, _total - _known), 2)
         console.print(
             "[bold]Timing:[/bold]\n"
-            f"  Market data: {_timings.get('market_data', 'N/A')}s\n"
-            f"  Fundamentals: {_timings.get('fundamentals', 'N/A')}s\n"
-            f"  Market analysis: {_timings.get('market_analysis', 'N/A')}s\n"
-            f"  Peer selection: {_timings.get('peer_selection', 'N/A')}s\n"
-            f"  Peer validation/data fetch: {_timings.get('peer_validation', 'N/A')}s\n"
-            f"  Peer total: {_timings.get('peers', 'N/A')}s\n"
-            f"  Research agent time sum (parallel; may exceed wall-clock): {_timings.get('research_total', 'N/A')}s\n"
-            f"  Financials: {_timings.get('financials', 'N/A')}s\n"
-            f"  Valuation: {_timings.get('valuation', 'N/A')}s\n"
-            f"  Report: {_timings.get('thesis', 'N/A')}s\n"
+            f"  Market data: {_fmt_timing_s(_timings.get('market_data', 'N/A'))}\n"
+            f"  Fundamentals: {_fmt_timing_s(_timings.get('fundamentals', 'N/A'))}\n"
+            f"  Market analysis: {_fmt_timing_s(_timings.get('market_analysis', 'N/A'))}\n"
+            f"  Peer selection: {_fmt_timing_s(_timings.get('peer_selection', 'N/A'))}\n"
+            f"  Peer validation/data fetch: {_fmt_timing_s(_timings.get('peer_validation', 'N/A'))}\n"
+            f"  Peer total: {_fmt_timing_s(_timings.get('peers', 'N/A'))}\n"
+            + (
+                f"  Research agent time sum (parallel; may exceed wall-clock): {_fmt_timing_s(_timings.get('research_total', 'N/A'))}\n"
+                if debug else
+                f"  Research agent compute time: {_fmt_timing_s(_timings.get('research_total', 'N/A'))}\n"
+            )
+            + f"  Financials: {_fmt_timing_s(_timings.get('financials', 'N/A'))}\n"
+            f"  Valuation: {_fmt_timing_s(_timings.get('valuation', 'N/A'))}\n"
+            f"  Report: {_fmt_timing_s(_timings.get('thesis', 'N/A'))}\n"
             f"  Startup/orchestration: {_hidden}s\n"
-            f"  Total: {_timings.get('total', 'N/A')}s"
+            f"  Total: {_fmt_timing_s(_timings.get('total', 'N/A'))}"
         )
     _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
     _eq_bridge = src_map.get("Equity Value", {}).get("value")

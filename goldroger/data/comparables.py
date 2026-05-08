@@ -846,7 +846,7 @@ def _apply_peer_weight_caps(peers: list[PeerData], profile: str) -> list[PeerDat
     if profile == "consumer_staples_tobacco":
         single_cap = 0.45
     core_weights = [float(p.weight or 0.0) for p in vals if (p.role or "").strip().lower() == "core valuation peer"]
-    adjacent_cap_from_core = max(core_weights) if core_weights else None
+    adjacent_cap_from_core = (max(core_weights) * 0.75) if core_weights else None
 
     excess = 0.0
     for p in vals:
