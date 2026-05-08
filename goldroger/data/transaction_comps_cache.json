@@ -94,5 +94,29 @@
     "ev_ebitda": 15.0,
     "ev_revenue": 5.2,
     "source": "https://www.vistaequitypartners.com/portfolio/citrix/"
+  },
+  {
+    "target": "Swedish Match",
+    "acquirer": "Philip Morris International",
+    "sector": "Smokeless Tobacco & Nicotine Products",
+    "year": 2022,
+    "ev_m": 16000.0,
+    "revenue_m": 2100.0,
+    "ebitda_m": 1050.0,
+    "ev_ebitda": 15.2,
+    "ev_revenue": 7.6,
+    "source": "https://www.pmi.com/investor-relations/press-releases/philip-morris-international-to-acquire-swedish-match"
+  },
+  {
+    "target": "Vectura Group",
+    "acquirer": "Philip Morris International",
+    "sector": "Inhalation Technology (Tobacco-related R&D)",
+    "year": 2021,
+    "ev_m": 1200.0,
+    "revenue_m": 190.0,
+    "ebitda_m": 30.0,
+    "ev_ebitda": 40.0,
+    "ev_revenue": 6.3,
+    "source": "https://www.pmi.com/investor-relations/press-releases/philip-morris-international-completes-acquisition-of-vectura-group"
   }
 ]

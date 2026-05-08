@@ -1,6 +1,7 @@
 from goldroger.cli import (
     _fmt_timing_s,
     _infer_source_note,
+    _normalize_sector_label,
     _normalize_research_status,
     _normalize_valuation_status,
     _peer_table_headers,
@@ -108,6 +109,25 @@ def test_fmt_timing_s_hides_none_like_values():
     assert _fmt_timing_s("") == "N/A"
     assert _fmt_timing_s("nan") == "N/A"
     assert _fmt_timing_s(6.2) == "6.20s"
+
+
+def test_normalize_sector_label_tobacco():
+    assert _normalize_sector_label("Consumer Staples", "Consumer Goods - Tobacco") == "Consumer Staples / Tobacco"
+
+
+def test_pipeline_status_adds_range_hint_under_high_dispersion_low_confidence():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "PARTIAL_FALLBACK",
+            "peers": "MIXED_COMPS_OK",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "BUY / LOW CONVICTION",
+            "method_dispersion_level": "High",
+            "method_dispersion_ratio": 3.31,
+        }
+    )
+    assert "Use range over midpoint due to low confidence and high method dispersion." in block
 
 
 def test_infer_source_note_range_and_midpoint_are_bridge_explicit():

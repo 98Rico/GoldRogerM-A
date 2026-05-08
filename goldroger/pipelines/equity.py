@@ -756,7 +756,10 @@ def run_analysis(
                     try:
                         _fcf_yield = float(market_data.fcf_ttm) / float(market_data.market_cap)
                         if _fcf_yield == _fcf_yield:
-                            sources.add_once("FCF Yield on Market Cap", f"{_fcf_yield:.1%}", "derived_yfinance", "inferred")
+                            _fcf_yield_val = f"{_fcf_yield:.1%}"
+                            if _md_country and _md_country not in {"united states", "usa", "us"}:
+                                _fcf_yield_val += " [yfinance FCF basis; verify ADR/reporting currency]"
+                            sources.add_once("FCF Yield on Market Cap", _fcf_yield_val, "derived_yfinance", "inferred")
                     except Exception:
                         pass
                 if (
@@ -794,9 +797,9 @@ def run_analysis(
                                 if _div_cov > 0:
                                     sources.add_once(
                                         "Dividend Coverage",
-                                        f"{_div_cov:.2f}x [derived; check cash dividend basis]",
+                                        f"{_div_cov:.2f}x [low-confidence derived metric; verify payout basis]",
                                         "derived_yfinance",
-                                        "inferred",
+                                        "inferred; payout basis may differ",
                                     )
                                 else:
                                     sources.add_once(
@@ -1472,18 +1475,14 @@ def run_analysis(
                             f"  [dim]Pure peer weight: {float(peer_multiples.pure_peer_weight_share or 0.0):.1%} | "
                             f"Adjacent peer weight: {float(peer_multiples.adjacent_peer_weight_share or 0.0):.1%}[/dim]"
                         )
-                        if _is_mega_tech and float(peer_multiples.pure_peer_weight_share or 0.0) <= 0.001:
-                            console.print(
-                                "  [yellow]AAPL-like peer set has no high-purity public comps; "
-                                "trading comps are reference multiples, not direct comparable valuation.[/yellow]"
-                            )
                         _consumer_cnt = _bucket_counts.get("consumer_hardware_ecosystem", 0)
-                        if _is_mega_tech and _consumer_cnt < 1:
+                        if _is_mega_tech and (
+                            _consumer_cnt < 1 or float(peer_multiples.pure_peer_weight_share or 0.0) <= 0.001
+                        ):
                             _missing_consumer_ecosystem_bucket = True
                             console.print(
                                 "  [yellow]Apple-like mega-cap consumer-hardware peers are limited; "
-                                "peer set is an adjacent reference set (platform/infrastructure), "
-                                "not a pure comparable set.[/yellow]"
+                                "trading comps are adjacent reference multiples, not direct comparable valuation.[/yellow]"
                             )
                             sources.add_once(
                                 "Peer Bucket Coverage",
@@ -1648,12 +1647,22 @@ def run_analysis(
                 all_comps = add_comps(new_comps)
                 _tx_medians = sector_medians(all_comps, fund.sector or "")
                 _tx_source_verified = bool((_tx_medians.get("n_deals") or 0) >= 3)
-                console.print(
-                    f"  [cyan]Transaction comps:[/cyan] {len(new_comps)} new deals cached "
-                    f"({_tx_medians.get('n_deals', 0)} total in sector) "
-                    + (f"EV/EBITDA median {_tx_medians['ev_ebitda_median']:.1f}x"
-                       if _tx_medians.get("ev_ebitda_median") else "")
+                _retained = int(_tx_medians.get("n_deals") or 0)
+                _median_txt = (
+                    f"EV/EBITDA median {_tx_medians['ev_ebitda_median']:.1f}x"
+                    if _tx_medians.get("ev_ebitda_median")
+                    else ""
                 )
+                console.print(
+                    f"  [cyan]Transaction comps:[/cyan] {len(new_comps)} new deals found; "
+                    f"{_retained} retained after sector filter"
+                    + (f"; {_median_txt}" if _median_txt else "")
+                )
+                if not _tx_source_verified and _retained > 0:
+                    console.print(
+                        "  [dim]Transaction comps used as reference only; "
+                        "not included in blended valuation.[/dim]"
+                    )
             else:
                 # Use cached comps for the sector even if agent returned nothing usable
                 _tx_medians = sector_medians(load_cache(), fund.sector or "")
@@ -2420,7 +2429,8 @@ def run_analysis(
             next_steps=ic_result.next_steps,
         )
         console.print(
-            f"  IC Score: [bold]{ic_result.ic_score:.0f}/100[/bold] → {ic_result.recommendation}"
+            f"  IC Review Status: [bold]{ic_result.ic_score:.0f}/100[/bold] → {ic_result.recommendation} "
+            f"[dim](WATCH = signal requires review before reliance)[/dim]"
         )
     except Exception as e:
         console.print(f"  [yellow]IC scoring skipped: {e}[/yellow]")
@@ -2667,6 +2677,13 @@ def run_analysis(
         quality.score = max(0, quality.score - 4)
     quality.score = max(0, min(100, quality.score))
     quality.tier = _quality_tier(quality.score)
+    if (not quick_mode) and str(_research_source) == "fallback":
+        if quality.score > 79:
+            quality.score = 79
+        quality.tier = _quality_tier(quality.score)
+        if quality.tier == "A":
+            quality.tier = "B"
+        quality.warnings.append("Source-backed market context unavailable; valuation input quality capped.")
     sources.add(
         "Data Quality Score",
         f"{quality.score}/100 (Tier {quality.tier})",
@@ -2832,7 +2849,7 @@ def run_analysis(
     if valuation_status == "DEGRADED":
         _confidence_reasons.append("high DCF/comps dispersion or method disagreement")
     if _dcf_sanity_fail:
-        _confidence_reasons.append("conservative/degraded DCF sanity")
+        _confidence_reasons.append("DCF result is materially below market/comps cross-check")
     if _method_dispersion_ratio >= 2.0:
         _confidence_reasons.append(f"high method dispersion ({_method_dispersion_ratio:.1f}x)")
     if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}:
@@ -2861,6 +2878,8 @@ def run_analysis(
         )
     )
     _confidence_level = "Low" if _confidence_is_low else ("Medium" if _confidence_is_medium else "High")
+    if (not quick_mode) and str(_research_source) == "fallback" and _confidence_level == "High":
+        _confidence_level = "Medium"
     if market_status == "SKIPPED_QUICK_MODE":
         _research_status_enum = "RESEARCH_SKIPPED_QUICK_MODE"
     elif market_status in {"FAILED", "TIMEOUT"} and thesis_status in {"FAILED", "TIMEOUT"}:

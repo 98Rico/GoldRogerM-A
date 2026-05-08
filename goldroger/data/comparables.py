@@ -1383,6 +1383,8 @@ def build_peer_multiples(
             _outlier_capped = True
 
         _role = _peer_role(profile, _bucket, ev_ebitda)
+        if profile in {"premium_device_platform", "consumer_hardware_ecosystem", "software_services_ecosystem"} and ticker.upper() == "PLTR":
+            _role = "qualitative peer only"
         _stage = _relaxation_stage(profile, _bucket)
         _valuation_scale_ok = not _below_mega_valuation_floor
         if _below_mega_valuation_floor:
@@ -1410,6 +1412,8 @@ def build_peer_multiples(
                 include_reason = "adjacent: business-model/size fit"
         elif _role == "qualitative peer only":
             include_reason = "qualitative only: EV/EBITDA unavailable"
+            if profile in {"premium_device_platform", "consumer_hardware_ecosystem", "software_services_ecosystem"} and ticker.upper() == "PLTR":
+                include_reason = "qualitative only: AI/software optionality context"
         if _below_mega_valuation_floor:
             include_reason = (
                 f"qualitative only: below mega-cap valuation floor "
@@ -1417,7 +1421,9 @@ def build_peer_multiples(
             )
         if _outlier_capped:
             include_reason += " (outlier EV/EBITDA capped)"
-        _data_quality = 1.0 if ev_ebitda is not None else 0.0
+        _data_quality = (1.0 if ev_ebitda is not None else 0.0)
+        if _role == "qualitative peer only":
+            _data_quality = 0.0
         _weight_raw = _business_sim * _scale_sim * _data_quality * _b_weight
         if not _valuation_scale_ok:
             _weight_raw = 0.0

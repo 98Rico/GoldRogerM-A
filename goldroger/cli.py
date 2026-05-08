@@ -538,6 +538,18 @@ def _fmt_timing_s(v) -> str:
         return s
 
 
+def _normalize_sector_label(sector: str, industry: str | None = None) -> str:
+    s = (sector or "").strip()
+    i = (industry or "").strip()
+    if s.lower() == "consumer staples":
+        s = "Consumer Staples"
+    if i.lower() in {"consumer goods - tobacco", "tobacco products", "tobacco"}:
+        i = "Tobacco"
+    if i and i.lower() not in {"none", "n/a", "unknown"}:
+        return f"{s} / {i}" if s else i
+    return s or "Unknown"
+
+
 def _peer_table_headers(debug: bool = False) -> list[str]:
     if debug:
         return [
@@ -629,6 +641,8 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         except Exception:
             _disp_txt = _disp_level
         block += f"\n  Method dispersion: {_disp_txt}"
+        if str(pipeline_status.get("confidence", "")).lower() == "low" and str(_disp_level).lower() == "high":
+            block += "\n  Use range over midpoint due to low confidence and high method dispersion."
     _pure_w = pipeline_status.get("pure_peer_weight")
     _adj_w = pipeline_status.get("adjacent_peer_weight")
     if _pure_w is not None and _adj_w is not None:
@@ -756,9 +770,7 @@ def print_result(result, debug: bool = False):
         _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
     _headline_tail = "" if _is_low_conf else f" | Upside: {_value_with_source('Upside', v.upside_downside)}"
     _industry = (src_map.get("Industry", {}) or {}).get("value") if src_map else None
-    _sector_label = f.sector or "Unknown"
-    if _industry and str(_industry).strip().lower() not in {"none", "n/a", "unknown"}:
-        _sector_label = f"{_sector_label} / {_industry}"
+    _sector_label = _normalize_sector_label(f.sector or "Unknown", _industry)
     _header_parts = [f"[bold]{f.company_name}[/]", _sector_label]
     _hq = str(f.headquarters or "").strip()
     if _hq and _hq.lower() not in {"none", "n/a", "unknown"}:
