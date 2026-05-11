@@ -510,6 +510,12 @@ class ValuationService:
             )
         if market_data and market_data.market_cap and market_data.market_cap > _mega_cap_usd_m:
             peer_quality = str(assumptions.get("peer_quality") or "normal").lower()
+            pure_peer_share_raw = assumptions.get("pure_peer_weight_share")
+            pure_peer_share = (
+                float(pure_peer_share_raw)
+                if pure_peer_share_raw is not None
+                else None
+            )
             eff_threshold = 3.0 if quick_mode else 5.0
             weak_effective_peers = bool(effective_peer_count > 0 and effective_peer_count < eff_threshold)
             low_conf_peer_set = bool(
@@ -585,6 +591,22 @@ class ValuationService:
                 }
                 notes.append(
                     f"High pre-blend DCF/comps dispersion ({_pre_disp:.1f}x): capped comps weight {_old:.0%}→35%."
+                )
+            if (
+                pure_peer_share is not None
+                and pure_peer_share <= 0.01
+                and weights.get("comps", 0.0) > 0.25
+            ):
+                _old = float(weights.get("comps", 0.0))
+                _shift = _old - 0.25
+                weights = {
+                    "dcf": min(1.0, float(weights.get("dcf", 0.0)) + _shift),
+                    "comps": 0.25,
+                    "transactions": float(weights.get("transactions", 0.0)),
+                }
+                notes.append(
+                    "Adjacent-only peer set guardrail: pure-peer weight is ~0%, "
+                    f"so comps weight capped {_old:.0%}→25%."
                 )
         if dcf_conservative and weights.get("comps", 0.0) > 0:
             # Reduce DCF influence when DCF looks structurally conservative vs peer economics.

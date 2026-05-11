@@ -201,6 +201,48 @@ def test_cisco_like_name_classifies_as_networking_not_semiconductors():
     assert bucket == "networking_infrastructure"
 
 
+def test_semiconductor_equipment_keywords_classify_correctly():
+    assert _classify_peer_bucket(
+        sector="Technology",
+        industry="Semiconductor Equipment & Materials",
+        name="Applied Materials",
+    ) == "semiconductor_equipment"
+    assert _classify_peer_bucket(
+        sector="Technology",
+        industry="Semiconductor Equipment",
+        name="Lam Research",
+    ) == "semiconductor_equipment"
+
+
+def test_materials_profile_uses_aluminum_bucket_for_alcoa_like_names():
+    bucket = _classify_peer_bucket(
+        sector="Basic Materials",
+        industry="Aluminum",
+        name="Alcoa Corporation",
+    )
+    assert bucket == "aluminum_metals"
+
+
+def test_low_ev_ebitda_peer_is_filtered_by_sanity_floor():
+    peers = {
+        "PM": _md("PM", "Consumer Defensive", ev_ebitda=11.0, market_cap=120_000.0, industry="Tobacco"),
+        "MO": _md("MO", "Consumer Defensive", ev_ebitda=9.0, market_cap=90_000.0, industry="Tobacco"),
+        "JAPAY": _md("JAPAY", "Consumer Defensive", ev_ebitda=1.1, market_cap=80_000.0, industry="Tobacco"),
+    }
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=lambda t: peers.get(t)):
+        result = build_peer_multiples(
+            ["PM", "MO", "JAPAY"],
+            target_sector="Consumer Staples",
+            target_industry="Tobacco",
+            target_market_cap=130_000.0,
+            min_valuation_peers=2,
+        )
+    jp = [p for p in result.peers if p.ticker == "JAPAY"]
+    if jp:
+        assert jp[0].role == "qualitative peer only"
+        assert (jp[0].weight or 0.0) == 0.0
+
+
 def test_mega_cap_floor_forces_tiny_peer_to_qualitative_only():
     peers = [
         _md("MEGA1", "Technology", ev_ebitda=24.0, market_cap=3_000_000.0, industry="Software - Infrastructure"),

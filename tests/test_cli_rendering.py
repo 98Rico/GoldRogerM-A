@@ -1,4 +1,5 @@
 from goldroger.cli import (
+    _format_metric_value,
     _fmt_timing_s,
     _infer_source_note,
     _normalize_sector_label,
@@ -106,6 +107,7 @@ def test_pipeline_status_skipped_quick_mode_uses_skipped_research_source():
 def test_fmt_timing_s_hides_none_like_values():
     assert _fmt_timing_s(None) == "N/A"
     assert _fmt_timing_s("None") == "N/A"
+    assert _fmt_timing_s("Nones") == "N/A"
     assert _fmt_timing_s("") == "N/A"
     assert _fmt_timing_s("nan") == "N/A"
     assert _fmt_timing_s(6.2) == "6.20s"
@@ -144,8 +146,10 @@ def test_pipeline_status_renders_normalization_audit_and_suppression():
             "quote_currency": "USD",
             "financial_statement_currency": "NOK",
             "market_cap_currency": "USD",
-            "share_count_basis": "adr_equivalent",
-            "adr_detected": True,
+            "listing_type": "depositary_receipt_likely_unconfirmed",
+            "share_count_basis": "unknown_depositary_ratio",
+            "adr_detected": False,
+            "depository_receipt_detected": True,
             "adr_ratio": None,
             "sanity_breaker_triggered": True,
         }
@@ -153,7 +157,14 @@ def test_pipeline_status_renders_normalization_audit_and_suppression():
     assert "Data normalization: FAILED" in block
     assert "Quote/market cap currency: USD/USD" in block
     assert "Financial statement currency: NOK" in block
+    assert "Listing type: depositary_receipt_likely_unconfirmed" in block
+    assert "Depositary receipt detected: yes" in block
     assert "Recommendation suppressed by sanity breaker: data check required." in block
+
+
+def test_currency_prefixed_revenue_and_fcf_formatting():
+    assert _format_metric_value("Revenue", "NOK 201266M") == "NOK 201.3B"
+    assert _format_metric_value("Free Cash Flow", "GBP 3000M [check currency/ADR basis]") == "GBP 3.0B [check currency/ADR basis]"
 
 
 def test_infer_source_note_range_and_midpoint_are_bridge_explicit():

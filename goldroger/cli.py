@@ -470,12 +470,18 @@ def _to_float(s: str) -> Optional[float]:
         return None
 
 
-def _fmt_money_m(v_m: float) -> str:
+def _fmt_money_m(v_m: float, prefix: str = "$") -> str:
     if abs(v_m) >= 1_000_000:
-        return f"${v_m / 1_000_000:.2f}T"
-    if abs(v_m) >= 1_000:
-        return f"${v_m / 1_000:.1f}B"
-    return f"${v_m:,.0f}M"
+        body = f"{v_m / 1_000_000:.2f}T"
+    elif abs(v_m) >= 1_000:
+        body = f"{v_m / 1_000:.1f}B"
+    else:
+        body = f"{v_m:,.0f}M"
+    if prefix == "$":
+        return f"${body}"
+    if prefix:
+        return f"{prefix} {body}"
+    return body
 
 
 def _fmt_percentish(raw: str, signed: bool = False) -> str:
@@ -500,6 +506,16 @@ def _format_metric_value(metric: str, value: str) -> str:
         return "N/A"
     if metric in {"Revenue", "Free Cash Flow"}:
         base, q = _split_qualifier(raw)
+        _ccy = None
+        _ccy_rest = base
+        _m_ccy = re.match(r"^([A-Z]{3})\s+(.+)$", base)
+        if _m_ccy:
+            _ccy = _m_ccy.group(1)
+            _ccy_rest = _m_ccy.group(2).strip()
+        if _ccy:
+            _n_ccy = _to_float(_ccy_rest)
+            if _n_ccy is not None:
+                return f"{_fmt_money_m(_n_ccy, prefix=_ccy)}{q}"
         n = _to_float(base)
         if n is not None:
             return f"{_fmt_money_m(n)}{q}"
@@ -533,7 +549,7 @@ def _fmt_timing_s(v) -> str:
         return f"{n:.2f}s"
     except Exception:
         s = str(v).strip()
-        if not s or s.lower() in {"none", "n/a", "nan"}:
+        if not s or s.lower() in {"none", "nones", "n/a", "nan"}:
             return "N/A"
         return s
 
@@ -663,17 +679,20 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _q_ccy = str(pipeline_status.get("quote_currency", "") or "unknown")
         _f_ccy = str(pipeline_status.get("financial_statement_currency", "") or "unknown")
         _m_ccy = str(pipeline_status.get("market_cap_currency", "") or "unknown")
+        _listing_type = str(pipeline_status.get("listing_type", "") or "unknown")
         _share_basis = str(pipeline_status.get("share_count_basis", "") or "unknown")
         _adr = bool(pipeline_status.get("adr_detected", False))
+        _dr = bool(pipeline_status.get("depository_receipt_detected", False))
         _adr_ratio = pipeline_status.get("adr_ratio")
         _norm_reason = str(pipeline_status.get("normalization_reason", "") or "").strip()
         block += (
             f"\n  Data normalization: {_norm_status}"
             f"\n    Quote/market cap currency: {_q_ccy}/{_m_ccy}"
             f"\n    Financial statement currency: {_f_ccy}"
+            f"\n    Listing type: {_listing_type}"
             f"\n    Share basis: {_share_basis}"
-            f"\n    ADR detected: {'yes' if _adr else 'no'}"
-            + (f" (ratio: {_adr_ratio})" if _adr and _adr_ratio else "")
+            f"\n    Depositary receipt detected: {'yes' if _dr else 'no'}"
+            + (f" (ratio: {_adr_ratio})" if (_adr or _dr) and _adr_ratio else "")
         )
         if _norm_reason:
             block += f"\n    Normalization note: {_norm_reason}"
@@ -856,10 +875,12 @@ def print_result(result, debug: bool = False):
     _r_lbl = _dq.get("research_enrichment_quality_label")
     _peer_q = _pipeline_status.get("peer_quality_score") if _pipeline_status else None
     _fin_q = _pipeline_status.get("financial_data_quality_score") if _pipeline_status else None
+    _norm_q = _pipeline_status.get("normalization_status") if _pipeline_status else None
     if (_core_q is not None) or (_r_q is not None):
         console.print(
             "[bold]Quality Split:[/bold]\n"
-            f"  Financial data quality: {(_fin_q if _fin_q is not None else _core_q if _core_q is not None else 'N/A')}/100\n"
+            f"  Raw financial data availability: {(_fin_q if _fin_q is not None else _core_q if _core_q is not None else 'N/A')}/100\n"
+            f"  Normalization quality: {_norm_q or 'N/A'}\n"
             f"  Peer quality: {(_peer_q if _peer_q is not None else 'N/A')}/100\n"
             f"  Research enrichment quality: {(_r_q if _r_q is not None else _r_lbl or 'N/A')}\n"
             f"  Valuation confidence: {_pipeline_status.get('confidence', 'N/A') if _pipeline_status else 'N/A'}"
@@ -963,13 +984,13 @@ def print_result(result, debug: bool = False):
     kpi_table.add_column("Metric")
     kpi_table.add_column("Value")
     for row in [
-        ("Revenue", fin.revenue_current),
+        ("Revenue", _source_value("Revenue") or _source_value("Revenue TTM") or fin.revenue_current),
         ("Revenue Growth", fin.revenue_growth),
         ("Modeled Revenue Growth", _source_value("Modeled Revenue Growth")),
         ("Gross Margin", fin.gross_margin),
         ("EBITDA Margin", fin.ebitda_margin),
         ("Net Margin", fin.net_margin),
-        ("Free Cash Flow", fin.free_cash_flow),
+        ("Free Cash Flow", _source_value("Free Cash Flow") or fin.free_cash_flow),
         ("TAM", m.market_size),
         ("Market Growth", m.market_growth),
         ("Terminal Growth", _source_value("Terminal Growth")),

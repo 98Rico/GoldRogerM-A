@@ -302,6 +302,7 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
                 "industry": info.get("industry"),
                 "country": info.get("country"),
                 "exchange": info.get("exchange") or info.get("fullExchangeName"),
+                "business_summary": info.get("longBusinessSummary"),
                 "quote_currency": info.get("currency"),
                 "financial_currency": info.get("financialCurrency"),
                 "market_cap_currency": info.get("currency"),

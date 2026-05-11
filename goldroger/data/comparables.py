@@ -376,6 +376,15 @@ def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
         return "retail_adjacent"
     if any(k in s for k in ("consumer defensive", "consumer staples", "packaged foods", "snacks")):
         return "consumer_staples_adjacent"
+    # Materials / mining split buckets (avoid overly generic "materials_general").
+    if any(k in s for k in ("aluminum", "aluminium", "alumina", "bauxite", "smelter", "primary aluminum")):
+        return "aluminum_metals"
+    if any(k in s for k in ("metals & mining", "metal mining", "mining", "steel", "iron ore", "copper", "nickel", "zinc", "lithium", "gold", "silver")):
+        return "metals_mining"
+    if any(k in s for k in ("construction materials", "building materials", "cement", "aggregates", "coatings", "paint")):
+        return "construction_materials_adjacent"
+    if any(k in s for k in ("industrial gases", "specialty chemical", "specialty chemicals", "agricultural chemicals", "fertilizer", "chemicals")):
+        return "chemicals_adjacent"
     # Healthcare / financial / industrial coverage buckets
     if any(k in s for k in ("pharma", "pharmaceutical", "biotech", "drug")):
         return "healthcare_pharma"
@@ -410,6 +419,8 @@ def _normalize_bucket_for_profile(profile: str, bucket: str) -> str:
         return "consumer_staples_adjacent"
     if profile in {"premium_device_platform", "consumer_hardware_ecosystem"} and b == "other_adjacent_tech":
         return "software_services_platform"
+    if profile == "materials_chemicals_mining" and b == "materials_general":
+        return "metals_mining"
     return b
 
 
@@ -487,6 +498,14 @@ def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
             "retail_adjacent": 0.60,
             "tobacco_nicotine": 0.55,
         }.get(bucket, 0.35)
+    if profile == "materials_chemicals_mining":
+        return {
+            "aluminum_metals": 1.00,
+            "metals_mining": 0.90,
+            "construction_materials_adjacent": 0.60,
+            "chemicals_adjacent": 0.45,
+            "materials_general": 0.40,
+        }.get(bucket, 0.35)
     return {
         "software_services_platform": 0.88,
         "consumer_hardware_ecosystem": 0.82,
@@ -499,6 +518,11 @@ def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
         "beverages_adjacent": 0.58,
         "household_products_adjacent": 0.58,
         "retail_adjacent": 0.50,
+        "aluminum_metals": 0.60,
+        "metals_mining": 0.58,
+        "construction_materials_adjacent": 0.45,
+        "chemicals_adjacent": 0.42,
+        "materials_general": 0.40,
     }.get(bucket, 0.60)
 
 
@@ -555,6 +579,14 @@ def _bucket_similarity_factor(profile: str, bucket: str) -> float:
             "retail_adjacent": 0.62,
             "tobacco_nicotine": 0.58,
         }.get(bucket, 0.30)
+    if profile == "materials_chemicals_mining":
+        return {
+            "aluminum_metals": 1.00,
+            "metals_mining": 0.88,
+            "construction_materials_adjacent": 0.55,
+            "chemicals_adjacent": 0.45,
+            "materials_general": 0.40,
+        }.get(bucket, 0.35)
     return {
         "software_services_platform": 0.90,
         "consumer_hardware_ecosystem": 0.80,
@@ -567,6 +599,11 @@ def _bucket_similarity_factor(profile: str, bucket: str) -> float:
         "beverages_adjacent": 0.55,
         "household_products_adjacent": 0.55,
         "retail_adjacent": 0.45,
+        "aluminum_metals": 0.58,
+        "metals_mining": 0.56,
+        "construction_materials_adjacent": 0.45,
+        "chemicals_adjacent": 0.42,
+        "materials_general": 0.40,
     }.get(bucket, 0.58)
 
 
@@ -623,6 +660,14 @@ def _bucket_budgets(profile: str) -> dict[str, float]:
             "retail_adjacent": 0.08,
             "tobacco_nicotine": 0.02,
         }
+    if profile == "materials_chemicals_mining":
+        return {
+            "aluminum_metals": 0.45,
+            "metals_mining": 0.35,
+            "construction_materials_adjacent": 0.10,
+            "chemicals_adjacent": 0.05,
+            "materials_general": 0.05,
+        }
     return {
         "software_services_platform": 0.35,
         "consumer_hardware_ecosystem": 0.25,
@@ -663,6 +708,11 @@ def _normalize_bucket_weights(peers: list[PeerData], profile: str) -> list[PeerD
             "beverages_adjacent",
             "household_products_adjacent",
             "retail_adjacent",
+            "aluminum_metals",
+            "metals_mining",
+            "construction_materials_adjacent",
+            "chemicals_adjacent",
+            "materials_general",
         ) if b in active]
         if not pref:
             pref = sorted(active)
@@ -1081,6 +1131,7 @@ def find_peers_deterministic_quick(
     profile_reserve: dict[str, list[str]] = {
         "premium_device_platform": ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU"],
         "consumer_staples_tobacco": ["PM", "MO", "BTI", "IMBBY", "JAPAY"],
+        "materials_chemicals_mining": ["AA", "CENX", "RIO", "BHP", "FCX", "NUE"],
     }
 
     # Deduplicate, remove self ticker, and cap.
@@ -1150,6 +1201,12 @@ def _peer_role(profile: str, bucket: str, ev_ebitda: float | None) -> str:
         if bucket in {"retail_adjacent", "tobacco_nicotine"}:
             return "adjacent valuation peer"
         return "qualitative peer only"
+    if profile == "materials_chemicals_mining":
+        if bucket in {"aluminum_metals", "metals_mining"}:
+            return "core valuation peer"
+        if bucket in {"construction_materials_adjacent", "chemicals_adjacent", "materials_general"}:
+            return "adjacent valuation peer"
+        return "qualitative peer only"
     if bucket in {"software_services_platform", "consumer_hardware_ecosystem"}:
         return "core valuation peer"
     if bucket in {"tobacco_nicotine", "consumer_staples_adjacent", "beverages_adjacent", "household_products_adjacent"}:
@@ -1217,6 +1274,16 @@ def _relaxation_stage(profile: str, bucket: str) -> int:
         if bucket == "tobacco_nicotine":
             return 3
         return 4
+    if profile == "materials_chemicals_mining":
+        if bucket == "aluminum_metals":
+            return 1
+        if bucket == "metals_mining":
+            return 2
+        if bucket == "construction_materials_adjacent":
+            return 3
+        if bucket in {"chemicals_adjacent", "materials_general"}:
+            return 4
+        return 5
     if bucket in {"software_services_platform", "consumer_hardware_ecosystem"}:
         return 2
     if bucket in {"consumer_staples_adjacent", "beverages_adjacent", "household_products_adjacent", "tobacco_nicotine"}:
@@ -1308,7 +1375,12 @@ def build_peer_multiples(
         pe = md.pe_ratio or md.forward_pe
 
         sanity_fail = False
-        if ev_ebitda is not None and (ev_ebitda < 1 or ev_ebitda > 150):
+        _ev_ebitda_floor = 3.0
+        _ev_ebitda_ceiling = 40.0
+        if profile in {"materials_chemicals_mining", "energy_oil_gas"}:
+            # Commodity-heavy sectors can print lower multiples in cyclic troughs.
+            _ev_ebitda_floor = 2.0
+        if ev_ebitda is not None and (ev_ebitda < _ev_ebitda_floor or ev_ebitda > _ev_ebitda_ceiling):
             ev_ebitda = None
             sanity_fail = True
         if ev_revenue is not None and (ev_revenue < 0.1 or ev_revenue > 50):

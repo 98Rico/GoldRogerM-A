@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re as _re
 import time
+import copy as _copy
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import date
@@ -143,6 +144,8 @@ def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
         "market_cap_currency": "unknown",
         "valuation_currency": "USD",
         "adr_detected": False,
+        "depository_receipt_detected": False,
+        "listing_type": "unknown",
         "adr_ratio": None,
         "share_count_basis": "unknown",
     }
@@ -157,10 +160,30 @@ def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
     mcap_ccy = str(meta.get("market_cap_currency") or "").strip().upper() or quote_ccy
     country = str(meta.get("country") or "").strip().lower()
     ticker = str(market_data.ticker or "").strip().upper()
+    quote_type = str(meta.get("quote_type") or "").strip().lower()
+    underlying_symbol = str(meta.get("underlying_symbol") or "").strip()
     adr_ratio = _to_float_or_none(meta.get("adr_ratio"))
-    is_adr = bool(meta.get("is_adr_hint"))
-    if not is_adr and ticker.endswith("Y") and quote_ccy == "USD" and fin_ccy and fin_ccy != "USD" and country not in {"united states", "usa", "us"}:
-        is_adr = True
+    hinted_adr = bool(meta.get("is_adr_hint"))
+
+    confirmed_depository = any(tok in quote_type for tok in ("adr", "gdr", "depository", "depositary receipt"))
+    likely_depository = bool(
+        ticker.endswith("Y")
+        and quote_ccy == "USD"
+        and fin_ccy
+        and fin_ccy != "USD"
+    ) or bool(
+        hinted_adr
+        and ticker.endswith("Y")
+        and underlying_symbol
+    )
+    likely_foreign_ordinary_otc = (
+        ticker.endswith("F")
+        and quote_ccy == "USD"
+        and fin_ccy
+        and fin_ccy != "USD"
+        and country not in {"united states", "usa", "us"}
+    )
+    is_depository = bool(confirmed_depository or likely_depository)
 
     reasons: list[str] = []
     status = "OK"
@@ -173,11 +196,53 @@ def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
         status = "UNKNOWN"
         reasons.append("missing quote/financial statement currency metadata")
 
-    if is_adr and (adr_ratio is None or adr_ratio <= 0):
-        status = "FAILED"
-        reasons.append("ADR detected but ADR ratio unavailable")
+    _share_consistency_ok = None
+    _share_consistency_delta = None
+    try:
+        if (
+            market_data.current_price is not None
+            and market_data.shares_outstanding is not None
+            and market_data.market_cap is not None
+            and market_data.market_cap > 0
+        ):
+            _implied_mcap = float(market_data.current_price) * float(market_data.shares_outstanding)
+            _share_consistency_delta = abs(_implied_mcap - float(market_data.market_cap)) / float(market_data.market_cap)
+            _share_consistency_ok = bool(_share_consistency_delta <= 0.25)
+    except Exception:
+        _share_consistency_ok = None
 
-    share_basis = "adr_equivalent" if is_adr else "ordinary"
+    if is_depository and (adr_ratio is None or adr_ratio <= 0):
+        if _share_consistency_ok is True:
+            if status != "FAILED":
+                status = "OK_HEURISTIC"
+            reasons.append(
+                "depositary ratio unavailable; using quote-listing share basis heuristic "
+                f"(market-cap/share-price consistency delta={_share_consistency_delta:.1%})"
+            )
+        else:
+            status = "FAILED"
+            reasons.append("foreign listing/share-basis normalization unresolved; ADR/depositary ratio unavailable if applicable")
+
+    if confirmed_depository:
+        listing_type = "depositary_receipt_confirmed"
+    elif likely_depository:
+        listing_type = "depositary_receipt_likely_unconfirmed"
+    elif likely_foreign_ordinary_otc:
+        listing_type = "foreign_ordinary_otc_likely"
+    elif quote_ccy and fin_ccy and quote_ccy == fin_ccy:
+        listing_type = "ordinary_listing"
+    else:
+        listing_type = "foreign_listing_unknown_basis"
+
+    if is_depository and adr_ratio and adr_ratio > 0:
+        share_basis = "adr_equivalent"
+    elif is_depository:
+        share_basis = "unknown_depositary_ratio"
+    elif likely_foreign_ordinary_otc:
+        share_basis = "foreign_ordinary_unresolved"
+    else:
+        share_basis = "ordinary"
+
     if status == "OK" and not reasons:
         reasons.append("currency/share basis appears internally consistent")
 
@@ -188,10 +253,110 @@ def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
         "financial_statement_currency": fin_ccy or "unknown",
         "market_cap_currency": mcap_ccy or "unknown",
         "valuation_currency": quote_ccy or "USD",
-        "adr_detected": is_adr,
+        "adr_detected": bool(confirmed_depository),
+        "depository_receipt_detected": is_depository,
+        "listing_type": listing_type,
         "adr_ratio": adr_ratio,
         "share_count_basis": share_basis,
     }
+
+
+def _fx_usd_per_unit() -> dict[str, float]:
+    """Deterministic FX table: USD value per 1 unit of local currency."""
+    return {
+        "USD": 1.0,
+        "EUR": 1.08,
+        "GBP": 1.26,
+        "CHF": 1.11,
+        "CAD": 0.74,
+        "AUD": 0.66,
+        "JPY": 0.0067,
+        "NOK": 0.095,
+        "SEK": 0.093,
+        "DKK": 0.145,
+    }
+
+
+def _fx_rate_between(from_ccy: str, to_ccy: str) -> tuple[float | None, str]:
+    """Return multiplicative rate converting FROM currency units to TO currency units."""
+    f = str(from_ccy or "").upper()
+    t = str(to_ccy or "").upper()
+    if not f or not t:
+        return None, "missing_currency_code"
+    if f == t:
+        return 1.0, "identity"
+    fx = _fx_usd_per_unit()
+    _f_usd = fx.get(f)
+    _t_usd = fx.get(t)
+    if _f_usd is None or _t_usd is None or _t_usd == 0:
+        return None, "static_fx_unavailable"
+    # (USD per FROM) / (USD per TO) => TO per FROM
+    return float(_f_usd / _t_usd), "static_fx_table"
+
+
+def _apply_currency_normalization(market_data: MarketData | None, audit: dict) -> tuple[MarketData | None, dict, bool]:
+    """Convert statement-currency fields to quote currency when FX is available."""
+    if not market_data:
+        return market_data, audit, False
+    status = str(audit.get("status") or "").upper()
+    reason = str(audit.get("reason") or "")
+    if "share-basis normalization unresolved" in reason.lower():
+        return market_data, audit, False
+    if "currency mismatch" not in reason.lower():
+        return market_data, audit, False
+    from_ccy = str(audit.get("financial_statement_currency") or "")
+    to_ccy = str(audit.get("quote_currency") or "")
+    fx_rate, fx_source = _fx_rate_between(from_ccy, to_ccy)
+    if fx_rate is None or fx_rate <= 0:
+        out = dict(audit)
+        out["status"] = "FAILED"
+        out["reason"] = (reason + "; FX normalization unavailable for financial->quote currency conversion").strip("; ")
+        return market_data, out, False
+
+    # Convert only statement-currency monetary fields (all in millions already).
+    _fields = (
+        "revenue_ttm",
+        "ebitda_ttm",
+        "ebit_ttm",
+        "net_income_ttm",
+        "fcf_ttm",
+        "capex_ttm",
+        "da_ttm",
+        "total_debt",
+        "cash_and_equivalents",
+        "net_debt",
+        "enterprise_value",
+        "total_equity",
+        "forward_revenue_1y",
+        "interest_expense",
+    )
+    for _k in _fields:
+        try:
+            _v = getattr(market_data, _k, None)
+            if _v is not None:
+                setattr(market_data, _k, float(_v) * float(fx_rate))
+        except Exception:
+            pass
+    try:
+        if market_data.revenue_history:
+            market_data.revenue_history = [float(x) * float(fx_rate) for x in market_data.revenue_history]
+    except Exception:
+        pass
+
+    if isinstance(market_data.additional_metadata, dict):
+        market_data.additional_metadata["financial_currency_normalized_from"] = from_ccy or "unknown"
+        market_data.additional_metadata["financial_currency_normalized_to"] = to_ccy or "unknown"
+        market_data.additional_metadata["fx_rate_used_fin_to_quote"] = fx_rate
+        market_data.additional_metadata["fx_source"] = fx_source
+
+    out = dict(audit)
+    out["status"] = "OK_FX_NORMALIZED" if status in {"FAILED", "UNKNOWN"} else status
+    out["valuation_currency"] = to_ccy or out.get("valuation_currency") or "USD"
+    out["reason"] = (
+        "currency/share basis normalized via FX conversion; "
+        f"{from_ccy}->{to_ccy} rate={fx_rate:.6f} ({fx_source})"
+    )
+    return market_data, out, True
 
 
 def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> list[str]:
@@ -562,6 +727,7 @@ def run_analysis(
 
     # ── 0. REAL DATA ──────────────────────────────────────────────────────
     market_data: MarketData | None = None
+    market_data_valuation: MarketData | None = None
     normalization_audit: dict = _build_data_normalization_audit(None)
     normalization_blocked = False
     if company_type == "private":
@@ -749,6 +915,11 @@ def run_analysis(
             market_data = fetch_market_data(ticker)
             if market_data:
                 normalization_audit = _build_data_normalization_audit(market_data)
+                market_data_valuation = _copy.deepcopy(market_data)
+                market_data_valuation, normalization_audit, _fx_applied = _apply_currency_normalization(
+                    market_data_valuation,
+                    normalization_audit,
+                )
                 normalization_blocked = str(normalization_audit.get("status", "")).upper() == "FAILED"
                 _q_ccy = str(normalization_audit.get("quote_currency") or "USD")
                 _f_ccy = str(normalization_audit.get("financial_statement_currency") or _q_ccy)
@@ -772,6 +943,11 @@ def run_analysis(
                         f"financials {normalization_audit.get('financial_statement_currency')}, "
                         f"share basis {normalization_audit.get('share_count_basis')}."
                     )
+                    if _fx_applied:
+                        console.print(
+                            "  [dim]FX normalization applied:[/dim] "
+                            f"{normalization_audit.get('reason')}"
+                        )
                 if market_data.forward_revenue_growth is not None:
                     _fg_src = (
                         "yfinance_analyst_revenue"
@@ -831,6 +1007,7 @@ def run_analysis(
                             f"financials={normalization_audit.get('financial_statement_currency')}; "
                             f"quote={normalization_audit.get('quote_currency')}; "
                             f"share_basis={normalization_audit.get('share_count_basis')}; "
+                            f"listing_type={normalization_audit.get('listing_type')}; "
                             f"adr_ratio={normalization_audit.get('adr_ratio') or 'unknown'}"
                         ),
                         "normalization_audit",
@@ -852,7 +1029,7 @@ def run_analysis(
                         try:
                             _dr = float(_div_rate)
                             if _dr >= 0:
-                                sources.add_once("Dividend Rate", f"${_dr:.2f}", "yfinance", "verified")
+                                sources.add_once("Dividend Rate", f"{_q_ccy} {_dr:.2f}", "yfinance", "verified")
                         except Exception:
                             pass
                 if market_data.fcf_ttm is not None and market_data.market_cap and market_data.market_cap > 0:
@@ -1061,6 +1238,17 @@ def run_analysis(
         fund.business_model = (
             "Not publicly disclosed in verified filings; additional primary-source diligence required."
         )
+    # Deterministic company-description fallback from verified market metadata.
+    if market_data and isinstance(market_data.additional_metadata, dict):
+        _bs = str(market_data.additional_metadata.get("business_summary") or "").strip()
+        _desc = str(fund.description or "").strip()
+        if _bs and (
+            (not _desc)
+            or ("not available" in _desc.lower())
+            or (_desc.lower() in {"n/a", "na", "unknown"})
+        ):
+            fund.description = _bs
+            sources.add_once("Company Description", "yfinance business summary", "yfinance", "verified")
     log.end_step("fundamentals", t0)
     _done("Fundamentals", t0)
 
@@ -1210,9 +1398,10 @@ def run_analysis(
         try:
             if market_data and market_data.revenue_ttm:
                 f = _fin_from_market(market_data)
+                _f_ccy = str(normalization_audit.get("financial_statement_currency") or "USD")
                 console.print(
                     f"  [green]Using {market_data.data_source} financials "
-                    f"(Rev=${market_data.revenue_ttm:.0f}M)[/green]"
+                    f"(Rev={_f_ccy} {market_data.revenue_ttm:.0f}M)[/green]"
                 )
             elif quick_mode:
                 # Quick mode avoids deep/slow LLM financial modeling paths.
@@ -2010,10 +2199,11 @@ def run_analysis(
     # Policy: do not anchor valuation inputs to LLM-sourced transaction comps.
     # Use sector benchmarks (deterministic) unless a verified deal database is integrated.
 
+    _md_val = market_data_valuation or market_data
     result = svc.run_full_valuation(
         financials=fin.model_dump(),
         assumptions=assumptions_dict,
-        market_data=market_data,
+        market_data=_md_val,
         sector=fund.sector or "",
         company_type=company_type,
     )
@@ -2211,9 +2401,9 @@ def run_analysis(
         )
     if (
         company_type == "public"
-        and market_data
-        and market_data.market_cap
-        and market_data.market_cap >= 10000
+        and _md_val
+        and _md_val.market_cap
+        and _md_val.market_cap >= 10000
         and rec.upside_pct is not None
         and rec.upside_pct >= 3.0
     ):
@@ -2222,9 +2412,9 @@ def run_analysis(
         )
     if (
         company_type == "public"
-        and market_data
-        and market_data.market_cap
-        and market_data.market_cap >= 10000
+        and _md_val
+        and _md_val.market_cap
+        and _md_val.market_cap >= 10000
         and rec.upside_pct is not None
         and rec.upside_pct <= -0.80
     ):
@@ -2233,23 +2423,23 @@ def run_analysis(
         )
     if (
         company_type == "public"
-        and market_data
-        and market_data.market_cap
-        and market_data.market_cap >= 1000
-        and market_data.ev_ebitda_market is not None
-        and market_data.ev_ebitda_market < 2.0
+        and _md_val
+        and _md_val.market_cap
+        and _md_val.market_cap >= 1000
+        and _md_val.ev_ebitda_market is not None
+        and _md_val.ev_ebitda_market < 2.0
     ):
         _hard_suppression_reasons.append(
-            f"live EV/EBITDA unusually low ({market_data.ev_ebitda_market:.1f}x) — possible currency/unit mismatch"
+            f"live EV/EBITDA unusually low ({_md_val.ev_ebitda_market:.1f}x) — possible currency/unit mismatch"
         )
     if (
         company_type == "public"
-        and market_data
-        and market_data.market_cap
-        and market_data.revenue_ttm
-        and market_data.market_cap >= 10000
-        and market_data.revenue_ttm > 0
-        and (market_data.market_cap / market_data.revenue_ttm) < 0.15
+        and _md_val
+        and _md_val.market_cap
+        and _md_val.revenue_ttm
+        and _md_val.market_cap >= 10000
+        and _md_val.revenue_ttm > 0
+        and (_md_val.market_cap / _md_val.revenue_ttm) < 0.15
     ):
         _hard_suppression_reasons.append(
             "market-cap-to-revenue ratio is extremely low; verify currency and revenue units"
@@ -2307,7 +2497,6 @@ def run_analysis(
         _rec = "NO RATING / DATA CHECK REQUIRED"
         _target_price = None
         _ev_str = "N/A"
-        valuation_failed = True
     if _low_conviction and _rec in {"BUY", "SELL", "HOLD"}:
         if _rec == "SELL":
             _rec = "HOLD / LOW CONVICTION"
@@ -2317,7 +2506,7 @@ def run_analysis(
             _rec = "HOLD / LOW CONVICTION"
     if (not valuation_failed) and _low_conviction and valuation_status == "OK":
         valuation_status = "DEGRADED"
-    if valuation_failed:
+    if valuation_failed and not _suppressed_no_rating:
         _rec = "INCONCLUSIVE"
         _target_price = None
         _ev_str = "N/A"
@@ -2431,11 +2620,13 @@ def run_analysis(
     football_field: FootballField | None = None
     ic_summary: ICScoreSummary | None = None
     try:
+        if normalization_blocked:
+            raise ValueError("valuation blocked due to failed currency/share normalization")
         revenue_series, _ = svc._build_revenue_series(
             fin.model_dump(), market_data, [], sector=fund.sector or ""
         )
         if not revenue_series or not result.has_revenue:
-            raise ValueError("No revenue — skipping football field")
+            raise ValueError("revenue unavailable for scenario generation")
         _last_ebitda = (revenue_series[-1] * _ebitda_margin) if revenue_series else 1.0
         if peer_multiples and peer_multiples.ev_ebitda_low and peer_multiples.ev_ebitda_high:
             _comps_low = peer_multiples.ev_ebitda_low
@@ -3208,8 +3399,10 @@ def run_analysis(
                 "quote_currency": str(normalization_audit.get("quote_currency") or "unknown"),
                 "financial_statement_currency": str(normalization_audit.get("financial_statement_currency") or "unknown"),
                 "market_cap_currency": str(normalization_audit.get("market_cap_currency") or "unknown"),
+                "listing_type": str(normalization_audit.get("listing_type") or "unknown"),
                 "share_count_basis": str(normalization_audit.get("share_count_basis") or "unknown"),
                 "adr_detected": bool(normalization_audit.get("adr_detected")),
+                "depository_receipt_detected": bool(normalization_audit.get("depository_receipt_detected")),
                 "adr_ratio": normalization_audit.get("adr_ratio"),
                 "sanity_breaker_triggered": bool(_hard_suppression_reasons),
                 "peer_quality_score": _peer_quality_score,

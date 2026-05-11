@@ -202,7 +202,13 @@ _PROFILES: dict[str, SectorProfile] = {
     "materials_chemicals_mining": SectorProfile(
         key="materials_chemicals_mining",
         label="Materials / Chemicals / Mining",
-        acceptable_peer_buckets=("materials_general",),
+        acceptable_peer_buckets=(
+            "aluminum_metals",
+            "metals_mining",
+            "construction_materials_adjacent",
+            "chemicals_adjacent",
+            "materials_general",
+        ),
         terminal_growth_range=(0.01, 0.02),
     ),
     "telecom_media": SectorProfile(
@@ -271,4 +277,3 @@ def detect_sector_profile(sector: str, industry: str = "") -> str:
 
 def get_sector_profile(sector: str, industry: str = "") -> SectorProfile:
     return _PROFILES.get(detect_sector_profile(sector, industry), _PROFILES["default"])
-
