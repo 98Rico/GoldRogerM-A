@@ -2663,6 +2663,8 @@ def run_analysis(
     try:
         if normalization_blocked:
             raise ValueError("valuation blocked due to failed currency/share normalization")
+        if _hard_suppression_reasons:
+            raise ValueError("sanity breaker triggered; scenario valuation suppressed")
         revenue_series, _ = svc._build_revenue_series(
             fin.model_dump(), market_data, [], sector=fund.sector or ""
         )
@@ -2730,6 +2732,15 @@ def run_analysis(
             scenarios_out.bull.blended_ev,
         ):
             raise ValueError("scenario ordering failed (blended low/base/high invariant violated)")
+        _dcf_mid_ref = float(result.dcf.enterprise_value) if result.dcf else float(scenarios_out.base.dcf_ev)
+        _comps_mid_ref = float(result.comps.mid) if result.comps else float(scenarios_out.base.comps_ev_mid)
+        _blend_mid_ref = float(blended_ev) if blended_ev is not None else float(scenarios_out.base.blended_ev)
+        if not _ordered(scenarios_out.bear.dcf_ev, _dcf_mid_ref, scenarios_out.bull.dcf_ev):
+            raise ValueError("scenario ordering failed (DCF scenario band does not contain base valuation)")
+        if not _ordered(scenarios_out.bear.comps_ev_mid, _comps_mid_ref, scenarios_out.bull.comps_ev_mid):
+            raise ValueError("scenario ordering failed (comps scenario band does not contain base valuation)")
+        if not _ordered(scenarios_out.bear.blended_ev, _blend_mid_ref, scenarios_out.bull.blended_ev):
+            raise ValueError("scenario ordering failed (blended scenario band does not contain base valuation)")
 
         def _fmt_ev(v: float) -> str:
             return f"${v/1000:.1f}B" if v >= 1000 else f"${v:.0f}M"
@@ -2861,6 +2872,11 @@ def run_analysis(
             )
     except Exception as e:
         _scenario_err = str(e)
+        if "sanity breaker triggered" in _scenario_err.lower():
+            console.print(
+                "  [yellow]Scenarios suppressed:[/yellow] valuation recommendation is INCONCLUSIVE "
+                "after sanity-breaker trigger."
+            )
         if "scenario ordering failed" in _scenario_err.lower():
             quality.warnings.append("Scenario ordering failed; football field suppressed.")
             if valuation_status == "OK":
@@ -2873,7 +2889,7 @@ def run_analysis(
             console.print(
                 "  [yellow]Scenarios skipped:[/yellow] valuation blocked due to failed currency/share normalization."
             )
-        else:
+        elif "sanity breaker triggered" not in _scenario_err.lower():
             console.print(f"  [yellow]Scenarios skipped:[/yellow] {_scenario_err}")
 
     # ── 5c. IC SCORING ────────────────────────────────────────────────────

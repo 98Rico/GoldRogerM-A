@@ -688,13 +688,20 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _fx_conf = str(pipeline_status.get("fx_confidence", "") or "n/a")
         _fx_ts = str(pipeline_status.get("fx_timestamp", "") or "n/a")
         _norm_reason = str(pipeline_status.get("normalization_reason", "") or "").strip()
+        _dr_state = "yes" if _dr else "no"
+        if _share_basis in {
+            "unknown_depositary_ratio",
+            "foreign_us_listing_unverified_share_basis",
+            "foreign_ordinary_unresolved",
+        }:
+            _dr_state = "unresolved / not confirmed"
         block += (
             f"\n  Data normalization: {_norm_status}"
             f"\n    Quote/market cap currency: {_q_ccy}/{_m_ccy}"
             f"\n    Financial statement currency: {_f_ccy}"
             f"\n    Listing type: {_listing_type}"
             f"\n    Share basis: {_share_basis}"
-            f"\n    Depositary receipt detected: {'yes' if _dr else 'no'}"
+            f"\n    Depositary receipt status: {_dr_state}"
             + (f" (ratio: {_adr_ratio})" if (_adr or _dr) and _adr_ratio else "")
             + f"\n    FX source/confidence: {_fx_source} / {_fx_conf} ({_fx_ts})"
         )
@@ -996,6 +1003,8 @@ def print_result(result, debug: bool = False):
             f"→ / Shares {_sh_bridge}{_tag_sh} = {_tp_bridge_label} {_tp_bridge_show}{_tag_tp}"
         )
     _mcap_val = src_map.get("Market Cap", {}).get("value")
+    _valuation_failed = str(_pipeline_status.get("valuation", "")).upper() == "FAILED"
+    _sanity_suppressed = bool(_pipeline_status.get("sanity_breaker_triggered"))
     if _mcap_val and _eq_bridge:
         _interp = "not available — insufficient upside/downside signal"
         _updn_txt = str(v.upside_downside or "N/A")
@@ -1009,13 +1018,22 @@ def print_result(result, debug: bool = False):
             else:
                 _interp = "fairly valued"
         except Exception:
-            if _is_inconclusive or str(_updn_txt).upper() in {"N/A", ""}:
+            if _is_inconclusive or _valuation_failed or _sanity_suppressed or str(_updn_txt).upper() in {"N/A", ""}:
                 _interp = "not available — valuation suppressed by sanity breaker"
-        console.print(
-            f"[dim]Market cap: {_mcap_val} | Model equity value: {_eq_bridge} | "
-            f"Model-implied upside/downside: {_updn_txt or 'N/A'} | "
-            f"Interpretation: {_interp}[/dim]"
-        )
+        if _valuation_failed or _sanity_suppressed:
+            _interp = "not available — valuation suppressed by sanity breaker"
+            console.print(
+                f"[dim]Diagnostic market-cap check: Market cap {_mcap_val} | "
+                f"Diagnostic model equity value {_eq_bridge} | "
+                f"Model-implied upside/downside: {_updn_txt or 'N/A'} | "
+                f"Interpretation: {_interp}[/dim]"
+            )
+        else:
+            console.print(
+                f"[dim]Market cap: {_mcap_val} | Model equity value: {_eq_bridge} | "
+                f"Model-implied upside/downside: {_updn_txt or 'N/A'} | "
+                f"Interpretation: {_interp}[/dim]"
+            )
 
     # KPIs
     kpi_table = Table(title="Key Financials", show_header=True, header_style="bold magenta")

@@ -161,7 +161,7 @@ def test_pipeline_status_renders_normalization_audit_and_suppression():
     assert "Quote/market cap currency: USD/USD" in block
     assert "Financial statement currency: NOK" in block
     assert "Listing type: depositary_receipt_likely_unconfirmed" in block
-    assert "Depositary receipt detected: yes" in block
+    assert "Depositary receipt status: unresolved / not confirmed" in block
     assert "FX source/confidence: static_fx_table / low (static_table)" in block
     assert "Recommendation suppressed by sanity breaker: data check required." in block
 
