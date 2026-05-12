@@ -183,6 +183,13 @@ def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
         and fin_ccy != "USD"
         and country not in {"united states", "usa", "us"}
     )
+    likely_foreign_us_quote = (
+        quote_ccy == "USD"
+        and fin_ccy
+        and fin_ccy != "USD"
+        and country not in {"united states", "usa", "us"}
+        and not likely_foreign_ordinary_otc
+    )
     is_depository = bool(confirmed_depository or likely_depository)
 
     reasons: list[str] = []
@@ -227,6 +234,8 @@ def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
         listing_type = "depositary_receipt_confirmed"
     elif likely_depository:
         listing_type = "depositary_receipt_likely_unconfirmed"
+    elif likely_foreign_us_quote:
+        listing_type = "foreign_issuer_us_listing_unresolved"
     elif likely_foreign_ordinary_otc:
         listing_type = "foreign_ordinary_otc_likely"
     elif quote_ccy and fin_ccy and quote_ccy == fin_ccy:
@@ -238,6 +247,8 @@ def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
         share_basis = "adr_equivalent"
     elif is_depository:
         share_basis = "unknown_depositary_ratio"
+    elif likely_foreign_us_quote:
+        share_basis = "foreign_us_listing_unverified_share_basis"
     elif likely_foreign_ordinary_otc:
         share_basis = "foreign_ordinary_unresolved"
     else:
@@ -348,13 +359,24 @@ def _apply_currency_normalization(market_data: MarketData | None, audit: dict) -
         market_data.additional_metadata["financial_currency_normalized_to"] = to_ccy or "unknown"
         market_data.additional_metadata["fx_rate_used_fin_to_quote"] = fx_rate
         market_data.additional_metadata["fx_source"] = fx_source
+        market_data.additional_metadata["fx_timestamp"] = "static_table"
+        market_data.additional_metadata["fx_confidence"] = "low" if fx_source == "static_fx_table" else "verified"
 
     out = dict(audit)
     out["status"] = "OK_FX_NORMALIZED" if status in {"FAILED", "UNKNOWN"} else status
     out["valuation_currency"] = to_ccy or out.get("valuation_currency") or "USD"
+    out["fx_source"] = fx_source
+    out["fx_timestamp"] = "static_table"
+    out["fx_confidence"] = "low" if fx_source == "static_fx_table" else "verified"
+    _share_basis = str(out.get("share_count_basis") or "")
+    _share_basis_note = ""
+    if _share_basis == "foreign_us_listing_unverified_share_basis":
+        _share_basis_note = "; share basis unverified for foreign issuer USD listing"
+    _fx_conf_note = "; FX confidence low (static table)" if fx_source == "static_fx_table" else ""
     out["reason"] = (
         "currency/share basis normalized via FX conversion; "
         f"{from_ccy}->{to_ccy} rate={fx_rate:.6f} ({fx_source})"
+        f"{_fx_conf_note}{_share_basis_note}"
     )
     return market_data, out, True
 
@@ -984,6 +1006,25 @@ def run_analysis(
                     sources.add("Free Cash Flow", _fcf_val, "yfinance", "verified")
                 if market_data.net_debt is not None:
                     sources.add("Net Debt", f"{_f_ccy} {market_data.net_debt:.0f}M", "yfinance", "verified")
+                    sources.add_once(
+                        "Net Debt (original currency)",
+                        f"{_f_ccy} {market_data.net_debt:.0f}M",
+                        "yfinance",
+                        "verified",
+                    )
+                if market_data_valuation and market_data_valuation.net_debt is not None:
+                    _nd_norm = f"{_q_ccy} {market_data_valuation.net_debt:.0f}M"
+                    _nd_conf = (
+                        "inferred"
+                        if str(normalization_audit.get("status") or "").upper() == "OK_FX_NORMALIZED"
+                        else "verified"
+                    )
+                    sources.add_once(
+                        "Net Debt (valuation currency)",
+                        _nd_norm,
+                        "normalization_audit",
+                        _nd_conf,
+                    )
                 if market_data.shares_outstanding is not None:
                     sources.add("Shares Outstanding", f"{market_data.shares_outstanding:.0f}M", "yfinance", "verified")
                 if market_data.current_price is not None:
@@ -2456,7 +2497,7 @@ def run_analysis(
         _target_price = None
         rec.upside_pct = None
         rec.intrinsic_price = None
-        rec.recommendation = "NO RATING / DATA CHECK REQUIRED"
+        rec.recommendation = "INCONCLUSIVE"
         if quality.score > 40:
             quality.score = 40
         quality.tier = "D"
@@ -2494,7 +2535,7 @@ def run_analysis(
     else:
         _rec = _raw_rec
     if _suppressed_no_rating:
-        _rec = "NO RATING / DATA CHECK REQUIRED"
+        _rec = "INCONCLUSIVE"
         _target_price = None
         _ev_str = "N/A"
     if _low_conviction and _rec in {"BUY", "SELL", "HOLD"}:
@@ -2672,6 +2713,24 @@ def run_analysis(
             y0_revenue=_y0_rev,
         )
 
+        def _ordered(_low: float, _mid: float, _high: float) -> bool:
+            return bool(_low <= _mid <= _high)
+
+        if not _ordered(scenarios_out.bear.dcf_ev, scenarios_out.base.dcf_ev, scenarios_out.bull.dcf_ev):
+            raise ValueError("scenario ordering failed (DCF low/base/high invariant violated)")
+        if not _ordered(
+            scenarios_out.bear.comps_ev_mid,
+            scenarios_out.base.comps_ev_mid,
+            scenarios_out.bull.comps_ev_mid,
+        ):
+            raise ValueError("scenario ordering failed (comps low/base/high invariant violated)")
+        if not _ordered(
+            scenarios_out.bear.blended_ev,
+            scenarios_out.base.blended_ev,
+            scenarios_out.bull.blended_ev,
+        ):
+            raise ValueError("scenario ordering failed (blended low/base/high invariant violated)")
+
         def _fmt_ev(v: float) -> str:
             return f"${v/1000:.1f}B" if v >= 1000 else f"${v:.0f}M"
 
@@ -2801,7 +2860,21 @@ def run_analysis(
                 "  [dim]Interpretation: comps unavailable/low-weight; valuation confidence is reduced.[/dim]"
             )
     except Exception as e:
-        console.print(f"  [yellow]Scenarios skipped: {e}[/yellow]")
+        _scenario_err = str(e)
+        if "scenario ordering failed" in _scenario_err.lower():
+            quality.warnings.append("Scenario ordering failed; football field suppressed.")
+            if valuation_status == "OK":
+                valuation_status = "DEGRADED"
+            console.print(
+                "  [yellow]Scenarios suppressed:[/yellow] scenario ordering failed "
+                "(low/base/high invariant violated)."
+            )
+        elif "failed currency/share normalization" in _scenario_err.lower():
+            console.print(
+                "  [yellow]Scenarios skipped:[/yellow] valuation blocked due to failed currency/share normalization."
+            )
+        else:
+            console.print(f"  [yellow]Scenarios skipped:[/yellow] {_scenario_err}")
 
     # ── 5c. IC SCORING ────────────────────────────────────────────────────
     try:
@@ -3254,6 +3327,12 @@ def run_analysis(
         _confidence_reasons.append("DCF result is materially below market/comps cross-check")
     if normalization_blocked:
         _confidence_reasons.append("currency/share normalization failed")
+    _norm_status = str(normalization_audit.get("status") or "").upper()
+    _norm_share_basis = str(normalization_audit.get("share_count_basis") or "")
+    if _norm_status == "OK_FX_NORMALIZED":
+        _confidence_reasons.append("FX normalization used static conversion table")
+    if _norm_share_basis == "foreign_us_listing_unverified_share_basis":
+        _confidence_reasons.append("foreign issuer USD listing has unverified share basis")
     if _method_dispersion_ratio >= 2.0:
         _confidence_reasons.append(f"high method dispersion ({_method_dispersion_ratio:.1f}x)")
     if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}:
@@ -3284,6 +3363,10 @@ def run_analysis(
         )
     )
     _confidence_level = "Low" if _confidence_is_low else ("Medium" if _confidence_is_medium else "High")
+    if _norm_status == "OK_FX_NORMALIZED" and _confidence_level == "High":
+        _confidence_level = "Medium"
+    if _norm_share_basis == "foreign_us_listing_unverified_share_basis":
+        _confidence_level = "Low"
     if (not quick_mode) and str(_research_source) == "fallback":
         _confidence_level = "Low"
     if market_status == "SKIPPED_QUICK_MODE":
@@ -3298,7 +3381,12 @@ def run_analysis(
         _research_status_enum = "RESEARCH_PARTIAL_FALLBACK"
 
     # Deterministic recommendation policy: separate raw valuation signal from final recommendation.
-    if not valuation_failed and company_type == "public":
+    if (
+        not valuation_failed
+        and company_type == "public"
+        and not _suppressed_no_rating
+        and valuation_status != "FAILED"
+    ):
         if _confidence_level == "Low":
             if _raw_signal_label.startswith("Positive"):
                 _rec = "BUY / LOW CONVICTION"
@@ -3324,8 +3412,9 @@ def run_analysis(
         if (not quick_mode) and str(_research_source) != "source_backed" and _rec in {"BUY", "SELL", "BUY / MODERATE CONVICTION", "SELL / MODERATE CONVICTION"}:
             _rec = "BUY / LOW CONVICTION" if _raw_signal_label.startswith("Positive") else "HOLD / LOW CONVICTION"
         val.recommendation = _rec
-    elif valuation_failed:
-        _rec = val.recommendation or "INCONCLUSIVE"
+    elif valuation_failed or _suppressed_no_rating or valuation_status == "FAILED":
+        _rec = "INCONCLUSIVE"
+        val.recommendation = _rec
 
     # Final canonical sync after confidence guardrails so every module uses the same recommendation string.
     if thesis and val:
@@ -3404,6 +3493,9 @@ def run_analysis(
                 "adr_detected": bool(normalization_audit.get("adr_detected")),
                 "depository_receipt_detected": bool(normalization_audit.get("depository_receipt_detected")),
                 "adr_ratio": normalization_audit.get("adr_ratio"),
+                "fx_source": str(normalization_audit.get("fx_source") or "n/a"),
+                "fx_confidence": str(normalization_audit.get("fx_confidence") or "n/a"),
+                "fx_timestamp": str(normalization_audit.get("fx_timestamp") or "n/a"),
                 "sanity_breaker_triggered": bool(_hard_suppression_reasons),
                 "peer_quality_score": _peer_quality_score,
                 "financial_data_quality_score": _financial_data_quality_score,

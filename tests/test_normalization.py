@@ -32,9 +32,14 @@ def test_bti_like_currency_mismatch_fx_normalizes_and_unblocks_with_share_heuris
     audit = _build_data_normalization_audit(md)
     assert str(audit["status"]).upper() == "FAILED"
     assert "currency mismatch" in str(audit["reason"]).lower()
+    assert str(audit["listing_type"]) == "foreign_issuer_us_listing_unresolved"
+    assert str(audit["share_count_basis"]) == "foreign_us_listing_unverified_share_basis"
     md2, audit2, fx_applied = _apply_currency_normalization(md, audit)
     assert fx_applied is True
     assert str(audit2["status"]).upper() == "OK_FX_NORMALIZED"
+    assert str(audit2.get("fx_source")) == "static_fx_table"
+    assert str(audit2.get("fx_confidence")) == "low"
+    assert "FX confidence low" in str(audit2.get("reason"))
     # GBP->USD deterministic table = 1.26
     assert md2.revenue_ttm is not None and abs(md2.revenue_ttm - (25600.0 * 1.26)) < 1e-6
     assert md2.fcf_ttm is not None and abs(md2.fcf_ttm - (3000.0 * 1.26)) < 1e-6

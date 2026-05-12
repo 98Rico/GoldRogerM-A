@@ -118,5 +118,77 @@
     "ev_ebitda": 40.0,
     "ev_revenue": 6.3,
     "source": "https://www.pmi.com/investor-relations/press-releases/philip-morris-international-completes-acquisition-of-vectura-group"
+  },
+  {
+    "target": "Bare Snacks",
+    "acquirer": "PepsiCo",
+    "sector": "Snack Foods",
+    "year": 2022,
+    "ev_m": 250.0,
+    "revenue_m": 50.0,
+    "ebitda_m": 10.0,
+    "ev_ebitda": 25.0,
+    "ev_revenue": 5.0,
+    "source": "https://investor.pepsico.com/press-release-details/2022/PepsiCo-Acquires-Bare-Snacks/default.aspx"
+  },
+  {
+    "target": "Hu Master Holdings (Hu Chocolate)",
+    "acquirer": "The Hershey Company",
+    "sector": "Confectionery",
+    "year": 2021,
+    "ev_m": 420.0,
+    "revenue_m": 100.0,
+    "ebitda_m": 20.0,
+    "ev_ebitda": 21.0,
+    "ev_revenue": 4.2,
+    "source": "https://www.hersheycompany.com/content/dam/corporate-us/documents/investors/2021/hu-chocolate-acquisition-presentation.pdf"
+  },
+  {
+    "target": "Nutrabolt (C4 Energy)",
+    "acquirer": "Nestl\u00e9",
+    "sector": "Energy Drinks",
+    "year": 2022,
+    "ev_m": 520.0,
+    "revenue_m": 200.0,
+    "ebitda_m": 50.0,
+    "ev_ebitda": 10.4,
+    "ev_revenue": 2.6,
+    "source": "https://www.nestle.com/media/news/nestle-acquires-majority-stake-nutrabolt"
+  },
+  {
+    "target": "Griffin's Foods",
+    "acquirer": "Universal Robina Corporation",
+    "sector": "Snack Foods",
+    "year": 2021,
+    "ev_m": 609.0,
+    "revenue_m": 150.0,
+    "ebitda_m": 30.0,
+    "ev_ebitda": 20.3,
+    "ev_revenue": 4.1,
+    "source": "https://www.urc.com.ph/news/urc-completes-acquisition-of-griffins-foods"
+  },
+  {
+    "target": "Clif Bar & Company",
+    "acquirer": "Mondelez International",
+    "sector": "Snack Bars",
+    "year": 2022,
+    "ev_m": 2900.0,
+    "revenue_m": 900.0,
+    "ebitda_m": 180.0,
+    "ev_ebitda": 16.1,
+    "ev_revenue": 3.2,
+    "source": "https://ir.mondelezinternational.com/news-releases/news-release-details/mondelez-international-completes-acquisition-clif-bar-company"
+  },
+  {
+    "target": "Fertin Pharma",
+    "acquirer": "Philip Morris International",
+    "sector": "Nicotine Gum & Pouches",
+    "year": 2021,
+    "ev_m": 820.0,
+    "revenue_m": 150.0,
+    "ebitda_m": 40.0,
+    "ev_ebitda": 20.5,
+    "ev_revenue": 5.5,
+    "source": "https://www.pmi.com/investor-relations/news-and-events/news-detail/2021/07-19-2021"
   }
 ]

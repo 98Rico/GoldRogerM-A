@@ -684,6 +684,9 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _adr = bool(pipeline_status.get("adr_detected", False))
         _dr = bool(pipeline_status.get("depository_receipt_detected", False))
         _adr_ratio = pipeline_status.get("adr_ratio")
+        _fx_source = str(pipeline_status.get("fx_source", "") or "n/a")
+        _fx_conf = str(pipeline_status.get("fx_confidence", "") or "n/a")
+        _fx_ts = str(pipeline_status.get("fx_timestamp", "") or "n/a")
         _norm_reason = str(pipeline_status.get("normalization_reason", "") or "").strip()
         block += (
             f"\n  Data normalization: {_norm_status}"
@@ -693,6 +696,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             f"\n    Share basis: {_share_basis}"
             f"\n    Depositary receipt detected: {'yes' if _dr else 'no'}"
             + (f" (ratio: {_adr_ratio})" if (_adr or _dr) and _adr_ratio else "")
+            + f"\n    FX source/confidence: {_fx_source} / {_fx_conf} ({_fx_ts})"
         )
         if _norm_reason:
             block += f"\n    Normalization note: {_norm_reason}"
@@ -799,9 +803,22 @@ def print_result(result, debug: bool = False):
     _pt_label = "Indicative Value" if ((not _is_inconclusive) and _confidence == "low") else "Point Estimate"
     _is_low_conf = ((not _is_inconclusive) and _confidence == "low")
     if _is_low_conf and _fv_range and v.target_price:
+        _range_label = "Midpoint reference"
+        try:
+            _m_rng = re.match(r"\$([0-9][0-9,]*\.?[0-9]*)\s*[–-]\s*\$([0-9][0-9,]*\.?[0-9]*)", str(_fv_range))
+            _m_t = re.search(r"\$([0-9][0-9,]*\.?[0-9]*)", str(_target_display))
+            if _m_rng and _m_t:
+                _lo_n = float(_m_rng.group(1).replace(",", ""))
+                _hi_n = float(_m_rng.group(2).replace(",", ""))
+                _t_n = float(_m_t.group(1).replace(",", ""))
+                _mid_n = (_lo_n + _hi_n) / 2.0
+                if _mid_n > 0 and abs(_t_n - _mid_n) / _mid_n > 0.03:
+                    _range_label = "Base case"
+        except Exception:
+            _range_label = "Base case"
         _target_line = (
             f"Indicative Range: {_fv_label} | "
-            f"Midpoint reference: {_value_with_source('Indicative midpoint', _target_display)} | "
+            f"{_range_label}: {_value_with_source('Indicative midpoint', _target_display)} | "
             f"Model-implied upside/downside: {_value_with_source('Upside', v.upside_downside)}"
         )
     else:
@@ -937,6 +954,8 @@ def print_result(result, debug: bool = False):
     _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
     _eq_bridge = src_map.get("Equity Value", {}).get("value")
     _nd_bridge = src_map.get("Net Debt", {}).get("value")
+    _nd_bridge_orig = src_map.get("Net Debt (original currency)", {}).get("value") or _nd_bridge
+    _nd_bridge_val = src_map.get("Net Debt (valuation currency)", {}).get("value")
     _sh_bridge = src_map.get("Shares Outstanding", {}).get("value")
     _tp_bridge = src_map.get("Implied Target Price", {}).get("value")
     if (not _is_inconclusive) and _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge:
@@ -945,7 +964,22 @@ def print_result(result, debug: bool = False):
         _tag_sh = footnotes.tag(_infer_source_note("Shares Outstanding", _sh_bridge, src_map))
         _tp_metric = "Indicative value per share" if _is_low_conf else "Implied Target Price"
         _tag_tp = footnotes.tag(_infer_source_note(_tp_metric, _tp_bridge, src_map))
-        _nd_txt = f" - Net Debt {_nd_bridge}" if _nd_bridge else ""
+        _nd_txt = ""
+        if _nd_bridge_val or _nd_bridge_orig:
+            _nd_metric = "Net Debt (valuation currency)" if _nd_bridge_val else "Net Debt"
+            _nd_note = _infer_source_note(_nd_metric, _nd_bridge_val or _nd_bridge_orig or "", src_map)
+            _tag_nd = footnotes.tag(_nd_note)
+            _nd_val_disp = _format_metric_value("Revenue", _nd_bridge_val or _nd_bridge_orig or "N/A")
+            _nd_orig_disp = _format_metric_value("Revenue", _nd_bridge_orig or "")
+            _nd_suffix = ""
+            if _nd_bridge_val and _nd_bridge_orig and str(_nd_bridge_val) != str(_nd_bridge_orig):
+                _fx_hint = ""
+                _norm_reason = str(_pipeline_status.get("normalization_reason", "") or "")
+                _m_fx = re.search(r"rate=([0-9]*\.?[0-9]+)", _norm_reason)
+                if _m_fx:
+                    _fx_hint = f" @ {float(_m_fx.group(1)):.4f}"
+                _nd_suffix = f" ({_nd_orig_disp}{_fx_hint})"
+            _nd_txt = f" - Net Debt {_nd_val_disp}{_nd_suffix}{_tag_nd}"
         _tp_bridge_label = "Target"
         _tp_bridge_show = _tp_bridge
         if _is_low_conf:
@@ -962,20 +996,24 @@ def print_result(result, debug: bool = False):
             f"→ / Shares {_sh_bridge}{_tag_sh} = {_tp_bridge_label} {_tp_bridge_show}{_tag_tp}"
         )
     _mcap_val = src_map.get("Market Cap", {}).get("value")
-    if (not _is_inconclusive) and _mcap_val and _eq_bridge:
-        _interp = "fairly valued"
+    if _mcap_val and _eq_bridge:
+        _interp = "not available — insufficient upside/downside signal"
+        _updn_txt = str(v.upside_downside or "N/A")
         try:
-            _u_txt = str(v.upside_downside or "").replace("%", "")
+            _u_txt = _updn_txt.replace("%", "")
             _u_val = float(_u_txt)
             if _u_val <= -10:
                 _interp = "market appears overvalued vs model"
             elif _u_val >= 10:
                 _interp = "market appears undervalued vs model"
+            else:
+                _interp = "fairly valued"
         except Exception:
-            pass
+            if _is_inconclusive or str(_updn_txt).upper() in {"N/A", ""}:
+                _interp = "not available — valuation suppressed by sanity breaker"
         console.print(
             f"[dim]Market cap: {_mcap_val} | Model equity value: {_eq_bridge} | "
-            f"Model-implied upside/downside: {v.upside_downside or 'N/A'} | "
+            f"Model-implied upside/downside: {_updn_txt or 'N/A'} | "
             f"Interpretation: {_interp}[/dim]"
         )
 
