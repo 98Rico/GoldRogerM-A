@@ -77,7 +77,7 @@ In addition:
 - Numeric **valuation assumptions** (e.g. WACC, terminal growth) are **not taken from LLM output** by default.
 - They come from verified market data when available, otherwise from `data/sector_multiples.py`.
 - If you want to override them, use `--interactive` (manual user override is explicitly tagged and then allowed).
-- Trading comps are deterministic when market comps exist: if `market_data.ev_ebitda_market` is available, it is the fixed EV/EBITDA mid-anchor; peer inputs can only adjust spread (capped at ±25%).
+- Trading comps are deterministic when market comps exist, with peer-quality and confidence guardrails applied before final blending.
 
 ### Data Quality Gate
 
@@ -90,6 +90,30 @@ Blocking policy:
 - Missing revenue triggers a blocker and limited-confidence mode warning
 - Public checks include: market data, market cap, beta, live EV/EBITDA
 - Private checks include: provider record presence and confidence level
+
+### Public-Listing Normalization & Safety Gates
+
+Before public-company valuation is allowed, the pipeline runs a normalization audit:
+- quote currency vs financial-statement currency
+- market-cap currency
+- listing/share basis classification
+- depositary-receipt status and ratio (if known)
+- FX conversion path and confidence
+
+Status examples in output:
+- `OK`
+- `OK_FX_NORMALIZED`
+- `FAILED` (valuation suppressed)
+
+When normalization or sanity checks fail:
+- recommendation is forced to `INCONCLUSIVE`
+- target/upside are suppressed (`N/A`)
+- scenario/football-field output is suppressed when integrity checks fail
+- output is explicitly marked as diagnostic/screen-only
+
+Scenario integrity guard:
+- low/base/high ordering is enforced for DCF, comps, and blended scenario outputs.
+- if any ordering check fails, the scenario section is suppressed and flagged.
 
 ### What the tool produces
 
@@ -114,6 +138,17 @@ All exports (PPT + Excel) auto-save to a timestamped subfolder:
 ```bash
 uv run python -m goldroger.cli --company "NVIDIA" --excel --pptx
 ```
+
+### Public company — quick screen mode
+
+```bash
+uv run python -m goldroger.cli --company "AAPL" --type public --quick
+```
+
+Quick mode is deterministic-first and optimized for speed:
+- skips deep market analysis and transaction comps
+- emphasizes core valuation + peer diagnostics
+- clearly labels low-confidence outputs as indicative
 
 ### Private company — standard
 
@@ -303,7 +338,10 @@ For non-pipeline workflows, both UI and CLI now enforce an explicit company conf
 API guardrail:
 - `POST /analyze` rejects non-pipeline requests unless `confirmed_company=true`
 
-**FX rates**: EUR/GBP/CHF/CAD fetched live via yfinance (`EURUSD=X` etc.) with hardcoded fallback.
+**FX/normalization note**:
+- cross-currency public valuation uses a deterministic normalization audit first.
+- when FX conversion is required, the engine records source/confidence in output (for example `static_fx_table`, low confidence).
+- low-confidence FX/share-basis states are surfaced and can suppress recommendation.
 
 ### Interactive source selector (`--interactive`)
 
@@ -403,8 +441,9 @@ Typical run times (after parallelisation):
 
 | Scenario | Estimated time |
 |----------|---------------|
-| Public equity (NVIDIA) | ~5–10 min |
-| Private company (Sézane) | ~1–2 min |
+| Public equity `--quick` (deterministic-first) | ~10–35s |
+| Public equity full mode (with enrichment attempts) | ~35–90s |
+| Private company (source-dependent) | ~1–3 min |
 | Pipeline sourcing `--quick` | ~1–2 min |
 | Pipeline sourcing standard | ~4–6 min |
 
@@ -573,3 +612,8 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Tiny-peer dominance prevention — small niche peers can no longer carry valuation weights in Apple-like mega-cap runs even when business tags match
 ✔ Valuation reliability surfacing — CLI header now prints valuation reliability and effective peer count alongside DCF status/model signal
 ✔ Additional regressions — tests now cover mega-cap floor qualitative-only behavior and aggressive comps-cap behavior under low effective peer count
+✔ Currency/share normalization audit for public listings — explicit `OK` / `OK_FX_NORMALIZED` / `FAILED` states
+✔ Sanity-breaker suppression — failed normalization/extreme-signal checks force `INCONCLUSIVE` and suppress target/upside
+✔ Scenario ordering integrity checks — low/base/high invariant enforced; invalid football fields are suppressed
+✔ FX transparency in output — FX source/confidence and conversion notes rendered in pipeline status and bridge context
+✔ Diagnostic-vs-official separation — when valuation is suppressed, output is explicitly marked as diagnostic/screen-only
