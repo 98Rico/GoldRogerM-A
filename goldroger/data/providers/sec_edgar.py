@@ -187,4 +187,10 @@ class SECEdgarProvider(DataProvider):
             data_fields=["revenue"],
             cost_tier="free",
             requires_key=False,
+            source_type="filing_api",
+            freshness="quarterly_annual",
+            confidence_level="verified",
+            limitations=["US filer coverage only", "narrow field coverage in prototype"],
+            raw_fields=["entityName", "us-gaap.Revenues"],
+            normalized_fields=["revenue_ttm"],
         )

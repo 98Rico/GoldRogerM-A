@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from goldroger.config import DEFAULT_CONFIG as _cfg
+from goldroger.data.fx import get_fx_rate
 from goldroger.data.sector_multiples import get_sector_multiples, is_financial_sector
 from goldroger.finance.core.wacc import (
     compute_capm_wacc,
@@ -1406,36 +1407,28 @@ class ValuationService:
 
     @staticmethod
     def _live_fx() -> dict:
-        """Fetch live FX rates from yfinance; fall back to hardcoded if unavailable."""
+        """Fetch FX rates via the centralized resolver (live->cache->static fallback)."""
         if ValuationService._fx_cache:
             return ValuationService._fx_cache
-        _HARDCODED = {"€": 1.08, "eur": 1.08, "gbp": 1.26, "£": 1.26, "chf": 1.11, "cad": 0.74}
-        try:
-            import yfinance as yf
-            pairs = {"eur": "EURUSD=X", "gbp": "GBPUSD=X", "chf": "CHFUSD=X", "cad": "CADUSD=X"}
-            rates = {}
-            for sym, ticker in pairs.items():
-                try:
-                    info = yf.Ticker(ticker).fast_info
-                    price = getattr(info, "last_price", None) or getattr(info, "lastPrice", None)
-                    if price:
-                        rates[sym] = float(price)
-                except Exception:
-                    pass
-            if len(rates) >= 2:
-                result = {
-                    "€": rates.get("eur", _HARDCODED["eur"]),
-                    "eur": rates.get("eur", _HARDCODED["eur"]),
-                    "gbp": rates.get("gbp", _HARDCODED["gbp"]),
-                    "£": rates.get("gbp", _HARDCODED["gbp"]),
-                    "chf": rates.get("chf", _HARDCODED["chf"]),
-                    "cad": rates.get("cad", _HARDCODED["cad"]),
-                }
-                ValuationService._fx_cache = result
-                return result
-        except Exception:
-            pass
-        return _HARDCODED
+        _fallback = {"€": 1.08, "eur": 1.08, "gbp": 1.26, "£": 1.26, "chf": 1.11, "cad": 0.74}
+        rates: dict[str, float] = {}
+        for ccy in ("EUR", "GBP", "CHF", "CAD"):
+            try:
+                out = get_fx_rate(ccy, "USD")
+                if out.ok and out.rate:
+                    rates[ccy.lower()] = float(out.rate)
+            except Exception:
+                continue
+        result = {
+            "€": rates.get("eur", _fallback["eur"]),
+            "eur": rates.get("eur", _fallback["eur"]),
+            "gbp": rates.get("gbp", _fallback["gbp"]),
+            "£": rates.get("gbp", _fallback["gbp"]),
+            "chf": rates.get("chf", _fallback["chf"]),
+            "cad": rates.get("cad", _fallback["cad"]),
+        }
+        ValuationService._fx_cache = result
+        return result
 
     @staticmethod
     def _f(v, default=0.0):

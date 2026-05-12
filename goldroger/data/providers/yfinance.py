@@ -30,4 +30,26 @@ class YFinanceProvider(DataProvider):
             data_fields=["revenue", "ebitda", "margins", "multiples", "estimates", "beta"],
             cost_tier="free",
             requires_key=False,
+            source_type="api",
+            freshness="intraday_quote_daily_fundamentals",
+            confidence_level="verified",
+            limitations=[
+                "Unofficial API; field availability can fluctuate",
+                "Foreign listing share basis may be unresolved for some tickers",
+            ],
+            raw_fields=[
+                "currency",
+                "financialCurrency",
+                "quoteType",
+                "marketCap",
+                "sharesOutstanding",
+                "enterpriseValue",
+            ],
+            normalized_fields=[
+                "revenue_ttm",
+                "ebitda_ttm",
+                "market_cap",
+                "enterprise_value",
+                "net_debt",
+            ],
         )

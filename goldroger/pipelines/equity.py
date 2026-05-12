@@ -36,7 +36,18 @@ from goldroger.data.comparables import (
     parse_peer_agent_output,
     resolve_peer_tickers,
 )
-from goldroger.data.fetcher import MarketData, fetch_market_data, resolve_ticker
+from goldroger.data.fetcher import (
+    MarketData,
+    fetch_market_data,
+    resolve_ticker,
+    resolve_ticker_with_context,
+)
+from goldroger.data.filings import FilingsPack, build_filings_pack
+from goldroger.data.market_context import MarketContextPack, build_market_context_pack
+from goldroger.data.normalization import (
+    apply_currency_normalization as _apply_currency_normalization_impl,
+    build_data_normalization_audit as _build_data_normalization_audit_impl,
+)
 from goldroger.data.private_quality import merge_private_market_data
 from goldroger.data.quality_gate import assess_data_quality
 from goldroger.data.sector_profiles import get_sector_profile, detect_sector_profile
@@ -125,260 +136,14 @@ def _normalize_dividend_yield(raw) -> float | None:
     return y
 
 
-def _to_float_or_none(raw) -> float | None:
-    if raw is None:
-        return None
-    try:
-        return float(raw)
-    except Exception:
-        return None
-
-
 def _build_data_normalization_audit(market_data: MarketData | None) -> dict:
-    """Build currency/share-basis normalization audit for public valuation safety."""
-    base = {
-        "status": "UNKNOWN",
-        "reason": "normalization metadata unavailable",
-        "quote_currency": "unknown",
-        "financial_statement_currency": "unknown",
-        "market_cap_currency": "unknown",
-        "valuation_currency": "USD",
-        "adr_detected": False,
-        "depository_receipt_detected": False,
-        "listing_type": "unknown",
-        "adr_ratio": None,
-        "share_count_basis": "unknown",
-    }
-    if not market_data:
-        base["status"] = "FAILED"
-        base["reason"] = "market data unavailable"
-        return base
-
-    meta = market_data.additional_metadata if isinstance(market_data.additional_metadata, dict) else {}
-    quote_ccy = str(meta.get("quote_currency") or "").strip().upper()
-    fin_ccy = str(meta.get("financial_currency") or "").strip().upper()
-    mcap_ccy = str(meta.get("market_cap_currency") or "").strip().upper() or quote_ccy
-    country = str(meta.get("country") or "").strip().lower()
-    ticker = str(market_data.ticker or "").strip().upper()
-    quote_type = str(meta.get("quote_type") or "").strip().lower()
-    underlying_symbol = str(meta.get("underlying_symbol") or "").strip()
-    adr_ratio = _to_float_or_none(meta.get("adr_ratio"))
-    hinted_adr = bool(meta.get("is_adr_hint"))
-
-    confirmed_depository = any(tok in quote_type for tok in ("adr", "gdr", "depository", "depositary receipt"))
-    likely_depository = bool(
-        ticker.endswith("Y")
-        and quote_ccy == "USD"
-        and fin_ccy
-        and fin_ccy != "USD"
-    ) or bool(
-        hinted_adr
-        and ticker.endswith("Y")
-        and underlying_symbol
-    )
-    likely_foreign_ordinary_otc = (
-        ticker.endswith("F")
-        and quote_ccy == "USD"
-        and fin_ccy
-        and fin_ccy != "USD"
-        and country not in {"united states", "usa", "us"}
-    )
-    likely_foreign_us_quote = (
-        quote_ccy == "USD"
-        and fin_ccy
-        and fin_ccy != "USD"
-        and country not in {"united states", "usa", "us"}
-        and not likely_foreign_ordinary_otc
-    )
-    is_depository = bool(confirmed_depository or likely_depository)
-
-    reasons: list[str] = []
-    status = "OK"
-    if quote_ccy and fin_ccy and quote_ccy != fin_ccy:
-        status = "FAILED"
-        reasons.append(
-            f"currency mismatch ({fin_ccy} financials vs {quote_ccy} quote) without FX normalization"
-        )
-    elif not quote_ccy or not fin_ccy:
-        status = "UNKNOWN"
-        reasons.append("missing quote/financial statement currency metadata")
-
-    _share_consistency_ok = None
-    _share_consistency_delta = None
-    try:
-        if (
-            market_data.current_price is not None
-            and market_data.shares_outstanding is not None
-            and market_data.market_cap is not None
-            and market_data.market_cap > 0
-        ):
-            _implied_mcap = float(market_data.current_price) * float(market_data.shares_outstanding)
-            _share_consistency_delta = abs(_implied_mcap - float(market_data.market_cap)) / float(market_data.market_cap)
-            _share_consistency_ok = bool(_share_consistency_delta <= 0.25)
-    except Exception:
-        _share_consistency_ok = None
-
-    if is_depository and (adr_ratio is None or adr_ratio <= 0):
-        if _share_consistency_ok is True:
-            if status != "FAILED":
-                status = "OK_HEURISTIC"
-            reasons.append(
-                "depositary ratio unavailable; using quote-listing share basis heuristic "
-                f"(market-cap/share-price consistency delta={_share_consistency_delta:.1%})"
-            )
-        else:
-            status = "FAILED"
-            reasons.append("foreign listing/share-basis normalization unresolved; ADR/depositary ratio unavailable if applicable")
-
-    if confirmed_depository:
-        listing_type = "depositary_receipt_confirmed"
-    elif likely_depository:
-        listing_type = "depositary_receipt_likely_unconfirmed"
-    elif likely_foreign_us_quote:
-        listing_type = "foreign_issuer_us_listing_unresolved"
-    elif likely_foreign_ordinary_otc:
-        listing_type = "foreign_ordinary_otc_likely"
-    elif quote_ccy and fin_ccy and quote_ccy == fin_ccy:
-        listing_type = "ordinary_listing"
-    else:
-        listing_type = "foreign_listing_unknown_basis"
-
-    if is_depository and adr_ratio and adr_ratio > 0:
-        share_basis = "adr_equivalent"
-    elif is_depository:
-        share_basis = "unknown_depositary_ratio"
-    elif likely_foreign_us_quote:
-        share_basis = "foreign_us_listing_unverified_share_basis"
-    elif likely_foreign_ordinary_otc:
-        share_basis = "foreign_ordinary_unresolved"
-    else:
-        share_basis = "ordinary"
-
-    if status == "OK" and not reasons:
-        reasons.append("currency/share basis appears internally consistent")
-
-    return {
-        "status": status,
-        "reason": "; ".join(reasons),
-        "quote_currency": quote_ccy or "unknown",
-        "financial_statement_currency": fin_ccy or "unknown",
-        "market_cap_currency": mcap_ccy or "unknown",
-        "valuation_currency": quote_ccy or "USD",
-        "adr_detected": bool(confirmed_depository),
-        "depository_receipt_detected": is_depository,
-        "listing_type": listing_type,
-        "adr_ratio": adr_ratio,
-        "share_count_basis": share_basis,
-    }
-
-
-def _fx_usd_per_unit() -> dict[str, float]:
-    """Deterministic FX table: USD value per 1 unit of local currency."""
-    return {
-        "USD": 1.0,
-        "EUR": 1.08,
-        "GBP": 1.26,
-        "CHF": 1.11,
-        "CAD": 0.74,
-        "AUD": 0.66,
-        "JPY": 0.0067,
-        "NOK": 0.095,
-        "SEK": 0.093,
-        "DKK": 0.145,
-    }
-
-
-def _fx_rate_between(from_ccy: str, to_ccy: str) -> tuple[float | None, str]:
-    """Return multiplicative rate converting FROM currency units to TO currency units."""
-    f = str(from_ccy or "").upper()
-    t = str(to_ccy or "").upper()
-    if not f or not t:
-        return None, "missing_currency_code"
-    if f == t:
-        return 1.0, "identity"
-    fx = _fx_usd_per_unit()
-    _f_usd = fx.get(f)
-    _t_usd = fx.get(t)
-    if _f_usd is None or _t_usd is None or _t_usd == 0:
-        return None, "static_fx_unavailable"
-    # (USD per FROM) / (USD per TO) => TO per FROM
-    return float(_f_usd / _t_usd), "static_fx_table"
+    """Compatibility wrapper — delegates to centralized normalization module."""
+    return _build_data_normalization_audit_impl(market_data)
 
 
 def _apply_currency_normalization(market_data: MarketData | None, audit: dict) -> tuple[MarketData | None, dict, bool]:
-    """Convert statement-currency fields to quote currency when FX is available."""
-    if not market_data:
-        return market_data, audit, False
-    status = str(audit.get("status") or "").upper()
-    reason = str(audit.get("reason") or "")
-    if "share-basis normalization unresolved" in reason.lower():
-        return market_data, audit, False
-    if "currency mismatch" not in reason.lower():
-        return market_data, audit, False
-    from_ccy = str(audit.get("financial_statement_currency") or "")
-    to_ccy = str(audit.get("quote_currency") or "")
-    fx_rate, fx_source = _fx_rate_between(from_ccy, to_ccy)
-    if fx_rate is None or fx_rate <= 0:
-        out = dict(audit)
-        out["status"] = "FAILED"
-        out["reason"] = (reason + "; FX normalization unavailable for financial->quote currency conversion").strip("; ")
-        return market_data, out, False
-
-    # Convert only statement-currency monetary fields (all in millions already).
-    _fields = (
-        "revenue_ttm",
-        "ebitda_ttm",
-        "ebit_ttm",
-        "net_income_ttm",
-        "fcf_ttm",
-        "capex_ttm",
-        "da_ttm",
-        "total_debt",
-        "cash_and_equivalents",
-        "net_debt",
-        "enterprise_value",
-        "total_equity",
-        "forward_revenue_1y",
-        "interest_expense",
-    )
-    for _k in _fields:
-        try:
-            _v = getattr(market_data, _k, None)
-            if _v is not None:
-                setattr(market_data, _k, float(_v) * float(fx_rate))
-        except Exception:
-            pass
-    try:
-        if market_data.revenue_history:
-            market_data.revenue_history = [float(x) * float(fx_rate) for x in market_data.revenue_history]
-    except Exception:
-        pass
-
-    if isinstance(market_data.additional_metadata, dict):
-        market_data.additional_metadata["financial_currency_normalized_from"] = from_ccy or "unknown"
-        market_data.additional_metadata["financial_currency_normalized_to"] = to_ccy or "unknown"
-        market_data.additional_metadata["fx_rate_used_fin_to_quote"] = fx_rate
-        market_data.additional_metadata["fx_source"] = fx_source
-        market_data.additional_metadata["fx_timestamp"] = "static_table"
-        market_data.additional_metadata["fx_confidence"] = "low" if fx_source == "static_fx_table" else "verified"
-
-    out = dict(audit)
-    out["status"] = "OK_FX_NORMALIZED" if status in {"FAILED", "UNKNOWN"} else status
-    out["valuation_currency"] = to_ccy or out.get("valuation_currency") or "USD"
-    out["fx_source"] = fx_source
-    out["fx_timestamp"] = "static_table"
-    out["fx_confidence"] = "low" if fx_source == "static_fx_table" else "verified"
-    _share_basis = str(out.get("share_count_basis") or "")
-    _share_basis_note = ""
-    if _share_basis == "foreign_us_listing_unverified_share_basis":
-        _share_basis_note = "; share basis unverified for foreign issuer USD listing"
-    _fx_conf_note = "; FX confidence low (static table)" if fx_source == "static_fx_table" else ""
-    out["reason"] = (
-        "currency/share basis normalized via FX conversion; "
-        f"{from_ccy}->{to_ccy} rate={fx_rate:.6f} ({fx_source})"
-        f"{_fx_conf_note}{_share_basis_note}"
-    )
-    return market_data, out, True
+    """Compatibility wrapper — delegates to centralized normalization module."""
+    return _apply_currency_normalization_impl(market_data, audit)
 
 
 def _sanitize_catalysts(catalysts: list[str], run_year: int | None = None) -> list[str]:
@@ -750,6 +515,8 @@ def run_analysis(
     # ── 0. REAL DATA ──────────────────────────────────────────────────────
     market_data: MarketData | None = None
     market_data_valuation: MarketData | None = None
+    filings_pack: FilingsPack | None = None
+    market_context_pack: MarketContextPack | None = None
     normalization_audit: dict = _build_data_normalization_audit(None)
     normalization_blocked = False
     if company_type == "private":
@@ -930,12 +697,19 @@ def run_analysis(
 
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
-        ticker = resolve_ticker(company)
+        _ticker_ctx = resolve_ticker_with_context(company)
+        ticker = str((_ticker_ctx or {}).get("selected_symbol") or "").strip().upper() or resolve_ticker(company)
         if ticker:
             log.ticker = ticker
             console.print(f"  Resolved ticker: [bold]{ticker}[/bold]")
             market_data = fetch_market_data(ticker)
             if market_data:
+                if isinstance(market_data.additional_metadata, dict) and isinstance(_ticker_ctx, dict):
+                    market_data.additional_metadata.setdefault("selected_listing_symbol", _ticker_ctx.get("selected_symbol"))
+                    market_data.additional_metadata.setdefault("primary_listing_symbol", _ticker_ctx.get("primary_listing_symbol"))
+                    market_data.additional_metadata.setdefault("ticker_resolution_reason", _ticker_ctx.get("reason"))
+                    if _ticker_ctx.get("selected_exchange"):
+                        market_data.additional_metadata.setdefault("selected_exchange", _ticker_ctx.get("selected_exchange"))
                 normalization_audit = _build_data_normalization_audit(market_data)
                 market_data_valuation = _copy.deepcopy(market_data)
                 market_data_valuation, normalization_audit, _fx_applied = _apply_currency_normalization(
@@ -970,6 +744,46 @@ def run_analysis(
                             "  [dim]FX normalization applied:[/dim] "
                             f"{normalization_audit.get('reason')}"
                         )
+                try:
+                    filings_pack = build_filings_pack(
+                        company=company,
+                        ticker=ticker,
+                        market_data=market_data,
+                    )
+                except Exception:
+                    filings_pack = None
+                if filings_pack and filings_pack.records:
+                    _latest_filing = filings_pack.latest
+                    if _latest_filing:
+                        _filing_txt = _latest_filing.filing_type
+                        if _latest_filing.filing_date:
+                            _filing_txt += f" ({_latest_filing.filing_date})"
+                        sources.add_once(
+                            "Latest Filing",
+                            _filing_txt,
+                            _latest_filing.source_name or "filings",
+                            _latest_filing.confidence or "estimated",
+                            _latest_filing.source_url or "",
+                        )
+                    for _i, _rec in enumerate(filings_pack.records[:3], start=1):
+                        _v = _rec.filing_type + (f" ({_rec.filing_date})" if _rec.filing_date else "")
+                        sources.add_once(
+                            f"Filing Source {_i}",
+                            _v,
+                            _rec.source_name or "filings",
+                            _rec.confidence or "estimated",
+                            _rec.source_url or "",
+                            as_of_date=_rec.filing_date or "",
+                        )
+                    if isinstance(market_data.additional_metadata, dict):
+                        market_data.additional_metadata["filings_pack"] = filings_pack.to_dict()
+                    console.print(
+                        "  [dim]Filings pack:[/dim] "
+                        f"{len(filings_pack.records)} record(s), "
+                        f"source-backed={str(filings_pack.source_backed).lower()}"
+                    )
+                else:
+                    console.print("  [dim]Filings pack: unavailable (no source-backed filing links resolved).[/dim]")
                 if market_data.forward_revenue_growth is not None:
                     _fg_src = (
                         "yfinance_analyst_revenue"
@@ -984,6 +798,37 @@ def run_analysis(
                 sources.add("Revenue TTM", _rev_txt, "yfinance", "verified")
                 sources.add("EBITDA Margin", f"{market_data.ebitda_margin:.1%}", "yfinance", "verified")
                 sources.add("Market Cap", _mcap_txt, "yfinance", "verified")
+                _sr = market_data.additional_metadata.get("source_results") if isinstance(market_data.additional_metadata, dict) else None
+                if isinstance(_sr, dict):
+                    _sr_metric_map = {
+                        "revenue_ttm": "Revenue TTM",
+                        "ebitda_ttm": "EBITDA (TTM)",
+                        "market_cap": "Market Cap",
+                        "enterprise_value": "Enterprise Value",
+                        "free_cash_flow": "Free Cash Flow",
+                        "shares_outstanding": "Shares Outstanding",
+                    }
+                    for _key, _metric in _sr_metric_map.items():
+                        _payload = _sr.get(_key)
+                        if not isinstance(_payload, dict):
+                            continue
+                        if sources.has_metric(_metric):
+                            continue
+                        sources.add(
+                            _metric,
+                            str(_payload.get("value")),
+                            str(_payload.get("source_name") or "unknown"),
+                            str(_payload.get("source_confidence") or "inferred"),
+                            str(_payload.get("source_url") or ""),
+                            currency=str(_payload.get("currency") or ""),
+                            unit=str(_payload.get("unit") or ""),
+                            as_of_date=str(_payload.get("as_of_date") or ""),
+                            is_estimated=bool(_payload.get("is_estimated")),
+                            is_fallback=bool(_payload.get("is_fallback")),
+                            normalization_notes=str(_payload.get("normalization_notes") or ""),
+                            warning_flags=list(_payload.get("warning_flags") or []),
+                            cached=bool(_payload.get("cached")),
+                        )
                 if market_data.beta:
                     sources.add("Beta (β)", f"{market_data.beta:.3f}", "yfinance", "verified")
                 if market_data.forward_revenue_growth is not None:
@@ -1049,11 +894,35 @@ def run_analysis(
                             f"quote={normalization_audit.get('quote_currency')}; "
                             f"share_basis={normalization_audit.get('share_count_basis')}; "
                             f"listing_type={normalization_audit.get('listing_type')}; "
+                            f"selected={normalization_audit.get('selected_listing')}; "
+                            f"primary={normalization_audit.get('primary_listing')}; "
                             f"adr_ratio={normalization_audit.get('adr_ratio') or 'unknown'}"
                         ),
                         "normalization_audit",
                         "verified" if not normalization_blocked else "inferred",
                     )
+                    _fx_rate_used = market_data_valuation.additional_metadata.get("fx_rate_used_fin_to_quote") if (
+                        market_data_valuation and isinstance(market_data_valuation.additional_metadata, dict)
+                    ) else None
+                    if _fx_rate_used:
+                        try:
+                            sources.add_once(
+                                "FX Rate (financial->quote)",
+                                f"{float(_fx_rate_used):.6f}",
+                                str(normalization_audit.get("fx_source") or "normalization_audit"),
+                                str(normalization_audit.get("fx_confidence") or "inferred"),
+                                currency=str(normalization_audit.get("quote_currency") or ""),
+                                unit=(
+                                    f"{normalization_audit.get('quote_currency')} per "
+                                    f"{normalization_audit.get('financial_statement_currency')}"
+                                ),
+                                as_of_date=str(normalization_audit.get("fx_timestamp") or ""),
+                                is_fallback=bool(
+                                    str(normalization_audit.get("fx_source") or "").startswith("static")
+                                ),
+                            )
+                        except Exception:
+                            pass
                     _div_yld = market_data.additional_metadata.get("dividend_yield")
                     _dy = _normalize_dividend_yield(_div_yld)
                     if _dy is not None:
@@ -1629,6 +1498,79 @@ def run_analysis(
         )
     else:
         console.print(f"  [dim]Research agents completed in {_parallel_elapsed:.1f}s[/dim]")
+    if (not quick_mode) and company_type == "public" and market_data:
+        _mc_industry = ""
+        if isinstance(market_data.additional_metadata, dict):
+            _mc_industry = str(market_data.additional_metadata.get("industry") or "")
+        try:
+            market_context_pack = build_market_context_pack(
+                company=company,
+                ticker=(market_data.ticker or log.ticker or ""),
+                sector=fund.sector or "",
+                industry=_mc_industry,
+                filings_pack=filings_pack,
+            )
+        except Exception:
+            market_context_pack = None
+        if market_context_pack:
+            _ctx_urls = [x.url for x in [*market_context_pack.trends, *market_context_pack.catalysts, *market_context_pack.risks] if str(x.url or "").startswith("http")]
+            if _ctx_urls:
+                mkt.sources = list(dict.fromkeys([*(mkt.sources or []), *_ctx_urls]))
+            if market_context_pack.source_backed:
+                _ctx_lines: list[str] = []
+                _ctx_lines.extend([f"Trend: {x.text}" for x in market_context_pack.trends if x.text][:2])
+                _ctx_lines.extend([f"Catalyst: {x.text}" for x in market_context_pack.catalysts if x.text][:2])
+                _ctx_lines.extend([f"Risk: {x.text}" for x in market_context_pack.risks if x.text][:2])
+                if _ctx_lines:
+                    if not [str(t).strip() for t in (mkt.key_trends or []) if str(t).strip()]:
+                        mkt.key_trends = _ctx_lines
+                    else:
+                        mkt.key_trends = list(dict.fromkeys([*(mkt.key_trends or []), *_ctx_lines]))[:6]
+                if str(mkt.source_quality or "").lower() in {"", "low"}:
+                    mkt.source_quality = "medium"
+                if str(mkt.data_status or "").upper() == "FAILED":
+                    mkt.data_status = "PARTIAL"
+            if market_context_pack.source_count:
+                sources.add_once(
+                    "Market Context Sources",
+                    str(market_context_pack.source_count),
+                    ("market_context_source_backed" if market_context_pack.source_backed else "market_context_fallback"),
+                    ("verified" if market_context_pack.source_backed else "estimated"),
+                )
+            for i, it in enumerate((market_context_pack.trends or [])[:2], start=1):
+                sources.add_once(
+                    f"Market Trend {i}",
+                    it.text,
+                    it.source,
+                    it.confidence,
+                    it.url or "",
+                    as_of_date=it.date or "",
+                )
+            for i, it in enumerate((market_context_pack.catalysts or [])[:2], start=1):
+                sources.add_once(
+                    f"Market Catalyst {i}",
+                    it.text,
+                    it.source,
+                    it.confidence,
+                    it.url or "",
+                    as_of_date=it.date or "",
+                )
+            for i, it in enumerate((market_context_pack.risks or [])[:2], start=1):
+                sources.add_once(
+                    f"Market Risk {i}",
+                    it.text,
+                    it.source,
+                    it.confidence,
+                    it.url or "",
+                    as_of_date=it.date or "",
+                )
+            if market_context_pack.fallback_used:
+                sources.add_once(
+                    "Market Context Mode",
+                    "Fallback Market Context — sector profile only, not source-backed; not used in valuation.",
+                    "sector_profile_fallback",
+                    "inferred",
+                )
     _market_source_backed = _has_source_backed_market_data(mkt)
     if (not quick_mode) and market_status == "OK" and (not _market_source_backed):
         market_status = "DEGRADED"
@@ -1636,7 +1578,7 @@ def run_analysis(
         _research_source = "skipped"
         _research_depth = "none"
     else:
-        _research_source = "source_backed" if (market_status == "OK" and _market_source_backed) else "fallback"
+        _research_source = "source_backed" if _market_source_backed else "fallback"
         _research_depth = "full" if _research_source == "source_backed" else "limited"
 
     def _fmt_elapsed_for_status(value: object) -> str | None:
@@ -3057,6 +2999,13 @@ def run_analysis(
             "quick_mode": quick_mode,
             "cli_mode": cli_mode,
             "debug_retries": debug,
+            "market_context_source_backed": bool(market_context_pack and market_context_pack.source_backed),
+            "market_context_trends": [x.text for x in ((market_context_pack.trends if market_context_pack else []) or [])][:4],
+            "market_context_catalysts": [x.text for x in ((market_context_pack.catalysts if market_context_pack else []) or [])][:4],
+            "market_context_risks": [x.text for x in ((market_context_pack.risks if market_context_pack else []) or [])][:4],
+            "filings_source_count": int(filings_pack.source_count) if filings_pack else 0,
+            "latest_filing_type": (filings_pack.latest.filing_type if (filings_pack and filings_pack.latest) else ""),
+            "latest_filing_date": (filings_pack.latest.filing_date if (filings_pack and filings_pack.latest) else ""),
         }
         try:
             with ThreadPoolExecutor(max_workers=1) as _tp:
@@ -3175,6 +3124,33 @@ def run_analysis(
             quality.tier = "B"
         if "Source-backed market context unavailable; valuation input quality capped." not in quality.warnings:
             quality.warnings.append("Source-backed market context unavailable; valuation input quality capped.")
+    _fx_src = str(normalization_audit.get("fx_source") or "").lower()
+    _share_basis = str(normalization_audit.get("share_count_basis") or "")
+    _norm_state = str(normalization_audit.get("status") or "").upper()
+    _share_basis_unresolved = _share_basis in {
+        "unknown_depositary_ratio",
+        "foreign_us_listing_unverified_share_basis",
+        "foreign_ordinary_unresolved",
+    }
+    if _fx_src == "static_fx_table" and quality.score > 79:
+        quality.score = 79
+        if "Static FX fallback in use; valuation input quality capped." not in quality.warnings:
+            quality.warnings.append("Static FX fallback in use; valuation input quality capped.")
+    if _share_basis_unresolved and quality.score > 79:
+        quality.score = 79
+        if "Share-basis normalization unresolved; valuation input quality capped." not in quality.warnings:
+            quality.warnings.append("Share-basis normalization unresolved; valuation input quality capped.")
+    if _norm_state == "FAILED":
+        quality.is_blocked = True
+        if "Failed currency/share normalization" not in quality.blockers:
+            quality.blockers.append("Failed currency/share normalization")
+        if quality.score > 40:
+            quality.score = 40
+    if _hard_suppression_reasons and quality.score > 40:
+        quality.score = 40
+    quality.tier = _quality_tier(quality.score)
+    if quality.score <= 79 and quality.tier == "A":
+        quality.tier = "B"
     sources.add(
         "Data Quality Score",
         f"{quality.score}/100 (Tier {quality.tier})",
@@ -3445,6 +3421,20 @@ def run_analysis(
             _final_rec,
         )
 
+    _market_context_latest_date = ""
+    if market_context_pack is not None:
+        _ctx_dates = [
+            str(x.date).strip()
+            for x in [
+                *(market_context_pack.trends or []),
+                *(market_context_pack.catalysts or []),
+                *(market_context_pack.risks or []),
+            ]
+            if str(getattr(x, "date", "")).strip()
+        ]
+        if _ctx_dates:
+            _market_context_latest_date = max(_ctx_dates)
+
     analysis = AnalysisResult(
         company=company,
         company_type=company_type,
@@ -3499,12 +3489,39 @@ def run_analysis(
                 "research_source": _research_source,
                 "research_depth": _research_depth,
                 "market_data_source_backed": "yes" if _market_source_backed else "no",
+                "market_context_source_count": (
+                    int(market_context_pack.source_count)
+                    if market_context_pack is not None
+                    else 0
+                ),
+                "market_context_latest_source_date": _market_context_latest_date,
+                "market_context_fallback_used": (
+                    bool(market_context_pack.fallback_used)
+                    if market_context_pack is not None
+                    else (not _market_source_backed)
+                ),
+                "filings_source_backed": bool(filings_pack.source_backed) if filings_pack else False,
+                "filings_source_count": int(filings_pack.source_count) if filings_pack else 0,
+                "filings_latest_type": (
+                    str(filings_pack.latest.filing_type)
+                    if (filings_pack and filings_pack.latest)
+                    else "unavailable"
+                ),
+                "filings_latest_date": (
+                    str(filings_pack.latest.filing_date)
+                    if (filings_pack and filings_pack.latest and filings_pack.latest.filing_date)
+                    else ""
+                ),
                 "normalization_status": str(normalization_audit.get("status") or "UNKNOWN"),
                 "normalization_reason": str(normalization_audit.get("reason") or ""),
                 "quote_currency": str(normalization_audit.get("quote_currency") or "unknown"),
                 "financial_statement_currency": str(normalization_audit.get("financial_statement_currency") or "unknown"),
                 "market_cap_currency": str(normalization_audit.get("market_cap_currency") or "unknown"),
                 "listing_type": str(normalization_audit.get("listing_type") or "unknown"),
+                "selected_listing": str(normalization_audit.get("selected_listing") or "unknown"),
+                "primary_listing": str(normalization_audit.get("primary_listing") or "unknown"),
+                "listing_exchange": str(normalization_audit.get("exchange") or "unknown"),
+                "listing_country": str(normalization_audit.get("country") or "unknown"),
                 "share_count_basis": str(normalization_audit.get("share_count_basis") or "unknown"),
                 "adr_detected": bool(normalization_audit.get("adr_detected")),
                 "depository_receipt_detected": bool(normalization_audit.get("depository_receipt_detected")),
@@ -3538,6 +3555,10 @@ def run_analysis(
             "core_data_quality_score": _core_quality_score,
             "research_enrichment_quality_score": _research_quality_score,
             "research_enrichment_quality_label": _research_quality_label,
+            "sourcing": {
+                "filings_pack": filings_pack.to_dict() if filings_pack else None,
+                "market_context_pack": market_context_pack.to_dict() if market_context_pack else None,
+            },
         },
         sources_md=sources.to_markdown(),
     )

@@ -18,7 +18,8 @@ from typing import Optional
 import httpx
 import yfinance as yf
 
-from goldroger.utils.cache import market_data_cache, ticker_cache
+from goldroger.data.sourcing import make_source_result
+from goldroger.utils.cache import company_meta_cache, market_data_cache, ticker_cache
 
 _HTTP = httpx.Client(
     timeout=15,
@@ -120,12 +121,33 @@ def resolve_ticker(company_name: str) -> Optional[str]:
     Resolve a company name to its primary exchange ticker via Yahoo Finance search.
     Returns the best EQUITY match or None. Cached for 24 hours.
     """
-    key = f"ticker:{company_name.lower()}"
+    ctx = resolve_ticker_with_context(company_name)
+    if not ctx:
+        return None
+    symbol = str(ctx.get("selected_symbol") or "").strip().upper()
+    return symbol or None
+
+
+def resolve_ticker_with_context(company_name: str) -> Optional[dict]:
+    """
+    Resolve a company name to a ticker with listing context.
+
+    Returns:
+      {
+        selected_symbol,
+        primary_listing_symbol,
+        selected_exchange,
+        selected_quote_type,
+        selected_region,
+        reason,
+      }
+    """
+    key = f"ticker_ctx:{company_name.lower()}"
     cached = ticker_cache.get(key)
-    if cached is not None:
+    if isinstance(cached, dict):
         return cached
 
-    result = _resolve_raw(company_name)
+    result = _resolve_raw_with_context(company_name)
     if result:
         ticker_cache.set(key, result)
     return result
@@ -137,6 +159,30 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
     try:
         stock = yf.Ticker(ticker)
         info = stock.info or {}
+        _meta_key = f"company_meta:{ticker.upper()}"
+        cached_meta = company_meta_cache.get(_meta_key)
+        if not isinstance(cached_meta, dict):
+            cached_meta = {}
+        if cached_meta:
+            for _k in (
+                "longBusinessSummary",
+                "longName",
+                "shortName",
+                "country",
+                "industry",
+                "sector",
+                "exchange",
+                "fullExchangeName",
+                "currency",
+                "financialCurrency",
+                "quoteType",
+                "underlyingSymbol",
+                "website",
+                "sharesPerUnderlying",
+                "conversionRatio",
+            ):
+                if info.get(_k) in (None, "", []):
+                    info[_k] = cached_meta.get(_k)
 
         price = info.get("currentPrice") or info.get("regularMarketPrice")
         if not price:
@@ -260,7 +306,54 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
         if not revenue_ttm and not revenue_history:
             return None
 
-        return MarketData(
+        _fin_ccy = str(info.get("financialCurrency") or info.get("currency") or "unknown")
+        _quote_ccy = str(info.get("currency") or "unknown")
+        source_results = {
+            "revenue_ttm": make_source_result(
+                revenue_ttm,
+                source_name="yfinance",
+                source_confidence="verified" if revenue_ttm is not None else "unavailable",
+                currency=_fin_ccy,
+                unit="millions",
+            ).to_dict(),
+            "ebitda_ttm": make_source_result(
+                ebitda_ttm,
+                source_name="yfinance",
+                source_confidence="verified" if ebitda_ttm is not None else "unavailable",
+                currency=_fin_ccy,
+                unit="millions",
+            ).to_dict(),
+            "free_cash_flow": make_source_result(
+                fcf_ttm,
+                source_name="yfinance",
+                source_confidence="verified" if fcf_ttm is not None else "unavailable",
+                currency=_fin_ccy,
+                unit="millions",
+            ).to_dict(),
+            "market_cap": make_source_result(
+                market_cap,
+                source_name="yfinance",
+                source_confidence="verified" if market_cap is not None else "unavailable",
+                currency=_quote_ccy,
+                unit="millions",
+            ).to_dict(),
+            "enterprise_value": make_source_result(
+                enterprise_value,
+                source_name="yfinance",
+                source_confidence="verified" if enterprise_value is not None else "unavailable",
+                currency=_quote_ccy,
+                unit="millions",
+            ).to_dict(),
+            "shares_outstanding": make_source_result(
+                shares,
+                source_name="yfinance",
+                source_confidence="verified" if shares is not None else "unavailable",
+                currency="shares",
+                unit="millions",
+            ).to_dict(),
+        }
+
+        md = MarketData(
             ticker=ticker.upper(),
             company_name=info.get("longName") or info.get("shortName") or ticker,
             sector=info.get("sector") or info.get("industry") or "Unknown",
@@ -307,7 +400,13 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
                 "financial_currency": info.get("financialCurrency"),
                 "market_cap_currency": info.get("currency"),
                 "quote_type": info.get("quoteType"),
+                "quote_source_name": info.get("quoteSourceName"),
+                "exchange_timezone": info.get("exchangeTimezoneName"),
                 "underlying_symbol": info.get("underlyingSymbol"),
+                "website": info.get("website"),
+                "company_website": info.get("website"),
+                "selected_listing_symbol": ticker.upper(),
+                "primary_listing_symbol": str(info.get("underlyingSymbol") or ticker).upper(),
                 "adr_ratio": (
                     info.get("sharesPerUnderlying")
                     if info.get("sharesPerUnderlying") is not None
@@ -342,29 +441,159 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
                     if info.get("payoutRatio") is not None
                     else None
                 ),
+                "source_results": source_results,
             },
         )
+        company_meta_cache.set(
+            _meta_key,
+            {
+                "longBusinessSummary": info.get("longBusinessSummary"),
+                "longName": info.get("longName"),
+                "shortName": info.get("shortName"),
+                "country": info.get("country"),
+                "industry": info.get("industry"),
+                "sector": info.get("sector"),
+                "exchange": info.get("exchange"),
+                "fullExchangeName": info.get("fullExchangeName"),
+                "currency": info.get("currency"),
+                "financialCurrency": info.get("financialCurrency"),
+                "quoteType": info.get("quoteType"),
+                "underlyingSymbol": info.get("underlyingSymbol"),
+                "website": info.get("website"),
+                "sharesPerUnderlying": info.get("sharesPerUnderlying"),
+                "conversionRatio": info.get("conversionRatio"),
+            },
+        )
+        return md
     except Exception as exc:
         print(f"[fetcher] Error fetching {ticker}: {exc}")
         return None
 
 
 def _resolve_raw(company_name: str) -> Optional[str]:
+    ctx = _resolve_raw_with_context(company_name)
+    if not ctx:
+        return None
+    return str(ctx.get("selected_symbol") or "").strip().upper() or None
+
+
+def _candidate_score(q: dict, query: str) -> tuple[float, list[str]]:
+    score = 0.0
+    reasons: list[str] = []
+    sym = str(q.get("symbol") or "").strip().upper()
+    qtype = str(q.get("quoteType") or "").strip().upper()
+    exchange = str(q.get("exchange") or q.get("exchDisp") or "").strip().upper()
+    region = str(q.get("region") or "").strip().upper()
+    short_name = str(q.get("shortname") or q.get("longname") or "").lower()
+    query_l = str(query or "").strip().lower()
+    explicit_ticker = bool(query and query.replace(".", "").replace("-", "").isalnum() and len(query) <= 10)
+
+    if qtype == "EQUITY":
+        score += 30
+        reasons.append("equity")
+    elif qtype:
+        score += 10
+
+    if sym and query and sym == query.strip().upper():
+        score += 80
+        reasons.append("exact_symbol_match")
+
+    # Prefer primary/local listings for foreign issuers when name query is used.
+    if "." in sym:
+        score += 18
+        reasons.append("dot_suffix_local_listing_hint")
+    if sym.endswith(("Y", "F")):
+        score -= 12
+        reasons.append("otc_or_depositary_suffix_penalty")
+    if "OTC" in exchange:
+        score -= 15
+        reasons.append("otc_exchange_penalty")
+
+    # Keep US primary listings favored for explicit ticker-like inputs (e.g., AAPL).
+    if explicit_ticker and "." not in query:
+        if "." not in sym:
+            score += 15
+            reasons.append("explicit_ticker_prefers_primary")
+        else:
+            score -= 8
+
+    # If this is a company-name query, prioritize semantic name match.
+    if query_l and short_name:
+        if query_l in short_name:
+            score += 20
+            reasons.append("name_contains_query")
+        else:
+            q_tokens = {t for t in query_l.split() if t}
+            n_tokens = {t for t in short_name.split() if t}
+            overlap = len(q_tokens.intersection(n_tokens))
+            if overlap > 0:
+                score += min(15, overlap * 4)
+                reasons.append("name_token_overlap")
+
+    # Modest bump to known developed markets (local primaries often here).
+    if region in {"US", "GB", "NO", "DE", "FR", "NL", "SE", "DK", "JP", "CH"}:
+        score += 3
+
+    return score, reasons
+
+
+def _resolve_raw_with_context(company_name: str) -> Optional[dict]:
     try:
         resp = _HTTP.get(
             "https://query1.finance.yahoo.com/v1/finance/search",
-            params={"q": company_name, "quotesCount": 5, "newsCount": 0},
+            params={"q": company_name, "quotesCount": 12, "newsCount": 0},
         )
-        quotes = resp.json().get("quotes", [])
+        payload = resp.json()
+        quotes = payload.get("quotes", [])
+        if not isinstance(quotes, list) or not quotes:
+            return None
+
+        eligible: list[dict] = []
         for q in quotes:
-            if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
-                sym = q["symbol"]
-                if "." not in sym:
-                    return sym
-        for q in quotes:
-            if q.get("symbol"):
-                return q["symbol"]
-        return None
+            sym = str(q.get("symbol") or "").strip()
+            if not sym:
+                continue
+            qtype = str(q.get("quoteType") or "").strip().upper()
+            if qtype not in {"EQUITY", "ETF"}:
+                continue
+            score, reasons = _candidate_score(q, company_name)
+            eligible.append(
+                {
+                    "symbol": sym.upper(),
+                    "quote_type": qtype,
+                    "exchange": str(q.get("exchange") or q.get("exchDisp") or "").strip(),
+                    "region": str(q.get("region") or "").strip(),
+                    "longname": str(q.get("longname") or q.get("shortname") or "").strip(),
+                    "score": score,
+                    "reasons": reasons,
+                }
+            )
+
+        if not eligible:
+            return None
+
+        eligible.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        selected = eligible[0]
+        selected_sym = str(selected.get("symbol") or "").upper()
+
+        primary = selected_sym
+        # If we selected likely US depositary/OTC symbol, try matching same-name local listing with dot suffix.
+        if selected_sym.endswith(("Y", "F")):
+            for cand in eligible[1:]:
+                sym = str(cand.get("symbol") or "").upper()
+                if "." in sym and not sym.endswith(("Y", "F")):
+                    primary = sym
+                    break
+
+        return {
+            "selected_symbol": selected_sym,
+            "primary_listing_symbol": primary,
+            "selected_exchange": str(selected.get("exchange") or ""),
+            "selected_quote_type": str(selected.get("quote_type") or ""),
+            "selected_region": str(selected.get("region") or ""),
+            "reason": ",".join(selected.get("reasons") or []),
+            "candidates": eligible[:6],
+        }
     except Exception:
         return None
 

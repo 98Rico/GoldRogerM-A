@@ -42,6 +42,13 @@ class ProviderCapabilities:
     key_env_var: str = ""        # env variable name, e.g. "PAPPERS_API_KEY"
     key_signup_url: str = ""     # where to get the key
     rate_limit: str = ""         # human-readable, e.g. "200 req/day"
+    source_type: str = "api"     # "api" | "filing" | "registry" | "fallback"
+    freshness: str = "unknown"   # e.g. "intraday", "daily", "quarterly", "unknown"
+    confidence_level: str = "inferred"  # "verified" | "estimated" | "inferred"
+    limitations: list[str] = field(default_factory=list)
+    raw_fields: list[str] = field(default_factory=list)
+    normalized_fields: list[str] = field(default_factory=list)
+    failure_reason: str = ""
     # Set at runtime:
     is_available: bool = False   # * True if provider can be called right now
     status: str = "unknown"      # * "active" | "needs_key" | "not_implemented"

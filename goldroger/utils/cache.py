@@ -50,3 +50,8 @@ class TTLCache:
 market_data_cache = TTLCache(ttl_seconds=3600)   # yfinance: 1 hour
 ticker_cache = TTLCache(ttl_seconds=86400)        # ticker resolution: 24 hours
 peer_universe_cache = TTLCache(ttl_seconds=86400) # peer universe snapshots: 24 hours
+fx_rate_cache = TTLCache(ttl_seconds=86400)       # FX rates: 24 hours
+company_meta_cache = TTLCache(ttl_seconds=86400 * 14)  # company metadata: 14 days
+filings_meta_cache = TTLCache(ttl_seconds=86400)        # filings metadata: 1 day
+market_context_cache = TTLCache(ttl_seconds=86400 * 7)  # market context: 7 days
+peer_validation_cache = TTLCache(ttl_seconds=86400)     # peer validation snapshots: 1 day

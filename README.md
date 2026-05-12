@@ -63,6 +63,11 @@ orchestrator.py  ←── single entry point
 | IC Scoring | `ma/scoring.py` | 6 dimensions, pure numeric (no sector imports) |
 | Private Triangulation | `data/private_triangulation.py` | 5-signal revenue estimator |
 | Source Selector | `data/source_selector.py` | Interactive + CLI source picker |
+| Sourcing Contracts | `data/sourcing.py` | `SourceResult` provenance metadata for each sourced datum |
+| FX Resolver | `data/fx.py` | live→cache→static FX hierarchy with confidence labels |
+| Normalization Audit | `data/normalization.py` | currency/share-basis audit + FX application gates |
+| Filings Pack | `data/filings.py` | latest filing/IR source pack (SEC + IR fallback) |
+| Market Context Pack | `data/market_context.py` | structured trends/catalysts/risks with source/date/confidence |
 | Excel Exporter | `exporters/excel.py` | DCF workbook |
 | PPT Exporter | `exporters/pptx.py` | 10-slide deck |
 
@@ -307,6 +312,150 @@ LBO growth-equity thresholds (`growth_equity_ev_rev: 12.0`, `growth_equity_ev_eb
 | **Bloomberg** | Global | ✅ Everything | License — stub ready |
 | **Capital IQ** | Global | ✅ Everything + deals | License — stub ready |
 
+## Data Sourcing and Reliability
+
+### Sourcing Hierarchy (prototype)
+
+Gold Roger now uses explicit sourcing contracts:
+- `ProviderCapabilities` describes provider coverage, freshness, confidence, limitations, and field coverage.
+- `SourceResult` captures per-datum provenance:
+  - `value`, `currency`, `unit`, `as_of_date`
+  - `source_name`, `source_url`, `source_confidence`
+  - `is_estimated`, `is_fallback`, `normalization_notes`, `warning_flags`, `cached`
+
+Current deterministic hierarchy:
+1. financial market data: `yfinance`
+2. FX normalization: live free FX -> cached FX -> static fallback
+3. company metadata: yfinance profile -> cached profile -> deterministic fallback
+4. filings pack: SEC submissions (when available) -> official IR website fallback
+5. market context pack: source-backed (news/filings links) -> sector-profile fallback
+
+### Currency and FX Normalization
+
+For public equities, valuation runs a normalization audit before valuation math is trusted:
+- quote currency
+- financial statement currency
+- market-cap currency
+- selected listing vs primary listing
+- share basis and depositary/ADR status
+- FX source and confidence
+
+Normalization states:
+- `OK` — no conversion required, basis internally consistent
+- `OK_FX_NORMALIZED` — conversion applied with explicit source/confidence
+- `FAILED` — valuation recommendation suppressed (`INCONCLUSIVE`)
+
+FX sourcing hierarchy:
+1. `frankfurter` live free source (`api.frankfurter.dev`)
+2. cached recent live FX rate
+3. static deterministic fallback table (`static_fx_table`, low confidence)
+
+If currencies differ and FX cannot be resolved reliably, valuation is blocked.
+
+### Foreign Listings / ADR / Depositary Handling
+
+Listing normalization tracks:
+- `selected_listing`
+- `primary_listing`
+- `listing_type`
+- `share_count_basis`
+- depositary status (confirmed / likely / unresolved)
+- ADR ratio when available
+
+For non-US issuers, ticker resolution prefers local-primary listing candidates when available.  
+If share basis remains unresolved and materially affects valuation, recommendation is suppressed.
+
+### Market Context Reliability
+
+Market context is explicitly labeled as:
+- source-backed context, or
+- fallback context only (sector-profile framing, not valuation input)
+
+Fallback context does not silently increase valuation confidence.
+
+Structured market-context pack shape:
+- `source_backed`, `source_count`, `fallback_used`
+- `trends[]`, `catalysts[]`, `risks[]`
+- each item carries `text`, `source`, `date`, `confidence`, `url`
+
+CLI now surfaces:
+- market-context source count and latest source date in pipeline status
+- source-backed vs fallback market-context banner in the Market Context section
+- filing pack summary (latest filing + source-backed/fallback label)
+
+If source-backed context is unavailable, fallback context is shown as:
+`Fallback Market Context — sector profile only; not source-backed; not used in valuation.`
+
+### Filing Source Support (Prototype)
+
+Public-company filings sourcing is intentionally lightweight:
+- US listings: SEC submissions API (latest 10-K/10-Q/8-K/20-F/6-K links when available)
+- non-US / unresolved cases: official company IR website fallback link
+- IR fallback now attempts deterministic annual-report/results link discovery from the IR page HTML
+
+Pipeline status surfaces:
+- filing source count
+- latest filing type/date
+- whether filing links are source-backed vs fallback
+
+### Sanity Breakers and Suppression Rules
+
+Critical integrity checks suppress investable outputs:
+- unresolved currency/share normalization
+- extreme implied upside/downside on mature public companies
+- suspicious live multiple diagnostics
+- invalid scenario ordering (`low <= base <= high` violated)
+
+When triggered:
+- recommendation => `INCONCLUSIVE`
+- target/upside/downside => `N/A`
+- football field/ranges are suppressed or marked diagnostic only
+
+### Confidence Model Implications
+
+Confidence is penalized for:
+- static-fallback FX
+- unresolved foreign share basis
+- weak peer purity/diversification
+- fallback-only market context
+- high method dispersion
+- sanity-breaker activation
+
+Tier A is disallowed when core sourcing integrity signals are unresolved.
+
+### Caching and Rate-Limit Behavior
+
+In-process TTL caches reduce repeat failures:
+- market data: 1 hour
+- ticker resolution context: 24 hours
+- FX rates: 24 hours
+- company metadata: 14 days
+- filings metadata: 1 day
+- market context: 7 days
+- peer universe / peer validation: 24 hours
+
+On transient failures (including 429/rate-limits), the pipeline:
+- retries via cache when available
+- marks fallback/cached provenance
+- keeps suppressed valuations non-actionable
+
+### Regression Coverage (sourcing)
+
+Current regression set explicitly checks:
+- `AAPL` (USD ordinary listing, low confidence due to peers/dispersion)
+- `BTI` (cross-currency foreign issuer with FX normalization and share-basis caveats)
+- `Norsk Hydro` variants (`NHYDY` / `NHYKF` / `NHY.OL`) with suppression on unresolved normalization
+- local-listing preference for foreign name queries (for example, selecting `NHY.OL` over OTC/depositary variants)
+- explicit-ticker preservation when user inputs depositary symbol directly (for example `NHYDY`)
+- pipeline-level suppression path: unresolved normalization/sanity-breaker forces `INCONCLUSIVE` (no actionable target)
+
+### Current Design Decisions
+
+- yfinance metadata is helpful but not sufficient to always prove ADR ratio/share-basis; unresolved cases remain low-confidence or suppressed.
+- For foreign issuers, the resolver biases toward local-primary listing candidates; explicit ticker input is still respected.
+- London `GBp/GBX` quote currency codes are normalized to `GBP` currency code for audit consistency.
+- Transaction comps remain reference-oriented unless source quality is explicitly verified.
+
 ### Credential Setup in UI/API
 
 The API/UI now support entering missing provider keys directly:
@@ -476,7 +625,7 @@ Agents without web search (direct response): ValuationAssumptions, ReportWriter.
 ✔ Football field for private companies (revenue fallback chain)
 ✔ SOTP auto-detect for conglomerates
 ✔ Scenario narratives Bear/Base/Bull
-✔ Live FX rates via yfinance
+✔ Live FX hierarchy — Frankfurter live source, cache fallback, static-table final fallback
 ✔ Target price (per-share) separate from Implied EV
 ✔ Mega-cap: tx comps excluded (weight 0) for MCap >$500B
 ✔ Revenue lock in thesis agent — no cross-section contradictions

@@ -554,6 +554,16 @@ def _fmt_timing_s(v) -> str:
         return s
 
 
+def _short_description(text: str, max_chars: int = 420) -> str:
+    s = str(text or "").strip()
+    if len(s) <= max_chars:
+        return s
+    clipped = s[: max_chars - 1].rstrip()
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return clipped + "…"
+
+
 def _normalize_sector_label(sector: str, industry: str | None = None) -> str:
     s = (sector or "").strip()
     i = (industry or "").strip()
@@ -641,6 +651,34 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             + " | Research depth: " + (_r_depth or "n/a")
             + " | Market context source-backed: " + (_r_backed or "n/a")
         )
+    _ctx_count = pipeline_status.get("market_context_source_count")
+    _ctx_fallback = bool(pipeline_status.get("market_context_fallback_used"))
+    _ctx_date = str(pipeline_status.get("market_context_latest_source_date", "") or "").strip()
+    if _ctx_count is not None:
+        try:
+            _ctx_txt = f"{int(_ctx_count)}"
+        except Exception:
+            _ctx_txt = str(_ctx_count)
+        block += (
+            f"\n  Market context sources: {_ctx_txt}"
+            + (" (fallback-only context)" if _ctx_fallback else "")
+            + (f" | latest source date: {_ctx_date}" if _ctx_date else "")
+        )
+    _filings_count = pipeline_status.get("filings_source_count")
+    if _filings_count is not None:
+        _f_type = str(pipeline_status.get("filings_latest_type", "") or "").strip()
+        _f_date = str(pipeline_status.get("filings_latest_date", "") or "").strip()
+        _f_backed = bool(pipeline_status.get("filings_source_backed"))
+        _filing_desc = (
+            f"{_f_type}" + (f" ({_f_date})" if _f_date else "")
+            if _f_type and _f_type.lower() != "unavailable"
+            else "unavailable"
+        )
+        block += (
+            f"\n  Filing sources: {int(_filings_count) if str(_filings_count).isdigit() else _filings_count}"
+            f" | Latest filing: {_filing_desc}"
+            + (" | source-backed" if _f_backed else " | fallback/unavailable")
+        )
     block += (
         "\n  Research used in valuation: " + _used_in_valuation
         + " | Research used in thesis: " + _used_in_thesis
@@ -680,6 +718,10 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _f_ccy = str(pipeline_status.get("financial_statement_currency", "") or "unknown")
         _m_ccy = str(pipeline_status.get("market_cap_currency", "") or "unknown")
         _listing_type = str(pipeline_status.get("listing_type", "") or "unknown")
+        _selected_listing = str(pipeline_status.get("selected_listing", "") or "unknown")
+        _primary_listing = str(pipeline_status.get("primary_listing", "") or "unknown")
+        _listing_exchange = str(pipeline_status.get("listing_exchange", "") or "unknown")
+        _listing_country = str(pipeline_status.get("listing_country", "") or "unknown")
         _share_basis = str(pipeline_status.get("share_count_basis", "") or "unknown")
         _adr = bool(pipeline_status.get("adr_detected", False))
         _dr = bool(pipeline_status.get("depository_receipt_detected", False))
@@ -700,6 +742,8 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             f"\n    Quote/market cap currency: {_q_ccy}/{_m_ccy}"
             f"\n    Financial statement currency: {_f_ccy}"
             f"\n    Listing type: {_listing_type}"
+            f"\n    Selected/primary listing: {_selected_listing} / {_primary_listing}"
+            f"\n    Listing exchange/country: {_listing_exchange} / {_listing_country}"
             f"\n    Share basis: {_share_basis}"
             f"\n    Depositary receipt status: {_dr_state}"
             + (f" (ratio: {_adr_ratio})" if (_adr or _dr) and _adr_ratio else "")
@@ -845,15 +889,19 @@ def print_result(result, debug: bool = False):
     if _hq and _hq.lower() not in {"none", "n/a", "unknown"}:
         _header_parts.append(_hq)
     _header_line = " | ".join(_header_parts)
+    _short_desc = _short_description(str(f.description or ""))
     console.print(Panel(
         f"{_header_line}\n"
-        f"{f.description}\n\n"
+        f"{_short_desc}\n\n"
         f"Recommendation: [{rec_color}]{v.recommendation}[/] | "
         f"{_target_line}{_headline_tail}",
         title=f"[bold cyan]{result.company}[/]",
         border_style="cyan",
     ))
     _dq = (getattr(result, "data_quality", {}) or {})
+    _sourcing = _dq.get("sourcing", {}) if isinstance(_dq, dict) else {}
+    _ctx_pack = _sourcing.get("market_context_pack", {}) if isinstance(_sourcing, dict) else {}
+    _filings_pack = _sourcing.get("filings_pack", {}) if isinstance(_sourcing, dict) else {}
     if _pipeline_status:
         _status_block, _status_reason = _render_pipeline_status_block(_pipeline_status)
         console.print(_status_block)
@@ -1072,11 +1120,84 @@ def print_result(result, debug: bool = False):
                 cash_table.add_row(_m, _value_with_source(_m, _v))
         if _has_cash_rows:
             console.print(cash_table)
-    if m.key_trends:
+    _has_market_context = bool(m.key_trends) or bool(_ctx_pack)
+    if _has_market_context:
         console.print("\n[bold]Market Context[/]")
+        _ctx_source_backed = bool(_ctx_pack.get("source_backed")) if isinstance(_ctx_pack, dict) else False
+        _ctx_fallback_used = bool(_ctx_pack.get("fallback_used")) if isinstance(_ctx_pack, dict) else False
+        _ctx_source_count = 0
+        if isinstance(_ctx_pack, dict):
+            try:
+                _ctx_source_count = int(_ctx_pack.get("source_count") or 0)
+            except Exception:
+                _ctx_source_count = 0
+        _ctx_latest = ""
+        if isinstance(_ctx_pack, dict):
+            _dates = []
+            for _k in ("trends", "catalysts", "risks"):
+                _rows = _ctx_pack.get(_k)
+                if not isinstance(_rows, list):
+                    continue
+                for _row in _rows:
+                    if isinstance(_row, dict):
+                        _d = str(_row.get("date") or "").strip()
+                        if _d:
+                            _dates.append(_d)
+            if _dates:
+                _ctx_latest = max(_dates)
+        if _ctx_source_backed:
+            _ctx_header = f"Source-backed Market Context — {_ctx_source_count} sources"
+            if _ctx_latest:
+                _ctx_header += f"; latest source date {_ctx_latest}"
+            console.print(f"  [dim]{_ctx_header}.[/dim]")
+        elif _ctx_fallback_used or not _ctx_source_backed:
+            console.print(
+                "  [dim]Fallback Market Context — sector profile only; not source-backed; not used in valuation.[/dim]"
+            )
         for trend in m.key_trends[:4]:
             if str(trend or "").strip():
                 console.print(f"  • {trend}")
+        if debug and isinstance(_ctx_pack, dict) and _ctx_source_backed:
+            _extra_rows: list[str] = []
+            for _label, _k in (("Catalyst", "catalysts"), ("Risk", "risks")):
+                _rows = _ctx_pack.get(_k)
+                if not isinstance(_rows, list):
+                    continue
+                for _row in _rows[:2]:
+                    if not isinstance(_row, dict):
+                        continue
+                    _txt = str(_row.get("text") or "").strip()
+                    if not _txt:
+                        continue
+                    _src = str(_row.get("source") or "unknown").strip()
+                    _d = str(_row.get("date") or "").strip()
+                    _extra_rows.append(
+                        f"  • {_label}: {_txt} [source: {_src}" + (f", date: {_d}]" if _d else "]")
+                    )
+            for _line in _extra_rows[:4]:
+                console.print(_line)
+
+    if isinstance(_filings_pack, dict) and _filings_pack.get("records"):
+        _records = _filings_pack.get("records")
+        if isinstance(_records, list) and _records:
+            console.print("\n[bold]Filing Sources[/]")
+            _sb = bool(_filings_pack.get("source_backed"))
+            _sc = _filings_pack.get("source_count")
+            console.print(
+                f"  [dim]{'Source-backed' if _sb else 'Fallback'} filing pack — "
+                f"{_sc if _sc is not None else 0} source link(s).[/dim]"
+            )
+            for _row in _records[:3]:
+                if not isinstance(_row, dict):
+                    continue
+                _ft = str(_row.get("filing_type") or "unknown").strip()
+                _fd = str(_row.get("filing_date") or "").strip()
+                _fs = str(_row.get("source_name") or "unknown").strip()
+                _fu = str(_row.get("source_url") or "").strip()
+                _line = f"  • {_ft}" + (f" ({_fd})" if _fd else "") + f" — {_fs}"
+                if _fu:
+                    _line += f" — {_fu}"
+                console.print(_line)
 
     # Peer table (auditability)
     if result.peer_comps and result.peer_comps.peers:

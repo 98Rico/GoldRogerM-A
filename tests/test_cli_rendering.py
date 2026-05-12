@@ -147,6 +147,10 @@ def test_pipeline_status_renders_normalization_audit_and_suppression():
             "financial_statement_currency": "NOK",
             "market_cap_currency": "USD",
             "listing_type": "depositary_receipt_likely_unconfirmed",
+            "selected_listing": "NHYDY",
+            "primary_listing": "NHY.OL",
+            "listing_exchange": "OTC",
+            "listing_country": "Norway",
             "share_count_basis": "unknown_depositary_ratio",
             "adr_detected": False,
             "depository_receipt_detected": True,
@@ -161,9 +165,34 @@ def test_pipeline_status_renders_normalization_audit_and_suppression():
     assert "Quote/market cap currency: USD/USD" in block
     assert "Financial statement currency: NOK" in block
     assert "Listing type: depositary_receipt_likely_unconfirmed" in block
+    assert "Selected/primary listing: NHYDY / NHY.OL" in block
+    assert "Listing exchange/country: OTC / Norway" in block
     assert "Depositary receipt status: unresolved / not confirmed" in block
     assert "FX source/confidence: static_fx_table / low (static_table)" in block
     assert "Recommendation suppressed by sanity breaker: data check required." in block
+
+
+def test_pipeline_status_renders_market_context_and_filing_sourcing_lines():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "RESEARCH_PARTIAL_SOURCE_BACKED",
+            "peers": "MIXED_COMPS_OK",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "HOLD / LOW CONVICTION",
+            "research_source": "source_backed",
+            "research_depth": "limited",
+            "market_data_source_backed": "yes",
+            "market_context_source_count": 3,
+            "market_context_fallback_used": False,
+            "filings_source_count": 2,
+            "filings_source_backed": True,
+            "filings_latest_type": "10-K",
+            "filings_latest_date": "2026-02-01",
+        }
+    )
+    assert "Market context sources: 3" in block
+    assert "Filing sources: 2 | Latest filing: 10-K (2026-02-01) | source-backed" in block
 
 
 def test_currency_prefixed_revenue_and_fcf_formatting():
