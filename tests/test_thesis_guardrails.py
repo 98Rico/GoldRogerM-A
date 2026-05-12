@@ -41,6 +41,26 @@ def test_soften_unsourced_scenario_specificity():
     assert "38-40%" not in out
 
 
+def test_soften_specificity_repairs_token_stitch_artifacts():
+    raw = "byresilient marginsin aresilient pricing and compress toresilientas needed"
+    out = _soften_unsourced_scenario_specificity(raw)
+    lowered = out.lower()
+    assert "byresilient" not in lowered
+    assert "marginsin" not in lowered
+    assert "aresilient" not in lowered
+    assert "toresilient" not in lowered
+
+
+def test_soften_specificity_removes_unsourced_dates_and_hard_regulatory_event_claims():
+    raw = "DOJ ruling expected Q4 2026 with 3.2Mt capacity impact by September 2026."
+    out = _soften_unsourced_scenario_specificity(raw)
+    lowered = out.lower()
+    assert "q4 2026" not in lowered
+    assert "september 2026" not in lowered
+    assert "doj ruling expected" not in lowered
+    assert "potential regulatory developments" in lowered
+
+
 def test_fallback_thesis_is_conservative_and_non_numeric():
     th = _build_fallback_thesis(
         company="AAPL",

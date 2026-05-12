@@ -29,6 +29,12 @@ from .data.registry import DEFAULT_REGISTRY
 from .data.source_selector import provider_table
 from .exporters import generate_excel, generate_pptx
 from .orchestrator import run_analysis, run_ma_analysis, run_pipeline
+from .utils.money import (
+    format_money_millions as _fmt_money_human,
+    format_price as _fmt_price_human,
+    normalize_currency_code as _normalize_ccy_code,
+    parse_monetary_to_millions as _parse_money_millions,
+)
 
 console = Console()
 load_dotenv()
@@ -446,11 +452,16 @@ def _split_qualifier(raw: str) -> tuple[str, str]:
 
 
 def _to_float(s: str) -> Optional[float]:
-    t = s.strip().replace(",", "")
+    t = str(s or "").strip().replace(",", "")
     if not t:
         return None
+    _parsed = _parse_money_millions(t)
+    if _parsed is not None:
+        return _parsed
     if t.startswith("$"):
         t = t[1:]
+    elif re.match(r"^[A-Z]{3}\s+", t):
+        t = re.sub(r"^[A-Z]{3}\s+", "", t)
     mult = 1.0
     if t.endswith("T"):
         mult = 1_000_000.0
@@ -470,18 +481,8 @@ def _to_float(s: str) -> Optional[float]:
         return None
 
 
-def _fmt_money_m(v_m: float, prefix: str = "$") -> str:
-    if abs(v_m) >= 1_000_000:
-        body = f"{v_m / 1_000_000:.2f}T"
-    elif abs(v_m) >= 1_000:
-        body = f"{v_m / 1_000:.1f}B"
-    else:
-        body = f"{v_m:,.0f}M"
-    if prefix == "$":
-        return f"${body}"
-    if prefix:
-        return f"{prefix} {body}"
-    return body
+def _fmt_money_m(v_m: float, currency: str = "USD") -> str:
+    return _fmt_money_human(v_m, currency)
 
 
 def _fmt_percentish(raw: str, signed: bool = False) -> str:
@@ -515,7 +516,7 @@ def _format_metric_value(metric: str, value: str) -> str:
         if _ccy:
             _n_ccy = _to_float(_ccy_rest)
             if _n_ccy is not None:
-                return f"{_fmt_money_m(_n_ccy, prefix=_ccy)}{q}"
+                return f"{_fmt_money_m(_n_ccy, currency=_ccy)}{q}"
         n = _to_float(base)
         if n is not None:
             return f"{_fmt_money_m(n)}{q}"
@@ -528,13 +529,13 @@ def _format_metric_value(metric: str, value: str) -> str:
     return raw
 
 
-def _format_valuation_cell(value: Optional[str]) -> str:
+def _format_valuation_cell(value: Optional[str], currency: str = "USD") -> str:
     if not value:
         return "—"
     n = _to_float(value)
     if n is None:
         return value
-    return _fmt_money_m(n)
+    return _fmt_money_m(n, currency=currency)
 
 
 def _fmt_timing_s(v) -> str:
@@ -562,6 +563,45 @@ def _short_description(text: str, max_chars: int = 420) -> str:
     if " " in clipped:
         clipped = clipped.rsplit(" ", 1)[0]
     return clipped + "…"
+
+
+def _extract_first_number(raw: str) -> Optional[float]:
+    txt = str(raw or "").strip()
+    if not txt:
+        return None
+    m = re.search(r"(-?\d[\d,]*\.?\d*)", txt)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except Exception:
+        return None
+
+
+def _extract_two_numbers(raw: str) -> Optional[tuple[float, float]]:
+    txt = str(raw or "").strip()
+    nums = re.findall(r"(-?\d[\d,]*\.?\d*)", txt)
+    if len(nums) < 2:
+        return None
+    try:
+        return float(nums[0].replace(",", "")), float(nums[1].replace(",", ""))
+    except Exception:
+        return None
+
+
+def _run_currency(pipeline_status: dict, src_map: dict[str, dict[str, str]]) -> str:
+    ccy = str((pipeline_status or {}).get("quote_currency") or "").upper().strip()
+    if ccy:
+        norm, _, _ = _normalize_ccy_code(ccy)
+        if norm:
+            return norm
+    mcap_val = str((src_map.get("Market Cap") or {}).get("value") or "").strip()
+    m = re.match(r"^([A-Z]{3})\s+", mcap_val)
+    if m:
+        norm, _, _ = _normalize_ccy_code(m.group(1))
+        if norm:
+            return norm
+    return "USD"
 
 
 def _normalize_sector_label(sector: str, industry: str | None = None) -> str:
@@ -632,8 +672,18 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         str(pipeline_status.get("confidence", "")),
     )
     rec_state = str(pipeline_status.get("recommendation", "N/A"))
-    _used_in_valuation = "no" if research_state in {"SKIPPED_QUICK_MODE", "PARTIAL_FALLBACK", "FAILED"} else "yes"
-    _used_in_thesis = "conservative template only" if research_state in {"PARTIAL_FALLBACK", "FAILED"} else "yes"
+    _qual_backed_avail = pipeline_status.get("source_backed_market_context_available")
+    _qual_backed_used = pipeline_status.get("source_backed_market_context_used_in_thesis")
+    _quant_backed_avail = pipeline_status.get("source_backed_quant_market_inputs_available")
+    _quant_backed_used = pipeline_status.get("source_backed_quant_market_inputs_used_in_valuation")
+    if isinstance(_quant_backed_used, bool):
+        _used_in_valuation = "yes" if _quant_backed_used else "no — qualitative context only"
+    else:
+        _used_in_valuation = "no" if research_state in {"SKIPPED_QUICK_MODE", "PARTIAL_FALLBACK", "FAILED"} else "yes"
+    if isinstance(_qual_backed_used, bool):
+        _used_in_thesis = "yes" if _qual_backed_used else "conservative template only"
+    else:
+        _used_in_thesis = "conservative template only" if research_state in {"PARTIAL_FALLBACK", "FAILED"} else "yes"
     block = (
         "[bold]Pipeline status:[/bold]\n"
         f"  Market data: {market_data_state}\n"
@@ -642,14 +692,28 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         f"  Valuation: {valuation_state}\n"
         f"  Recommendation: {rec_state}"
     )
+    _report_mode = str(pipeline_status.get("report_mode", "") or "").strip().upper()
+    if _report_mode:
+        block += f"\n  Report mode: {_report_mode}"
     _r_src = str(pipeline_status.get("research_source", "") or "").strip()
     _r_depth = str(pipeline_status.get("research_depth", "") or "").strip()
-    _r_backed = str(pipeline_status.get("market_data_source_backed", "") or "").strip()
+    _r_backed = str(
+        pipeline_status.get("market_context_source_backed")
+        or pipeline_status.get("market_data_source_backed")
+        or ""
+    ).strip()
     if _r_src or _r_depth or _r_backed:
         block += (
             "\n  Research source: " + (_r_src or "n/a")
             + " | Research depth: " + (_r_depth or "n/a")
             + " | Market context source-backed: " + (_r_backed or "n/a")
+        )
+    if isinstance(_qual_backed_avail, bool) or isinstance(_quant_backed_avail, bool):
+        block += (
+            "\n  Qualitative source-backed context available: "
+            + ("yes" if bool(_qual_backed_avail) else "no")
+            + " | Quantitative market inputs available: "
+            + ("yes" if bool(_quant_backed_avail) else "no")
         )
     _ctx_count = pipeline_status.get("market_context_source_count")
     _ctx_fallback = bool(pipeline_status.get("market_context_fallback_used"))
@@ -821,27 +885,21 @@ def print_result(result, debug: bool = False):
     _is_inconclusive = (v.recommendation or "").upper().startswith("INCONCLUSIVE")
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow", "INCONCLUSIVE": "magenta"}.get((v.recommendation or "").split(" ")[0], "white")
     _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
+    _run_ccy = _run_currency(_pipeline_status, src_map)
     console.print()
     _target_display = "N/A" if _is_inconclusive else (v.target_price or v.implied_value)
     _confidence = str(_pipeline_status.get("confidence", "")).lower()
     if (not _is_inconclusive) and _confidence == "low" and isinstance(_target_display, str):
-        _m = re.search(r"\$([0-9][0-9,]*\.?[0-9]*)", _target_display)
-        if _m:
-            try:
-                _pt = float(_m.group(1).replace(",", ""))
-                _target_display = f"~${_pt:,.0f}"
-            except Exception:
-                pass
+        _pt = _extract_first_number(_target_display)
+        if _pt is not None:
+            _target_display = f"~{_fmt_price_human(_pt, _run_ccy, decimals=0)}"
     _fv_range = _source_value("Fair Value Range")
     if _fv_range and _confidence == "low":
-        _m = re.match(r"\$([0-9][0-9,]*\.?[0-9]*)\s*[–-]\s*\$([0-9][0-9,]*\.?[0-9]*)", str(_fv_range))
-        if _m:
-            try:
-                _lo = round(float(_m.group(1).replace(",", "")))
-                _hi = round(float(_m.group(2).replace(",", "")))
-                _fv_range = f"${_lo:,}–${_hi:,}"
-            except Exception:
-                pass
+        _rng = _extract_two_numbers(str(_fv_range))
+        if _rng:
+            _lo = round(_rng[0])
+            _hi = round(_rng[1])
+            _fv_range = f"{_fmt_price_human(_lo, _run_ccy, decimals=0)}–{_fmt_price_human(_hi, _run_ccy, decimals=0)}"
     _fv_width = _source_value("Fair Value Range Width")
     _ev_display = (
         f" | Implied EV: {v.implied_value}"
@@ -856,12 +914,10 @@ def print_result(result, debug: bool = False):
     if _is_low_conf and _fv_range and v.target_price:
         _range_label = "Midpoint reference"
         try:
-            _m_rng = re.match(r"\$([0-9][0-9,]*\.?[0-9]*)\s*[–-]\s*\$([0-9][0-9,]*\.?[0-9]*)", str(_fv_range))
-            _m_t = re.search(r"\$([0-9][0-9,]*\.?[0-9]*)", str(_target_display))
-            if _m_rng and _m_t:
-                _lo_n = float(_m_rng.group(1).replace(",", ""))
-                _hi_n = float(_m_rng.group(2).replace(",", ""))
-                _t_n = float(_m_t.group(1).replace(",", ""))
+            _rng = _extract_two_numbers(str(_fv_range))
+            _t_n = _extract_first_number(str(_target_display))
+            if _rng and _t_n is not None:
+                _lo_n, _hi_n = _rng
                 _mid_n = (_lo_n + _hi_n) / 2.0
                 if _mid_n > 0 and abs(_t_n - _mid_n) / _mid_n > 0.03:
                     _range_label = "Base case"
@@ -1039,13 +1095,9 @@ def print_result(result, debug: bool = False):
         _tp_bridge_show = _tp_bridge
         if _is_low_conf:
             _tp_bridge_label = "Indicative value"
-            _m_tp = re.search(r"([0-9][0-9,]*\.?[0-9]*)", str(_tp_bridge))
-            if _m_tp:
-                try:
-                    _v = float(_m_tp.group(1).replace(",", ""))
-                    _tp_bridge_show = f"~${_v:,.0f}"
-                except Exception:
-                    pass
+            _v = _extract_first_number(str(_tp_bridge))
+            if _v is not None:
+                _tp_bridge_show = f"~{_fmt_price_human(_v, _run_ccy, decimals=0)}"
         console.print(
             f"[dim]Bridge:[/] EV {_ev_bridge}{_tag_ev}{_nd_txt} = Equity {_eq_bridge}{_tag_eq} "
             f"→ / Shares {_sh_bridge}{_tag_sh} = {_tp_bridge_label} {_tp_bridge_show}{_tag_tp}"
@@ -1265,9 +1317,9 @@ def print_result(result, debug: bool = False):
             else:
                 source_metric = method.name
             method_note = footnotes.tag(_infer_source_note(source_metric, method.mid or "", src_map))
-            _low = _format_valuation_cell(method.low)
-            _mid = _format_valuation_cell(method.mid)
-            _high = _format_valuation_cell(method.high)
+            _low = _format_valuation_cell(method.low, _run_ccy)
+            _mid = _format_valuation_cell(method.mid, _run_ccy)
+            _high = _format_valuation_cell(method.high, _run_ccy)
             val_table.add_row(
                 method.name,
                 f"{_low}{method_note if method.low else ''}",
@@ -1289,6 +1341,7 @@ def print_result(result, debug: bool = False):
     # Scenarios
     if t.bull_case or t.base_case or t.bear_case:
         console.print("\n[bold]Scenarios:[/]")
+        console.print("  [dim]Scenarios are model-generated watch cases, source-informed, and not individually source-verified.[/dim]")
         if t.bull_case:
             console.print(f"  [green]Bull:[/] {t.bull_case}")
         if t.base_case:
@@ -1325,6 +1378,11 @@ def main():
     parser.add_argument("--pptx", action="store_true", help="Generate PowerPoint deck")
     parser.add_argument("--outdir", default="outputs", help="Output directory for files")
     parser.add_argument("--quick", action="store_true", help="Fast bounded pipeline (deterministic peers + short report; skips deep market research)")
+    parser.add_argument(
+        "--full-report",
+        action="store_true",
+        help="Generate full narrative report (thesis + scenarios + catalysts). Default mode is standard concise report.",
+    )
     parser.add_argument("--interactive", "-i", action="store_true",
                         help="Interactively select data sources before analysis (private companies)")
     parser.add_argument(
@@ -1345,6 +1403,8 @@ def main():
     parser.add_argument("--country-hint", default="", help="Optional ISO-2 country hint for private company resolution (FR/GB/DE/NL/ES/US)")
     parser.add_argument("--debug", action="store_true", help="Show verbose diagnostics (JSON parse/raw search details, full notes)")
     args = parser.parse_args()
+    if args.quick and args.full_report:
+        parser.error("--quick and --full-report cannot be used together")
 
     if args.list_sources:
         rows = provider_table()
@@ -1412,7 +1472,8 @@ def main():
             result = run_analysis(confirmed_company, args.type, llm=args.llm, siren=args.siren,
                                    interactive=args.interactive, data_sources=selected_sources,
                                    country_hint=country_hint, company_identifier=company_identifier,
-                                   quick_mode=args.quick, debug=args.debug, cli_mode=True)
+                                   quick_mode=args.quick, full_report=args.full_report,
+                                   debug=args.debug, cli_mode=True)
             print_result(result, debug=args.debug)
 
         if args.output:

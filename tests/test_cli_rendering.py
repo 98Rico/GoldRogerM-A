@@ -1,4 +1,5 @@
 from goldroger.cli import (
+    _format_valuation_cell,
     _format_metric_value,
     _fmt_timing_s,
     _infer_source_note,
@@ -200,6 +201,12 @@ def test_currency_prefixed_revenue_and_fcf_formatting():
     assert _format_metric_value("Free Cash Flow", "GBP 3000M [check currency/ADR basis]") == "GBP 3.0B [check currency/ADR basis]"
 
 
+def test_non_usd_valuation_cells_do_not_render_dollar_prefix():
+    assert _format_valuation_cell("282934", "GBP").startswith("GBP ")
+    assert _format_valuation_cell("405115", "NOK").startswith("NOK ")
+    assert "$" not in _format_valuation_cell("282934", "GBP")
+
+
 def test_infer_source_note_range_and_midpoint_are_bridge_explicit():
     src_map = {
         "Fair Value Range": {
@@ -219,3 +226,37 @@ def test_infer_source_note_range_and_midpoint_are_bridge_explicit():
     midpoint_note = _infer_source_note("Indicative midpoint", "~$188", src_map)
     assert "valuation_bridge from blended valuation low/high" in range_note
     assert "valuation_bridge from blended valuation mid" in midpoint_note
+
+
+def test_pipeline_status_research_usage_split_is_explicit_and_non_contradictory():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "RESEARCH_PARTIAL_SOURCE_BACKED",
+            "peers": "MIXED_COMPS_OK",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "HOLD / LOW CONVICTION",
+            "source_backed_market_context_available": True,
+            "source_backed_market_context_used_in_thesis": True,
+            "source_backed_quant_market_inputs_available": False,
+            "source_backed_quant_market_inputs_used_in_valuation": False,
+        }
+    )
+    assert "Qualitative source-backed context available: yes | Quantitative market inputs available: no" in block
+    assert "Research used in valuation: no — qualitative context only | Research used in thesis: yes" in block
+
+
+def test_pipeline_status_prefers_market_context_source_backed_field():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "RESEARCH_PARTIAL_SOURCE_BACKED",
+            "peers": "MIXED_COMPS_OK",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "HOLD / LOW CONVICTION",
+            "research_source": "source_backed",
+            "research_depth": "limited",
+            "market_context_source_backed": "yes",
+        }
+    )
+    assert "Market context source-backed: yes" in block

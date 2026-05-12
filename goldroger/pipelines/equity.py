@@ -70,6 +70,8 @@ from goldroger.models import (
     Valuation,
     ValuationMethod,
 )
+from goldroger.utils.money import format_money_millions as _fmt_money_millions
+from goldroger.utils.money import format_price as _fmt_price
 from goldroger.utils.logger import new_run
 from goldroger.utils.sources_log import SourcesLog
 
@@ -94,6 +96,7 @@ _PEER_COMPS_TIMEOUT = 30
 _FINANCIALS_TIMEOUT = 30
 _TX_COMPS_TIMEOUT = 45
 _REPORT_WRITER_TIMEOUT_QUICK = 8
+_REPORT_WRITER_TIMEOUT_STANDARD = 18
 _REPORT_WRITER_TIMEOUT_FULL = 35
 _TOTAL_TIMEOUT_QUICK = 45
 _TOTAL_TIMEOUT_FULL = 120
@@ -283,6 +286,42 @@ def _soften_unsourced_scenario_specificity(text: str) -> str:
     txt = _re.sub(r"\b\d{1,2}(?:\.\d+)?%\s*CAGR\b", "growth trajectory", txt, flags=_re.IGNORECASE)
     # Avoid stale product cycle specifics when unsourced.
     txt = _re.sub(r"\bQ[1-4]\s+20\d{2}\s+earnings\b", "next earnings update", txt, flags=_re.IGNORECASE)
+    # Remove unsourced dated-event precision.
+    txt = _re.sub(
+        r"\bQ[1-4]\s+20\d{2}\b",
+        "upcoming reporting period",
+        txt,
+        flags=_re.IGNORECASE,
+    )
+    txt = _re.sub(
+        r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+20\d{2}\b",
+        "a future period",
+        txt,
+        flags=_re.IGNORECASE,
+    )
+    # Soften hard regulatory event claims when unsourced.
+    txt = _re.sub(
+        r"\b(?:DOJ|DMA|FTC|SEC)\b[^.]*?(?:ruling|decision|approval|ban)[^.]*",
+        "potential regulatory developments that could affect economics",
+        txt,
+        flags=_re.IGNORECASE,
+    )
+    # Replace unsupported exact operational quantities/dates with generic watch language.
+    txt = _re.sub(
+        r"\b(?:\d[\d,.]*\s*(?:Mt|kt|GW|GWh|tons?|tonnes?|capacity))\b",
+        "operational capacity updates",
+        txt,
+        flags=_re.IGNORECASE,
+    )
+    # Repair common token-stitch artifacts after regex replacements.
+    txt = _re.sub(r"\bbyresilient\b", "by resilient", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"\bmarginsin\b", "margins in", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"\baresilient\b", "a resilient", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"\btoresilient\b", "to resilient", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"\btoresilient(?=[a-z])", "to resilient ", txt, flags=_re.IGNORECASE)
+    txt = _re.sub(r"([a-zA-Z])resilient margins", r"\1 resilient margins", txt)
+    txt = _re.sub(r"resilient margins([a-zA-Z])", r"resilient margins \1", txt)
+    txt = _re.sub(r"\s{2,}", " ", txt).strip()
     return txt
 
 
@@ -492,12 +531,14 @@ def run_analysis(
     country_hint: str = "",
     company_identifier: str = "",
     quick_mode: bool = False,
+    full_report: bool = False,
     debug: bool = False,
     cli_mode: bool = False,
 ) -> AnalysisResult:
     log = new_run(company, company_type)
     _run_started = time.time()
     _total_budget_s = _TOTAL_TIMEOUT_QUICK if quick_mode else _TOTAL_TIMEOUT_FULL
+    _report_mode = "quick" if quick_mode else ("full" if full_report else "standard")
     client = _client(llm)
     svc = ValuationService()
     sources = SourcesLog(company)
@@ -1571,7 +1612,10 @@ def run_analysis(
                     "sector_profile_fallback",
                     "inferred",
                 )
-    _market_source_backed = _has_source_backed_market_data(mkt)
+    _market_source_backed = bool(
+        _has_source_backed_market_data(mkt)
+        or (market_context_pack is not None and bool(market_context_pack.source_backed))
+    )
     if (not quick_mode) and market_status == "OK" and (not _market_source_backed):
         market_status = "DEGRADED"
     if market_status == "SKIPPED_QUICK_MODE":
@@ -1668,6 +1712,23 @@ def run_analysis(
                     target_sector=_target_sector,
                     target_industry=_target_industry,
                     target_market_cap=(market_data.market_cap if market_data else None),
+                    target_ticker=(market_data.ticker if market_data else ""),
+                    target_company_name=(market_data.company_name if market_data else ""),
+                    target_country=(
+                        str(market_data.additional_metadata.get("country") or "")
+                        if (market_data and isinstance(market_data.additional_metadata, dict))
+                        else ""
+                    ),
+                    target_primary_listing=(
+                        str(market_data.additional_metadata.get("primary_listing_symbol") or "")
+                        if (market_data and isinstance(market_data.additional_metadata, dict))
+                        else ""
+                    ),
+                    target_underlying_symbol=(
+                        str(market_data.additional_metadata.get("underlying_symbol") or "")
+                        if (market_data and isinstance(market_data.additional_metadata, dict))
+                        else ""
+                    ),
                     min_similarity=(0.40 if _is_mega_tech else 0.0),
                     target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
                     target_growth=(market_data.forward_revenue_growth if market_data else None),
@@ -1682,6 +1743,23 @@ def run_analysis(
                         target_sector=_target_sector,
                         target_industry=_target_industry,
                         target_market_cap=(market_data.market_cap if market_data else None),
+                        target_ticker=(market_data.ticker if market_data else ""),
+                        target_company_name=(market_data.company_name if market_data else ""),
+                        target_country=(
+                            str(market_data.additional_metadata.get("country") or "")
+                            if (market_data and isinstance(market_data.additional_metadata, dict))
+                            else ""
+                        ),
+                        target_primary_listing=(
+                            str(market_data.additional_metadata.get("primary_listing_symbol") or "")
+                            if (market_data and isinstance(market_data.additional_metadata, dict))
+                            else ""
+                        ),
+                        target_underlying_symbol=(
+                            str(market_data.additional_metadata.get("underlying_symbol") or "")
+                            if (market_data and isinstance(market_data.additional_metadata, dict))
+                            else ""
+                        ),
                         min_similarity=0.30,
                         target_ebitda_margin=(market_data.ebitda_margin if market_data else None),
                         target_growth=(market_data.forward_revenue_growth if market_data else None),
@@ -1701,6 +1779,8 @@ def run_analysis(
                     drops.append(f"{peer_multiples.n_dropped_scale} too small for scale")
                 if peer_multiples.n_dropped_bucket:
                     drops.append(f"{peer_multiples.n_dropped_bucket} dropped by bucket balance")
+                if peer_multiples.n_dropped_same_issuer:
+                    drops.append(f"{peer_multiples.n_dropped_same_issuer} alternate listings dropped")
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
                 if peer_multiples.n_valuation_peers > 0:
@@ -1853,7 +1933,18 @@ def run_analysis(
                                 ticker=p.ticker,
                                 bucket=p.bucket,
                                 role=p.role,
-                                market_cap=(f"${p.market_cap/1000:.1f}B" if p.market_cap else None),
+                                market_cap=(
+                                    _fmt_money_millions(
+                                        float(p.market_cap),
+                                        (
+                                            p.quote_currency
+                                            if getattr(p, "quote_currency", None)
+                                            else _quote_ccy
+                                        ),
+                                    )
+                                    if p.market_cap
+                                    else None
+                                ),
                                 ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
                                 ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
                                 ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
@@ -2294,6 +2385,7 @@ def run_analysis(
         ))
 
     # ── 5a. SOTP (conglomerates / multi-segment) ──────────────────────────
+    _quote_ccy = str(normalization_audit.get("quote_currency") or "USD")
     _CONGLOMERATE_KEYWORDS = {"segment", "division", "business unit", "portfolio", "subsidiaries"}
     _desc_lower = (fund.description + " " + fund.business_model).lower()
     if any(kw in _desc_lower for kw in _CONGLOMERATE_KEYWORDS) and result.has_revenue and fin.revenue_current:
@@ -2301,7 +2393,7 @@ def run_analysis(
             import json as _j, re as _r
             sotp_prompt = (
                 f'Company: "{company}". Sector: {fund.sector}. '
-                f'Revenue: ${fin.revenue_current}M total. '
+                f'Revenue: {_quote_ccy} {fin.revenue_current}M total. '
                 f'Description: {fund.description[:300]}. '
                 "List the 2–4 main business segments as a JSON array: "
                 '[{"name":"...", "revenue_pct": 0.X, "ebitda_margin": 0.X, "sector": "..."}]. '
@@ -2331,12 +2423,12 @@ def run_analysis(
                     ValuationMethod(name="SOTP (reference only)", mid=str(round(_sotp.net_ev, 1)), weight=None)
                 )
                 console.print(
-                    f"  [cyan]SOTP ({len(_segments)} segments): Net EV ${_sotp.net_ev:.0f}M "
+                    f"  [cyan]SOTP ({len(_segments)} segments): Net EV {_fmt_money_millions(_sotp.net_ev, _quote_ccy)} "
                     f"(reference only; unverified segment assumptions)[/cyan]"
                 )
                 sources.add_once(
                     "SOTP",
-                    f"${_sotp.net_ev:.0f}M (reference only)",
+                    f"{_fmt_money_millions(_sotp.net_ev, _quote_ccy)} (reference only)",
                     "analysis_output_unverified_segments",
                     "inferred",
                 )
@@ -2356,8 +2448,8 @@ def run_analysis(
         fin.model_dump(), market_data, [], sector=fund.sector or ""
     )[0]
 
-    _ev_str = _fmt_ev_human(blended_ev) if blended_ev else "N/A"
-    _target_price = f"${rec.intrinsic_price:.2f}" if rec.intrinsic_price else None
+    _ev_str = _fmt_ev_human(blended_ev, _quote_ccy) if blended_ev else "N/A"
+    _target_price = _fmt_price(rec.intrinsic_price, _quote_ccy, decimals=2) if rec.intrinsic_price else None
     _raw_rec = rec.recommendation if (result.has_revenue or normalization_blocked) else "N/A"
     _model_signal = _raw_rec
     _raw_signal_label = "Neutral valuation signal"
@@ -2378,6 +2470,16 @@ def run_analysis(
             _model_signal = "BUY / POSITIVE VALUATION SIGNAL"
             _raw_signal_label = "Positive valuation signal"
     _hard_suppression_reasons: list[str] = []
+    _model_equity_val = None
+    _mcap_cmp_upside = None
+    if _md_val and blended_ev is not None:
+        try:
+            _model_equity_val = float(blended_ev) - float(_md_val.net_debt or 0.0)
+            if _md_val.market_cap and _md_val.market_cap > 0:
+                _mcap_cmp_upside = (_model_equity_val - float(_md_val.market_cap)) / float(_md_val.market_cap)
+        except Exception:
+            _model_equity_val = None
+            _mcap_cmp_upside = None
     if normalization_blocked:
         _hard_suppression_reasons.append(
             f"data normalization failed: {normalization_audit.get('reason')}"
@@ -2390,8 +2492,10 @@ def run_analysis(
         and rec.upside_pct is not None
         and rec.upside_pct >= 3.0
     ):
+        _basis_up = _mcap_cmp_upside if _mcap_cmp_upside is not None else rec.upside_pct
+        _basis_txt = "market-cap comparison" if _mcap_cmp_upside is not None else "per-share comparison"
         _hard_suppression_reasons.append(
-            f"model-implied upside {rec.upside_pct:+.1%} exceeds mature-company sanity threshold"
+            f"normalized equity value implies {_basis_up:+.1%} upside vs market cap (basis: {_basis_txt})"
         )
     if (
         company_type == "public"
@@ -2401,8 +2505,10 @@ def run_analysis(
         and rec.upside_pct is not None
         and rec.upside_pct <= -0.80
     ):
+        _basis_dn = _mcap_cmp_upside if _mcap_cmp_upside is not None else rec.upside_pct
+        _basis_txt = "market-cap comparison" if _mcap_cmp_upside is not None else "per-share comparison"
         _hard_suppression_reasons.append(
-            f"model-implied downside {rec.upside_pct:+.1%} exceeds mature-company sanity threshold"
+            f"normalized equity value implies {_basis_dn:+.1%} downside vs market cap (basis: {_basis_txt})"
         )
     if (
         company_type == "public"
@@ -2428,10 +2534,17 @@ def run_analysis(
             "market-cap-to-revenue ratio is extremely low; verify currency and revenue units"
         )
     if _hard_suppression_reasons:
+        _eq_ctx = ""
+        if _model_equity_val is not None and _md_val and _md_val.market_cap is not None:
+            _eq_ctx = (
+                f" Market cap: {_fmt_money_millions(float(_md_val.market_cap), _quote_ccy)}; "
+                f"Model equity value: {_fmt_money_millions(float(_model_equity_val), _quote_ccy)}."
+            )
         console.print(
             "  [red]Sanity breaker triggered:[/red] "
             + "; ".join(_hard_suppression_reasons)
             + ". Recommendation suppressed."
+            + _eq_ctx
         )
         _model_signal = "DATA CHECK REQUIRED"
         _raw_signal_label = "Data check required"
@@ -2511,9 +2624,9 @@ def run_analysis(
             "yfinance_peers", "verified",
         )
 
-    _quote_ccy = str(normalization_audit.get("quote_currency") or "USD")
     val = Valuation(
         current_price=(f"{_quote_ccy} {rec.current_price:.2f}" if rec.current_price else None),
+        currency=_quote_ccy,
         implied_value=_ev_str,
         target_price=_target_price,
         upside_downside=(f"{rec.upside_pct:+.1%}" if rec.upside_pct is not None else "N/A"),
@@ -2546,11 +2659,11 @@ def run_analysis(
             _ev_up = _sr.ev_matrix[_i_up][_ti]
             _ev_dn = _sr.ev_matrix[_i_dn][_ti]
             console.print(
-                f"  [dim]Sensitivity (WACC ±100bps): {_fmt_ev_human(_ev_dn)} to {_fmt_ev_human(_ev_up)}[/dim]"
+                f"  [dim]Sensitivity (WACC ±100bps): {_fmt_ev_human(_ev_dn, _quote_ccy)} to {_fmt_ev_human(_ev_up, _quote_ccy)}[/dim]"
             )
             sources.add_once(
                 "Sensitivity (WACC ±100bps)",
-                f"{_fmt_ev_human(_ev_dn)} to {_fmt_ev_human(_ev_up)}",
+                f"{_fmt_ev_human(_ev_dn, _quote_ccy)} to {_fmt_ev_human(_ev_up, _quote_ccy)}",
                 "valuation_engine",
                 "inferred",
             )
@@ -2685,7 +2798,7 @@ def run_analysis(
             raise ValueError("scenario ordering failed (blended scenario band does not contain base valuation)")
 
         def _fmt_ev(v: float) -> str:
-            return f"${v/1000:.1f}B" if v >= 1000 else f"${v:.0f}M"
+            return _fmt_money_millions(v, _quote_ccy)
 
         football_field = FootballField(
             bear=ScenarioSummary(
@@ -2769,12 +2882,12 @@ def run_analysis(
             _hi = max(_px_low, _px_high, rec.intrinsic_price)
             sources.add(
                 "Fair Value Range",
-                f"${_lo:.2f}–${_hi:.2f}",
+                f"{_fmt_price(_lo, _quote_ccy, decimals=2)}–{_fmt_price(_hi, _quote_ccy, decimals=2)}",
                 "scenario_blended",
                 "inferred",
             )
             result.field_sources["Fair Value Range"] = (
-                f"${_lo:.2f}–${_hi:.2f}",
+                f"{_fmt_price(_lo, _quote_ccy, decimals=2)}–{_fmt_price(_hi, _quote_ccy, decimals=2)}",
                 "scenario_blended",
                 "inferred",
             )
@@ -2879,7 +2992,12 @@ def run_analysis(
     # ── 6. THESIS ─────────────────────────────────────────────────────────
     t0 = _step("Investment Thesis")
     thesis_status = "OK"
-    _report_timeout = _REPORT_WRITER_TIMEOUT_QUICK if quick_mode else _REPORT_WRITER_TIMEOUT_FULL
+    if _report_mode == "quick":
+        _report_timeout = _REPORT_WRITER_TIMEOUT_QUICK
+    elif _report_mode == "full":
+        _report_timeout = _REPORT_WRITER_TIMEOUT_FULL
+    else:
+        _report_timeout = _REPORT_WRITER_TIMEOUT_STANDARD
     if quick_mode:
         _modeled_growth = (result.field_sources.get("Modeled Revenue Growth") or ("N/A", "", ""))[0]
         _fv_range = (result.field_sources.get("Fair Value Range") or ("N/A", "", ""))[0]
@@ -2999,6 +3117,7 @@ def run_analysis(
             "quick_mode": quick_mode,
             "cli_mode": cli_mode,
             "debug_retries": debug,
+            "report_mode": _report_mode,
             "market_context_source_backed": bool(market_context_pack and market_context_pack.source_backed),
             "market_context_trends": [x.text for x in ((market_context_pack.trends if market_context_pack else []) or [])][:4],
             "market_context_catalysts": [x.text for x in ((market_context_pack.catalysts if market_context_pack else []) or [])][:4],
@@ -3064,11 +3183,21 @@ def run_analysis(
         thesis.base_case = _sanitize_thesis_language(thesis.base_case or "")
         thesis.bear_case = _sanitize_thesis_language(thesis.bear_case or "")
         if market_status in {"DEGRADED", "DEGRADED_API_CAPACITY", "FAILED", "TIMEOUT"}:
+            thesis.thesis = _soften_unsourced_scenario_specificity(thesis.thesis or "")
             thesis.bull_case = _soften_unsourced_scenario_specificity(thesis.bull_case or "")
             thesis.base_case = _soften_unsourced_scenario_specificity(thesis.base_case or "")
             thesis.bear_case = _soften_unsourced_scenario_specificity(thesis.bear_case or "")
+            thesis.catalysts = [
+                _soften_unsourced_scenario_specificity(c)
+                for c in (thesis.catalysts or [])
+            ]
+        # Default public reporting should remain concise unless full report is explicitly requested.
+        if _report_mode != "full":
+            thesis.bull_case = ""
+            thesis.base_case = ""
+            thesis.bear_case = ""
 
-    if football_field and thesis:
+    if football_field and thesis and _report_mode == "full":
         if football_field.bear and thesis.bear_case:
             football_field.bear.narrative = thesis.bear_case[:200]
         if football_field.base and thesis.base_case:
@@ -3083,13 +3212,13 @@ def run_analysis(
         if thesis.thesis:
             if _fv_txt and _fv_txt != "N/A":
                 thesis.thesis = _re.sub(
-                    r"(?i)\bfair value\s+\$?\d[\d,]*(?:\.\d+)?\s*(?:-|–|to)\s*\$?\d[\d,]*(?:\.\d+)?",
+                    r"(?i)\bfair value\s+(?:[A-Z]{3}\s+|\$)?\d[\d,]*(?:\.\d+)?\s*(?:-|–|to)\s*(?:[A-Z]{3}\s+|\$)?\d[\d,]*(?:\.\d+)?",
                     f"fair value {_fv_txt}",
                     thesis.thesis,
                 )
             if _pt_txt and _pt_txt != "N/A":
                 thesis.thesis = _re.sub(
-                    r"(?i)\bpoint estimate\s+\$?\d[\d,]*(?:\.\d+)?",
+                    r"(?i)\bpoint estimate\s+(?:[A-Z]{3}\s+|\$)?\d[\d,]*(?:\.\d+)?",
                     f"point estimate {_pt_txt}",
                     thesis.thesis,
                 )
@@ -3307,6 +3436,15 @@ def run_analysis(
     _financial_data_quality_score = max(0, min(100, _financial_data_quality_score))
 
     _confidence_reasons: list[str] = []
+    _profile_for_conf = detect_sector_profile(
+        fund.sector or "",
+        _target_industry if "_target_industry" in locals() else "",
+    )
+    _is_cyclical_profile = _profile_for_conf in {
+        "materials_chemicals_mining",
+        "energy_oil_gas",
+        "industrials",
+    }
     if peer_multiples and peer_multiples.n_valuation_peers < (3 if quick_mode else 5):
         _confidence_reasons.append("weak valuation peer count")
     if peer_multiples and peer_multiples.effective_peer_count > 0 and peer_multiples.effective_peer_count < (3.0 if quick_mode else 5.0):
@@ -3333,6 +3471,10 @@ def run_analysis(
         _confidence_reasons.append("thesis generation degraded")
     if _hard_suppression_reasons:
         _confidence_reasons.append("sanity breaker triggered (recommendation suppressed)")
+    if company_type == "public" and _is_cyclical_profile:
+        _confidence_reasons.append(
+            "commodity/cyclical caution: valuation may reflect current-cycle margins rather than mid-cycle normalization"
+        )
     _dcf_status = "normal"
     _dcf_src = result.field_sources.get("DCF Status")
     if _dcf_src and _dcf_src[0]:
@@ -3355,6 +3497,14 @@ def run_analysis(
         )
     )
     _confidence_level = "Low" if _confidence_is_low else ("Medium" if _confidence_is_medium else "High")
+    if company_type == "public" and _is_cyclical_profile and _confidence_level == "High":
+        _confidence_level = "Medium"
+    if company_type == "public" and _is_cyclical_profile:
+        _cyclical_warn = (
+            "Commodity/cyclical caution: valuation uses current EBITDA margin and may not reflect mid-cycle pricing."
+        )
+        if _cyclical_warn not in quality.warnings:
+            quality.warnings.append(_cyclical_warn)
     if _norm_status == "OK_FX_NORMALIZED" and _confidence_level == "High":
         _confidence_level = "Medium"
     if _norm_share_basis == "foreign_us_listing_unverified_share_basis":
@@ -3434,6 +3584,23 @@ def run_analysis(
         ]
         if _ctx_dates:
             _market_context_latest_date = max(_ctx_dates)
+    _qual_context_backed_available = bool(_market_source_backed)
+    _qual_context_used_in_thesis = bool(_qual_context_backed_available and thesis_status not in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"})
+    _quant_market_inputs_available = bool(
+        _qual_context_backed_available
+        and (
+            (not _text_missing(mkt.market_growth))
+            or (not _text_missing(mkt.market_size))
+        )
+    )
+    # Current prototype does not deterministically map qualitative context into valuation assumptions.
+    _quant_market_inputs_used_in_valuation = False
+    if _qual_context_backed_available and (not _quant_market_inputs_available):
+        if "Source-backed quantitative market assumptions unavailable." not in quality.warnings:
+            quality.warnings.append("Source-backed quantitative market assumptions unavailable.")
+        if quality.score > 84:
+            quality.score = 84
+            quality.tier = _quality_tier(quality.score)
 
     analysis = AnalysisResult(
         company=company,
@@ -3476,7 +3643,11 @@ def run_analysis(
                 "recommendation": _rec,
                 "dcf_status": _dcf_status,
                 "method_dispersion_ratio": round(_method_dispersion_ratio, 3),
-                "method_dispersion_level": _method_dispersion_level,
+                "method_dispersion_level": (
+                    "N/A — valuation scenarios suppressed by sanity breaker"
+                    if _suppressed_no_rating
+                    else _method_dispersion_level
+                ),
                 "effective_peer_count": (round(_eff_peer_count, 2) if _eff_peer_count > 0 else None),
                 "pure_peer_weight": (round(float(peer_multiples.pure_peer_weight_share or 0.0), 4) if peer_multiples else None),
                 "adjacent_peer_weight": (round(float(peer_multiples.adjacent_peer_weight_share or 0.0), 4) if peer_multiples else None),
@@ -3489,6 +3660,11 @@ def run_analysis(
                 "research_source": _research_source,
                 "research_depth": _research_depth,
                 "market_data_source_backed": "yes" if _market_source_backed else "no",
+                "market_context_source_backed": "yes" if _market_source_backed else "no",
+                "source_backed_market_context_available": _qual_context_backed_available,
+                "source_backed_market_context_used_in_thesis": _qual_context_used_in_thesis,
+                "source_backed_quant_market_inputs_available": _quant_market_inputs_available,
+                "source_backed_quant_market_inputs_used_in_valuation": _quant_market_inputs_used_in_valuation,
                 "market_context_source_count": (
                     int(market_context_pack.source_count)
                     if market_context_pack is not None
@@ -3532,6 +3708,7 @@ def run_analysis(
                 "sanity_breaker_triggered": bool(_hard_suppression_reasons),
                 "peer_quality_score": _peer_quality_score,
                 "financial_data_quality_score": _financial_data_quality_score,
+                "report_mode": _report_mode,
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),

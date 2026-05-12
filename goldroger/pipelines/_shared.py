@@ -10,6 +10,7 @@ from rich.console import Console
 from goldroger.agents.llm_client import LLMProvider, build_llm_provider
 from goldroger.data.fetcher import MarketData
 from goldroger.models import Financials, Fundamentals
+from goldroger.utils.money import format_money_millions
 from goldroger.utils.json_parser import parse_model, did_fallback
 
 console = Console()
@@ -122,13 +123,9 @@ def _client(llm_override: str | None = None) -> LLMProvider:
 
 
 # ── Formatting helpers ─────────────────────────────────────────────────────
-def _fmt_ev_human(v_m: float) -> str:
-    """Format EV in USD millions to human-readable string."""
-    if v_m >= 1_000_000:
-        return f"${v_m / 1_000_000:.2f}T"
-    if v_m >= 1_000:
-        return f"${v_m / 1_000:.1f}B"
-    return f"${v_m:.0f}M"
+def _fmt_ev_human(v_m: float, currency: str = "USD") -> str:
+    """Format EV in reporting-currency millions to human-readable string."""
+    return format_money_millions(v_m, currency)
 
 
 # ── Agent runner with retry ────────────────────────────────────────────────

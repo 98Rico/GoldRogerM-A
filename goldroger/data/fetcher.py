@@ -19,6 +19,7 @@ import httpx
 import yfinance as yf
 
 from goldroger.data.sourcing import make_source_result
+from goldroger.utils.money import normalize_currency_code
 from goldroger.utils.cache import company_meta_cache, market_data_cache, ticker_cache
 
 _HTTP = httpx.Client(
@@ -187,6 +188,14 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
         price = info.get("currentPrice") or info.get("regularMarketPrice")
         if not price:
             return None
+        _quote_ccy_raw = str(info.get("currency") or "")
+        _quote_ccy_norm, _quote_norm_note, _quote_unit_factor = normalize_currency_code(_quote_ccy_raw)
+        _price_normalized = False
+        try:
+            price = float(price) * float(_quote_unit_factor or 1.0)
+            _price_normalized = bool(float(_quote_unit_factor or 1.0) != 1.0)
+        except Exception:
+            pass
 
         # ── Annual income statement ───────────────────────────────────────
         revenue_history: list[float] = []
@@ -306,8 +315,9 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
         if not revenue_ttm and not revenue_history:
             return None
 
-        _fin_ccy = str(info.get("financialCurrency") or info.get("currency") or "unknown")
-        _quote_ccy = str(info.get("currency") or "unknown")
+        _fin_ccy_raw = str(info.get("financialCurrency") or info.get("currency") or "unknown")
+        _fin_ccy, _fin_ccy_note, _ = normalize_currency_code(_fin_ccy_raw)
+        _quote_ccy = _quote_ccy_norm or "unknown"
         source_results = {
             "revenue_ttm": make_source_result(
                 revenue_ttm,
@@ -386,7 +396,7 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
             ev_revenue_market=float(ev_revenue) if ev_revenue and ev_revenue > 0 else None,
             pe_ratio=float(trailing_pe) if trailing_pe and trailing_pe > 0 else None,
             forward_pe=float(fwd_pe) if fwd_pe and fwd_pe > 0 else None,
-            analyst_target_price=float(target) if target else None,
+            analyst_target_price=(float(target) * float(_quote_unit_factor or 1.0) if target else None),
             analyst_recommendation=rec,
             interest_expense=interest_expense,
             additional_metadata={
@@ -397,7 +407,10 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
                 "exchange": info.get("exchange") or info.get("fullExchangeName"),
                 "business_summary": info.get("longBusinessSummary"),
                 "quote_currency": info.get("currency"),
-                "financial_currency": info.get("financialCurrency"),
+                "quote_currency_raw": _quote_ccy_raw or "unknown",
+                "quote_currency_normalized": _quote_ccy or "unknown",
+                "financial_currency": _fin_ccy_raw,
+                "financial_currency_normalized": _fin_ccy or "unknown",
                 "market_cap_currency": info.get("currency"),
                 "quote_type": info.get("quoteType"),
                 "quote_source_name": info.get("quoteSourceName"),
@@ -411,6 +424,12 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
                     info.get("sharesPerUnderlying")
                     if info.get("sharesPerUnderlying") is not None
                     else info.get("conversionRatio")
+                ),
+                "quote_price_normalized_to_major": _price_normalized,
+                "quote_price_normalization_factor": float(_quote_unit_factor or 1.0),
+                "quote_price_normalization_note": _quote_norm_note or "",
+                "currency_normalization_note": "; ".join(
+                    [x for x in (_quote_norm_note, _fin_ccy_note) if x]
                 ),
                 "is_adr_hint": bool(
                     (info.get("currency") == "USD")

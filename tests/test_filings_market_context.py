@@ -1,5 +1,5 @@
 from goldroger.data.fetcher import MarketData
-from goldroger.data.filings import FilingRecord, FilingsPack, build_filings_pack
+from goldroger.data.filings import FilingRecord, FilingsPack, build_filings_pack, classify_filing_url
 from goldroger.data.market_context import build_market_context_pack
 from goldroger.utils.cache import filings_meta_cache, market_context_cache
 
@@ -65,7 +65,7 @@ def test_build_filings_pack_uses_website_fallback(monkeypatch):
     assert pack.latest is not None
     assert pack.latest.filing_type == "IR_PROFILE"
     assert pack.latest.source_url == "https://www.example.com/investors"
-    assert any((r.filing_type == "ANNUAL_REPORT_IR") for r in pack.records)
+    assert any((r.filing_type == "ANNUAL_REPORT") for r in pack.records)
 
 
 def test_market_context_pack_source_backed_from_news(monkeypatch):
@@ -143,3 +143,15 @@ def test_market_context_pack_uses_filings_anchor_without_news(monkeypatch):
     assert pack.source_backed is True
     assert pack.source_count >= 1
     assert any("Latest 10-K filing" in x.text for x in pack.trends)
+
+
+def test_filing_url_classification_examples():
+    assert classify_filing_url("https://www.bat.com/investors-and-reporting/results-centre/consensus") == "CONSENSUS_PAGE"
+    assert classify_filing_url("https://www.company.com/investors/annual-report-2025.pdf") == "ANNUAL_REPORT"
+    assert classify_filing_url("https://www.sec.gov/Archives/edgar/data/320193/000032019325000073/aapl-20250329-10q.htm") == "SEC_10Q"
+    assert classify_filing_url("https://www.sec.gov/Archives/edgar/data/320193/000032019325000055/aapl-20241228-8k.htm") == "SEC_8K"
+    assert classify_filing_url("https://www.company.com/news/first-quarter-2026-results") in {
+        "QUARTERLY_REPORT",
+        "PRESS_RELEASE",
+        "RESULTS_CENTRE",
+    }

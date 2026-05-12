@@ -247,6 +247,42 @@ def _extract_report_links(landing_url: str, html: str) -> list[str]:
     return out
 
 
+def classify_filing_url(url: str) -> str:
+    """Deterministic filing/IR link classifier for source labeling."""
+    u = _safe_str(url).lower()
+    if not u:
+        return "UNKNOWN_IR_LINK"
+    # SEC forms
+    if "sec.gov" in u:
+        if "10-k" in u or "10k" in u:
+            return "SEC_10K"
+        if "10-q" in u or "10q" in u:
+            return "SEC_10Q"
+        if "8-k" in u or "8k" in u:
+            return "SEC_8K"
+        if "20-f" in u or "20f" in u:
+            return "SEC_20F"
+        if "6-k" in u or "6k" in u:
+            return "SEC_6K"
+    if "consensus" in u:
+        return "CONSENSUS_PAGE"
+    if any(k in u for k in ("annual-report", "annual_report", "annual report")):
+        return "ANNUAL_REPORT"
+    if u.endswith(".pdf") and any(k in u for k in ("annual", "ar20", "integrated-report")):
+        return "ANNUAL_REPORT"
+    if any(k in u for k in ("quarter", "q1", "q2", "q3", "q4", "interim", "half-year", "halfyear")):
+        return "QUARTERLY_REPORT"
+    if any(k in u for k in ("results-centre", "results-center", "/results")):
+        return "RESULTS_CENTRE"
+    if any(k in u for k in ("presentation", "investor-presentation", "slides")):
+        return "PRESENTATION"
+    if any(k in u for k in ("press-release", "/news/", "/media/", "rns")):
+        return "PRESS_RELEASE"
+    if any(k in u for k in ("investor-relations", "/investors")):
+        return "IR_HOME"
+    return "UNKNOWN_IR_LINK"
+
+
 def _discover_annual_report_records(ir_url: str) -> list[FilingRecord]:
     if not ir_url:
         return []
@@ -260,14 +296,15 @@ def _discover_annual_report_records(ir_url: str) -> list[FilingRecord]:
     links = _extract_report_links(ir_url, text)
     out: list[FilingRecord] = []
     for u in links:
+        ftype = classify_filing_url(u)
         out.append(
             FilingRecord(
-                filing_type="ANNUAL_REPORT_IR",
+                filing_type=ftype,
                 fiscal_period="",
                 filing_date="",
                 accession_number="",
                 source_url=u,
-                source_name="company_ir_annual_report",
+                source_name="company_ir_link",
                 parser_status="ok",
                 confidence="estimated",
             )
@@ -328,7 +365,7 @@ def build_filings_pack(
         records = _fallback_website_record(market_data)
         fallback_used = bool(records)
         if fallback_used:
-            _has_report = any((r.filing_type or "").upper() == "ANNUAL_REPORT_IR" for r in records)
+            _has_report = any((r.filing_type or "").upper() == "ANNUAL_REPORT" for r in records)
             if _has_report:
                 note = "SEC filings unavailable; using company IR profile + annual-report link fallback."
             else:

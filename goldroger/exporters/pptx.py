@@ -35,6 +35,7 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
 from ..models import AcquisitionPipeline, AnalysisResult, FootballField, ICScoreSummary, MAResult, PeerCompsTable
+from ..utils.money import normalize_currency_code
 
 
 # Simple, consistent styling (kept minimal to avoid template dependencies)
@@ -184,11 +185,18 @@ _IC_BLUE = RGBColor(31, 73, 125)
 _IC_TARGET = RGBColor(180, 180, 180)
 
 
+def _result_currency(result: AnalysisResult) -> str:
+    ps = ((result.data_quality or {}).get("pipeline_status") or {}) if isinstance(result.data_quality, dict) else {}
+    ccy = str(ps.get("quote_currency") or getattr(result.valuation, "currency", "") or "USD")
+    norm, _, _ = normalize_currency_code(ccy)
+    return norm or "USD"
+
+
 def _parse_ev_m(s: str | None) -> float | None:
-    """Parse EV string like '$1.2B' or '$450M' to float in $M."""
+    """Parse EV string like 'USD 1.2B', '$1.2B', or '450M' to float in millions."""
     if not s:
         return None
-    m = _re.search(r"\$?([\d.]+)\s*([TBMKtbmk]?)", s.replace(",", ""))
+    m = _re.search(r"(?:[A-Z]{3}\s+|\$)?([\d.]+)\s*([TBMKtbmk]?)", s.replace(",", ""))
     if not m:
         return None
     val = float(m.group(1))
@@ -212,7 +220,7 @@ def _parse_score(s: str | None) -> float | None:
         return None
 
 
-def _add_ff_chart(slide: object, ff: "FootballField") -> None:
+def _add_ff_chart(slide: object, ff: "FootballField", ccy: str) -> None:
     """Add a horizontal clustered bar chart for the football field."""
     bear, base, bull = ff.bear, ff.base, ff.bull
     if not (bear and base and bull):
@@ -260,7 +268,7 @@ def _add_ff_chart(slide: object, ff: "FootballField") -> None:
     chart = chart_shape.chart
     chart.has_legend = True
     chart.has_title = True
-    chart.chart_title.text_frame.text = "Valuation Football Field  ($M EV)"
+    chart.chart_title.text_frame.text = f"Valuation Football Field  ({ccy}M EV)"
 
     for i, colour in enumerate([_BEAR_RED, _BASE_GOLD, _BULL_GREEN]):
         series = chart.series[i]
@@ -307,6 +315,7 @@ def _add_exec_summary_slide(prs: Presentation, result: AnalysisResult) -> None:
     v = result.valuation
     ic = result.ic_score
     fin = result.financials
+    ccy = _result_currency(result)
 
     _add_header(
         slide,
@@ -345,9 +354,9 @@ def _add_exec_summary_slide(prs: Presentation, result: AnalysisResult) -> None:
     p2.alignment = PP_ALIGN.CENTER
     r2 = p2.add_run()
     r2.text = (
-        f"Implied EV: {implied_ev}     |     Revenue: ${revenue}M"
+        f"Implied EV: {implied_ev}     |     Revenue: {revenue}"
         f"     |     EBITDA Margin: {ebitda_m}"
-        f"     |     Upside/Downside: {upside}"
+        f"     |     Upside/Downside: {upside} ({ccy} basis)"
     )
     _set_run(r2, bold=True, size=15, color=NAVY)
 
@@ -390,6 +399,7 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
     fin = result.financials
     v = result.valuation
     t = result.thesis
+    ccy = _result_currency(result)
 
     # 0) Executive Summary (first slide — what a partner reads first)
     _add_exec_summary_slide(prs, result)
@@ -544,9 +554,9 @@ def _build_equity_deck(result: AnalysisResult) -> Presentation:
     ff = result.football_field
     if ff:
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _add_header(slide, "Valuation Football Field — Bear / Base / Bull")
+        _add_header(slide, f"Valuation Football Field — Bear / Base / Bull ({ccy})")
         try:
-            _add_ff_chart(slide, ff)
+            _add_ff_chart(slide, ff, ccy)
         except Exception:
             # Chart failed — fall back to text table
             ff_rows = []

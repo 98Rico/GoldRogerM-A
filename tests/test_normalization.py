@@ -1,4 +1,6 @@
 from goldroger.data.fetcher import MarketData
+from goldroger.finance.core.valuation_service import ValuationService
+from goldroger.finance.valuation.aggregator import ValuationResult
 from goldroger.pipelines.equity import _apply_currency_normalization, _build_data_normalization_audit
 
 
@@ -150,3 +152,41 @@ def test_nhy_local_listing_same_currency_is_ok_without_fx():
     _, audit2, fx_applied = _apply_currency_normalization(md, audit)
     assert fx_applied is False
     assert str(audit2["status"]).upper() == "OK"
+
+
+def test_london_gbp_quote_unit_normalization_prevents_false_extreme_upside():
+    md = MarketData(
+        ticker="BATS.L",
+        company_name="British American Tobacco p.l.c.",
+        sector="Consumer Staples",
+        current_price=3500.0,  # pence/GBp from feed
+        market_cap=100259.0,   # GBP millions
+        shares_outstanding=2864.0,  # millions
+        net_debt=31227.0,
+        revenue_ttm=25610.0,
+        ebitda_ttm=8500.0,
+        additional_metadata={
+            "quote_currency": "GBp",
+            "financial_currency": "GBP",
+            "market_cap_currency": "GBP",
+            "country": "United Kingdom",
+            "quote_type": "EQUITY",
+        },
+    )
+    audit = _build_data_normalization_audit(md)
+    assert str(audit["quote_currency"]) == "GBP"
+    md2, audit2, fx_applied = _apply_currency_normalization(md, audit)
+    # No FX needed, but quote-unit normalization should convert pence -> pounds.
+    assert fx_applied is False
+    assert str(audit2["status"]).upper() in {"OK", "OK_HEURISTIC"}
+    assert md2.current_price is not None
+    assert abs(md2.current_price - 35.0) < 1e-6
+    # Recommendation basis should no longer be absurd from quote-unit mismatch.
+    svc = ValuationService()
+    rec = svc._compute_recommendation(
+        ValuationResult(low=90_000.0, mid=131_486.0, high=170_000.0, blended=131_486.0),
+        md2,
+        [],
+    )
+    assert rec.upside_pct is not None
+    assert -0.80 < rec.upside_pct < 3.0

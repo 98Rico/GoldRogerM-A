@@ -15,6 +15,7 @@ from goldroger.data.sector_multiples import (
     get_sector_rev_growth,
 )
 from goldroger.models import AnalysisResult
+from goldroger.utils.money import format_money_millions, parse_monetary_to_millions
 
 _MISSING = {"", "0", "0.0", "null", "None", "N/A", "n/a", "NA"}
 
@@ -64,6 +65,7 @@ def _fill_fundamentals(result: AnalysisResult, sector: str) -> None:
 
 def _fill_financials(result: AnalysisResult, sector: str) -> None:
     fin = result.financials
+    ccy = str((result.valuation.currency if result.valuation else None) or "USD")
 
     # Revenue — show human-readable placeholder when zero/missing (never display "0.0")
     if _blank(fin.revenue_current):
@@ -91,12 +93,12 @@ def _fill_financials(result: AnalysisResult, sector: str) -> None:
     # Free cash flow — estimate from EBITDA margin and revenue if missing
     if _blank(fin.free_cash_flow) and not _blank(fin.revenue_current):
         try:
-            rev = float(str(fin.revenue_current).replace(",", ""))
+            rev = parse_monetary_to_millions(str(fin.revenue_current))
             if rev > 0:
                 ebitda_m_raw = str(fin.ebitda_margin or "").split()[0].rstrip("%")
                 ebitda_m = float(ebitda_m_raw) / 100 if "%" in str(fin.ebitda_margin or "") else float(ebitda_m_raw)
                 fcf_est = rev * ebitda_m * 0.65  # typical FCF conversion ~65% of EBITDA
-                fin.free_cash_flow = f"${fcf_est:.0f}M [estimated]"
+                fin.free_cash_flow = f"{format_money_millions(fcf_est, ccy)} [estimated]"
         except (ValueError, TypeError):
             pass
 

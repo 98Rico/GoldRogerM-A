@@ -123,6 +123,7 @@ class PeerData:
     market_cap: Optional[float] = None
     sector: Optional[str] = None
     industry: Optional[str] = None
+    quote_currency: Optional[str] = None
     bucket: Optional[str] = None
     role: Optional[str] = None
     include_reason: Optional[str] = None
@@ -167,6 +168,7 @@ class PeerMultiples:
     n_dropped_sanity: int = 0     # peers dropped for extreme multiples
     n_dropped_scale: int = 0      # peers dropped for market-cap scale mismatch
     n_dropped_bucket: int = 0     # peers dropped by bucket-balance policy
+    n_dropped_same_issuer: int = 0  # peers dropped as alternate listing of target
     excluded_details: list[str] = field(default_factory=list)
 
 
@@ -229,6 +231,44 @@ def _weighted_percentile(values: list[float], weights: list[float], pct: float) 
         if run >= threshold:
             return v
     return paired[-1][0]
+
+
+def _issuer_key(name: str) -> str:
+    s = (name or "").lower()
+    s = s.replace("&", " and ")
+    for tok in (
+        " public limited company",
+        " p.l.c.",
+        " plc",
+        " ltd",
+        " limited",
+        " inc",
+        " corporation",
+        " corp",
+        " asa",
+        " nv",
+        " sa",
+        " ag",
+        " group",
+        ".",
+        ",",
+    ):
+        s = s.replace(tok, " ")
+    s = " ".join(s.split())
+    return s
+
+
+def _symbol_aliases(md: MarketData | None) -> set[str]:
+    out: set[str] = set()
+    if not md:
+        return out
+    out.add(str(md.ticker or "").upper())
+    if isinstance(md.additional_metadata, dict):
+        for k in ("underlying_symbol", "primary_listing_symbol", "selected_listing_symbol"):
+            v = str(md.additional_metadata.get(k) or "").strip().upper()
+            if v:
+                out.add(v)
+    return {x for x in out if x}
 
 
 def _similarity_score(target_mcap: float | None, peer_mcap: float | None, target_sector: str, peer_sector: str) -> float:
@@ -1299,6 +1339,11 @@ def build_peer_multiples(
     target_sector: str = "",
     target_industry: str = "",
     target_market_cap: float | None = None,
+    target_ticker: str = "",
+    target_company_name: str = "",
+    target_country: str = "",
+    target_primary_listing: str = "",
+    target_underlying_symbol: str = "",
     min_similarity: float = 0.0,
     target_ebitda_margin: float | None = None,
     target_growth: float | None = None,
@@ -1323,7 +1368,7 @@ def build_peer_multiples(
     """
     peers: list[PeerData] = []
     relaxation_pool: list[tuple[int, PeerData, str]] = []
-    n_no_data = n_sector = n_sanity = n_scale = n_bucket = 0
+    n_no_data = n_sector = n_sanity = n_scale = n_bucket = n_same_issuer = 0
     excluded: list[str] = []
     profile = _target_profile(target_sector, target_industry)
     _is_mega_target = bool(target_market_cap and target_market_cap > 500_000.0)
@@ -1332,6 +1377,15 @@ def build_peer_multiples(
         if _is_mega_target
         else 0.0
     )
+
+    target_aliases = {
+        str(target_ticker or "").upper().strip(),
+        str(target_primary_listing or "").upper().strip(),
+        str(target_underlying_symbol or "").upper().strip(),
+    }
+    target_aliases = {x for x in target_aliases if x}
+    target_key = _issuer_key(target_company_name)
+    target_country_l = str(target_country or "").strip().lower()
 
     # Batch fetch peer market data to reduce quick/full peer-validation latency.
     _md_map: dict[str, Optional[MarketData]] = {}
@@ -1361,6 +1415,24 @@ def build_peer_multiples(
             n_no_data += 1
             excluded.append(f"{ticker}: not found")
             continue
+
+        # Gate 1b — drop alternate listings for the same issuer as target.
+        peer_aliases = _symbol_aliases(md)
+        if target_aliases and (target_aliases & peer_aliases):
+            n_same_issuer += 1
+            excluded.append(
+                f"{ticker}: same issuer as target ({'/'.join(sorted(target_aliases))}) / alternate listing"
+            )
+            continue
+        peer_name_key = _issuer_key(md.company_name or "")
+        peer_country = ""
+        if isinstance(md.additional_metadata, dict):
+            peer_country = str(md.additional_metadata.get("country") or "").strip().lower()
+        if target_key and peer_name_key and target_key == peer_name_key:
+            if not target_country_l or not peer_country or target_country_l == peer_country:
+                n_same_issuer += 1
+                excluded.append(f"{ticker}: same issuer as target ({md.company_name}) / alternate listing")
+                continue
 
         # Gate 2 — sector compatibility
         if target_sector and md.sector:
@@ -1510,6 +1582,11 @@ def build_peer_multiples(
             market_cap=md.market_cap,
             sector=md.sector,
             industry=_industry,
+            quote_currency=(
+                str(md.additional_metadata.get("quote_currency_normalized") or md.additional_metadata.get("quote_currency") or "")
+                if isinstance(md.additional_metadata, dict)
+                else ""
+            ),
             bucket=_bucket,
             role=_role,
             include_reason=include_reason,
@@ -1599,6 +1676,7 @@ def build_peer_multiples(
             n_dropped_sanity=n_sanity,
             n_dropped_scale=n_scale,
             n_dropped_bucket=n_bucket,
+            n_dropped_same_issuer=n_same_issuer,
             excluded_details=excluded[:30],
             source="sector_fallback",
         )
@@ -1701,6 +1779,7 @@ def build_peer_multiples(
         n_dropped_sanity=n_sanity,
         n_dropped_scale=n_scale,
         n_dropped_bucket=n_bucket,
+        n_dropped_same_issuer=n_same_issuer,
         excluded_details=excluded[:30],
         source=("yfinance_peers" if _n_valuation >= MIN_VALID_PEERS else "yfinance_peers_low_confidence"),
     )

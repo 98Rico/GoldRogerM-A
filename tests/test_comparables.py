@@ -288,6 +288,96 @@ def test_networking_bucket_is_capped_for_premium_device_profile():
     assert net_weight <= 0.201
 
 
+def test_bats_peer_set_excludes_bti_as_same_issuer_alternate_listing():
+    peers = {
+        "BTI": MarketData(
+            ticker="BTI",
+            company_name="British American Tobacco p.l.c.",
+            sector="Consumer Defensive",
+            ev_ebitda_market=9.5,
+            market_cap=120_000.0,
+            additional_metadata={
+                "industry": "Tobacco",
+                "country": "United Kingdom",
+                "underlying_symbol": "BATS.L",
+                "primary_listing_symbol": "BATS.L",
+                "selected_listing_symbol": "BTI",
+            },
+        ),
+        "PM": _md("PM", "Consumer Defensive", ev_ebitda=11.0, market_cap=140_000.0, industry="Tobacco"),
+        "MO": _md("MO", "Consumer Defensive", ev_ebitda=9.0, market_cap=90_000.0, industry="Tobacco"),
+    }
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=lambda t: peers.get(t)):
+        result = build_peer_multiples(
+            ["BTI", "PM", "MO"],
+            target_sector="Consumer Staples",
+            target_industry="Tobacco",
+            target_market_cap=100_000.0,
+            target_ticker="BATS.L",
+            target_company_name="British American Tobacco p.l.c.",
+            target_country="United Kingdom",
+            target_primary_listing="BATS.L",
+            target_underlying_symbol="BATS.L",
+            min_valuation_peers=2,
+        )
+    assert all(p.ticker != "BTI" for p in result.peers)
+    assert result.n_dropped_same_issuer >= 1
+    assert any(p.ticker == "PM" for p in result.peers)
+    assert any(p.ticker == "MO" for p in result.peers)
+
+
+def test_nhy_local_peer_set_excludes_otc_alternate_listings():
+    peers = {
+        "NHYDY": MarketData(
+            ticker="NHYDY",
+            company_name="Norsk Hydro ASA",
+            sector="Basic Materials",
+            ev_ebitda_market=5.0,
+            market_cap=23_000.0,
+            additional_metadata={
+                "industry": "Aluminum",
+                "country": "Norway",
+                "underlying_symbol": "NHY.OL",
+                "primary_listing_symbol": "NHY.OL",
+                "selected_listing_symbol": "NHYDY",
+            },
+        ),
+        "NHYKF": MarketData(
+            ticker="NHYKF",
+            company_name="Norsk Hydro ASA",
+            sector="Basic Materials",
+            ev_ebitda_market=5.1,
+            market_cap=23_000.0,
+            additional_metadata={
+                "industry": "Aluminum",
+                "country": "Norway",
+                "underlying_symbol": "NHY.OL",
+                "primary_listing_symbol": "NHY.OL",
+                "selected_listing_symbol": "NHYKF",
+            },
+        ),
+        "AA": _md("AA", "Basic Materials", ev_ebitda=6.2, market_cap=8_000.0, industry="Aluminum"),
+        "RIO": _md("RIO", "Basic Materials", ev_ebitda=7.5, market_cap=120_000.0, industry="Other Industrial Metals & Mining"),
+    }
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=lambda t: peers.get(t)):
+        result = build_peer_multiples(
+            ["NHYDY", "NHYKF", "AA", "RIO"],
+            target_sector="Materials",
+            target_industry="Aluminum",
+            target_market_cap=220_000.0,
+            target_ticker="NHY.OL",
+            target_company_name="Norsk Hydro ASA",
+            target_country="Norway",
+            target_primary_listing="NHY.OL",
+            target_underlying_symbol="NHY.OL",
+            min_valuation_peers=2,
+        )
+    assert all(p.ticker not in {"NHYDY", "NHYKF"} for p in result.peers)
+    assert result.n_dropped_same_issuer >= 2
+    assert any(p.ticker == "AA" for p in result.peers)
+    assert any(p.ticker == "RIO" for p in result.peers)
+
+
 def test_apple_quick_deterministic_reserve_peer_floor():
     peer_universe_cache.clear()
     md = _md(

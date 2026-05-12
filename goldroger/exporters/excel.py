@@ -17,6 +17,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from ..models import AnalysisResult
+from ..utils.money import normalize_currency_code
 
 # ── Palette ────────────────────────────────────────────────────────────────
 NAVY = "1B2A4A"
@@ -135,8 +136,19 @@ def _parse_pct(s: Optional[str]) -> Optional[float]:
 
 
 def _to_m(v: Optional[float]) -> Optional[float]:
-    """Convert raw value to $M."""
+    """Convert raw value to millions."""
     return v / 1e6 if v is not None else None
+
+
+def _result_currency(r: AnalysisResult) -> str:
+    ps = ((r.data_quality or {}).get("pipeline_status") or {}) if isinstance(r.data_quality, dict) else {}
+    ccy = (
+        str(ps.get("quote_currency") or "")
+        or str(getattr(r.valuation, "currency", "") or "")
+        or "USD"
+    )
+    norm, _, _ = normalize_currency_code(ccy)
+    return norm or "USD"
 
 
 # ── Sheet builders ──────────────────────────────────────────────────────────
@@ -144,6 +156,7 @@ def _to_m(v: Optional[float]) -> Optional[float]:
 def _build_dashboard(wb: Workbook, r: AnalysisResult) -> None:
     ws = wb.create_sheet("Dashboard")
     ws.sheet_view.showGridLines = False
+    ccy = _result_currency(r)
 
     # Column widths
     for col, w in zip("ABCDE", [28, 22, 22, 22, 20]):
@@ -221,7 +234,7 @@ def _build_dashboard(wb: Workbook, r: AnalysisResult) -> None:
 
     # Valuation football field
     if v.methods:
-        _style_section(ws, 21, "VALUATION FOOTBALL FIELD  ($)", 5)
+        _style_section(ws, 21, f"VALUATION FOOTBALL FIELD  ({ccy}M)", 5)
         _style_col_headers(ws, 22, ["Method", "Low", "Mid", "High", "Weight"], 1)
         for i, meth in enumerate(v.methods):
             bg = STRIPE if i % 2 == 0 else WHITE
@@ -235,6 +248,7 @@ def _build_dashboard(wb: Workbook, r: AnalysisResult) -> None:
 def _build_dcf_sheet(wb: Workbook, r: AnalysisResult) -> None:
     ws = wb.create_sheet("DCF Model")
     ws.sheet_view.showGridLines = False
+    ccy = _result_currency(r)
 
     for col, w in zip("ABCDEFGHI", [32, 16, 14, 14, 14, 14, 14, 16, 14]):
         ws.column_dimensions[col].width = w
@@ -242,7 +256,7 @@ def _build_dcf_sheet(wb: Workbook, r: AnalysisResult) -> None:
     f, fin, v = r.fundamentals, r.financials, r.valuation
 
     _style_title_row(ws, 1, f"  {f.company_name}  —  DCF Valuation Model  (dynamic)", 8)
-    ws["A2"].value = f"Generated: {datetime.now().strftime('%B %d, %Y')}   |   All values in $M"
+    ws["A2"].value = f"Generated: {datetime.now().strftime('%B %d, %Y')}   |   All values in {ccy}M"
     ws["A2"].font = _font(9, color=MID_GRAY, italic=True)
     ws.merge_cells("A2:H2")
 
@@ -260,7 +274,7 @@ def _build_dcf_sheet(wb: Workbook, r: AnalysisResult) -> None:
         ("WACC", wacc_val, "0.0%", "Weighted Average Cost of Capital"),
         ("Terminal Growth Rate", tgr_val, "0.0%", "Gordon Growth terminal rate"),
         ("FCF / EBITDA Conversion", 0.70, "0%", "Assumed FCF = 70% of EBITDA"),
-        ("Net Debt ($M)", net_debt_m, "#,##0.0", "Total debt minus cash"),
+        (f"Net Debt ({ccy}M)", net_debt_m, "#,##0.0", "Total debt minus cash"),
     ]
     # Row 5 → B5 = WACC, Row 6 → B6 = TGR, Row 7 → B7 = FCF conv, Row 8 → B8 = Net Debt
     for i, (label, value, fmt, note) in enumerate(assumptions, start=5):
@@ -285,7 +299,7 @@ def _build_dcf_sheet(wb: Workbook, r: AnalysisResult) -> None:
     _style_col_headers(
         ws,
         PROJ_HEADER_ROW,
-        ["Year", "Revenue ($M)", "Growth %", "EBITDA Margin", "EBITDA ($M)", "FCF ($M)", "Disc. Factor", "PV of FCF ($M)"],
+        ["Year", f"Revenue ({ccy}M)", "Growth %", "EBITDA Margin", f"EBITDA ({ccy}M)", f"FCF ({ccy}M)", "Disc. Factor", f"PV of FCF ({ccy}M)"],
     )
 
     # Parse projection data from analysis
@@ -358,12 +372,12 @@ def _build_dcf_sheet(wb: Workbook, r: AnalysisResult) -> None:
     row_equity = VAL_START + 5     # 23
 
     val_items = [
-        (row_pv_fcfs, "Sum of PV FCFs ($M)", f"=SUM(H{PROJ_DATA_START}:H{LAST_PROJ_ROW})"),
-        (row_tv, "Terminal Value ($M)", f"=F{LAST_PROJ_ROW}*(1+$B$6)/MAX($B$5-$B$6,0.001)"),
-        (row_pv_tv, "PV of Terminal Value ($M)", f"=B{row_tv}/(1+$B$5)^5"),
-        (row_ev, "Enterprise Value ($M)", f"=B{row_pv_fcfs}+B{row_pv_tv}"),
-        (row_nd, "Less: Net Debt ($M)", "=$B$8"),
-        (row_equity, "Equity Value ($M)", f"=B{row_ev}-B{row_nd}"),
+        (row_pv_fcfs, f"Sum of PV FCFs ({ccy}M)", f"=SUM(H{PROJ_DATA_START}:H{LAST_PROJ_ROW})"),
+        (row_tv, f"Terminal Value ({ccy}M)", f"=F{LAST_PROJ_ROW}*(1+$B$6)/MAX($B$5-$B$6,0.001)"),
+        (row_pv_tv, f"PV of Terminal Value ({ccy}M)", f"=B{row_tv}/(1+$B$5)^5"),
+        (row_ev, f"Enterprise Value ({ccy}M)", f"=B{row_pv_fcfs}+B{row_pv_tv}"),
+        (row_nd, f"Less: Net Debt ({ccy}M)", "=$B$8"),
+        (row_equity, f"Equity Value ({ccy}M)", f"=B{row_ev}-B{row_nd}"),
     ]
 
     for row, label, formula in val_items:
@@ -452,18 +466,19 @@ def _build_comparables_sheet(wb: Workbook, r: AnalysisResult) -> None:
 
 
 def _build_sensitivity_sheet(wb: Workbook, r: AnalysisResult) -> None:
-    """WACC (rows) × Terminal Growth Rate (cols) → Equity Value ($M)."""
+    """WACC (rows) × Terminal Growth Rate (cols) → Equity Value (report currency, millions)."""
     ws = wb.create_sheet("Sensitivity")
     ws.sheet_view.showGridLines = False
 
     v, f, fin = r.valuation, r.fundamentals, r.financials
+    ccy = _result_currency(r)
 
     for col, w in zip("ABCDEFGH", [20, 14, 14, 14, 14, 14, 14, 14]):
         ws.column_dimensions[col].width = w
 
     _style_title_row(
         ws, 1,
-        f"  {f.company_name}  —  Sensitivity: Equity Value ($M) by WACC × Terminal Growth",
+        f"  {f.company_name}  —  Sensitivity: Equity Value ({ccy}M) by WACC × Terminal Growth",
         8,
     )
     ws["A2"].value = "Green = higher equity value   |   Red = lower equity value"
@@ -557,7 +572,7 @@ def _build_sensitivity_sheet(wb: Workbook, r: AnalysisResult) -> None:
     note_row = data_start_row + len(wacc_range) + 2
     ws[f"A{note_row}"].value = (
         "Yellow cell = base case assumptions from DCF Model sheet.  "
-        "Values are equity value ($M) = PV(FCFs) + PV(Terminal Value) − Net Debt."
+        f"Values are equity value ({ccy}M) = PV(FCFs) + PV(Terminal Value) − Net Debt."
     )
     ws[f"A{note_row}"].font = _font(9, color=MID_GRAY, italic=True)
     ws.merge_cells(f"A{note_row}:H{note_row}")
@@ -615,7 +630,7 @@ def _build_financials_sheet(wb: Workbook, r: AnalysisResult) -> None:
 # ── 3-Statement model helpers ─────────────────────────────────────────────────
 
 def _revenue_series_m(r: AnalysisResult) -> list[float]:
-    """Return 5-year projected revenue series in $M."""
+    """Return 5-year projected revenue series in millions."""
     fin = r.financials
     rev0 = _to_m(_parse_num(fin.revenue_current)) or 0.0
     growth = _parse_pct(fin.revenue_growth) or 0.07
@@ -630,11 +645,12 @@ def _build_pl_sheet(wb: Workbook, r: AnalysisResult) -> None:
     ws.sheet_view.showGridLines = False
 
     fin = r.financials
+    ccy = _result_currency(r)
     for col, w in zip("ABCDEFGH", [32, 16, 14, 14, 14, 14, 14, 14]):
         ws.column_dimensions[col].width = w
 
-    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Projected P&L  ($M, 5-year)", 7)
-    ws["A2"].value = "All values in $M  |  Based on stated assumptions"
+    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Projected P&L  ({ccy}M, 5-year)", 7)
+    ws["A2"].value = f"All values in {ccy}M  |  Based on stated assumptions"
     ws["A2"].font = _font(9, color=MID_GRAY, italic=True)
     ws.merge_cells("A2:G2")
 
@@ -695,7 +711,7 @@ def _build_pl_sheet(wb: Workbook, r: AnalysisResult) -> None:
         row += 1
 
     ws["A2"].value = (
-        f"All values $M  |  Revenue growth assumed {(_parse_pct(fin.revenue_growth) or 0.07):.1%}/yr  |"
+        f"All values {ccy}M  |  Revenue growth assumed {(_parse_pct(fin.revenue_growth) or 0.07):.1%}/yr  |"
         f"  EBITDA margin {ebitda_m:.1%}  |  Net margin {net_m:.1%}"
     )
 
@@ -706,11 +722,12 @@ def _build_bs_sheet(wb: Workbook, r: AnalysisResult) -> None:
     ws.sheet_view.showGridLines = False
 
     fin = r.financials
+    ccy = _result_currency(r)
     for col, w in zip("ABCDEFGH", [32, 16, 14, 14, 14, 14, 14, 14]):
         ws.column_dimensions[col].width = w
 
-    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Simplified Balance Sheet  ($M)", 7)
-    ws["A2"].value = "Simplified model — actual figures may vary  |  All values in $M"
+    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Simplified Balance Sheet  ({ccy}M)", 7)
+    ws["A2"].value = f"Simplified model — actual figures may vary  |  All values in {ccy}M"
     ws["A2"].font = _font(9, color=MID_GRAY, italic=True)
     ws.merge_cells("A2:G2")
 
@@ -776,11 +793,12 @@ def _build_cf_sheet(wb: Workbook, r: AnalysisResult) -> None:
     ws.sheet_view.showGridLines = False
 
     fin = r.financials
+    ccy = _result_currency(r)
     for col, w in zip("ABCDEFGH", [32, 16, 14, 14, 14, 14, 14, 14]):
         ws.column_dimensions[col].width = w
 
-    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Cash Flow Statement  ($M)", 7)
-    ws["A2"].value = "Simplified model  |  All values in $M"
+    _style_title_row(ws, 1, f"  {r.fundamentals.company_name}  —  Cash Flow Statement  ({ccy}M)", 7)
+    ws["A2"].value = f"Simplified model  |  All values in {ccy}M"
     ws["A2"].font = _font(9, color=MID_GRAY, italic=True)
     ws.merge_cells("A2:G2")
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from goldroger.data.fetcher import MarketData
 from goldroger.data.filings import FilingsPack
-from goldroger.data.market_context import MarketContextPack
+from goldroger.data.market_context import MarketContextItem, MarketContextPack
 from goldroger.data.comparables import PeerData, PeerMultiples
-from goldroger.models import Fundamentals
+from goldroger.models import Fundamentals, InvestmentThesis
 from goldroger.pipelines.equity import run_analysis
 
 
@@ -213,3 +213,238 @@ def test_pipeline_keeps_aapl_actionable_when_normalization_ok(monkeypatch):
     assert bool(ps.get("sanity_breaker_triggered")) is False
     assert analysis.valuation.recommendation != "INCONCLUSIVE"
     assert str(ps.get("research_enrichment")) == "RESEARCH_SKIPPED_QUICK_MODE"
+    assert str(ps.get("report_mode")) == "quick"
+
+
+def test_standard_report_mode_hides_long_scenario_narratives(monkeypatch):
+    import goldroger.pipelines.equity as eq
+
+    md = MarketData(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        sector="Technology",
+        current_price=200.0,
+        market_cap=4200000.0,
+        shares_outstanding=21000.0,
+        total_debt=120000.0,
+        cash_and_equivalents=60000.0,
+        net_debt=60000.0,
+        enterprise_value=4260000.0,
+        revenue_ttm=400000.0,
+        ebitda_ttm=130000.0,
+        ebitda_margin=0.325,
+        fcf_ttm=95000.0,
+        ev_ebitda_market=25.0,
+        additional_metadata={
+            "industry": "Consumer Electronics",
+            "country": "United States",
+            "exchange": "NMS",
+            "quote_currency": "USD",
+            "financial_currency": "USD",
+            "market_cap_currency": "USD",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "AAPL",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "AAPL", md)
+    monkeypatch.setattr(
+        eq,
+        "build_market_context_pack",
+        lambda **kwargs: MarketContextPack(
+            source_backed=True,
+            source_count=1,
+            trends=[MarketContextItem(text="Demand trend", source="example", date="2026-05-10", confidence="medium", url="https://example.com/a")],
+            catalysts=[],
+            risks=[],
+            fallback_used=False,
+            note="",
+        ),
+    )
+
+    def _parse_with_thesis(agent, company, company_type, context, model_class, fallback, **kwargs):
+        if model_class is Fundamentals:
+            return Fundamentals(
+                company_name=company,
+                description="Stub fundamentals",
+                business_model="Stub business model",
+                sector="Technology",
+            )
+        if model_class is InvestmentThesis:
+            return InvestmentThesis(
+                thesis="Stub thesis",
+                bull_case="Bull narrative with specifics",
+                base_case="Base narrative with specifics",
+                bear_case="Bear narrative with specifics",
+                catalysts=["Catalyst A"],
+            )
+        if hasattr(fallback, "model_copy"):
+            return fallback.model_copy()
+        return fallback
+
+    monkeypatch.setattr(eq, "_parse_with_retry", _parse_with_thesis)
+
+    analysis = run_analysis(
+        "AAPL",
+        company_type="public",
+        quick_mode=False,
+        full_report=False,
+        cli_mode=False,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("report_mode")) == "standard"
+    assert analysis.thesis.bull_case in {"", None}
+    assert analysis.thesis.base_case in {"", None}
+    assert analysis.thesis.bear_case in {"", None}
+
+
+def test_full_report_mode_keeps_scenario_narratives(monkeypatch):
+    import goldroger.pipelines.equity as eq
+
+    md = MarketData(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        sector="Technology",
+        current_price=200.0,
+        market_cap=4200000.0,
+        shares_outstanding=21000.0,
+        total_debt=120000.0,
+        cash_and_equivalents=60000.0,
+        net_debt=60000.0,
+        enterprise_value=4260000.0,
+        revenue_ttm=400000.0,
+        ebitda_ttm=130000.0,
+        ebitda_margin=0.325,
+        fcf_ttm=95000.0,
+        ev_ebitda_market=25.0,
+        additional_metadata={
+            "industry": "Consumer Electronics",
+            "country": "United States",
+            "exchange": "NMS",
+            "quote_currency": "USD",
+            "financial_currency": "USD",
+            "market_cap_currency": "USD",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "AAPL",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "AAPL", md)
+    monkeypatch.setattr(
+        eq,
+        "build_market_context_pack",
+        lambda **kwargs: MarketContextPack(
+            source_backed=True,
+            source_count=1,
+            trends=[MarketContextItem(text="Demand trend", source="example", date="2026-05-10", confidence="medium", url="https://example.com/a")],
+            catalysts=[],
+            risks=[],
+            fallback_used=False,
+            note="",
+        ),
+    )
+
+    def _parse_with_thesis(agent, company, company_type, context, model_class, fallback, **kwargs):
+        if model_class is Fundamentals:
+            return Fundamentals(
+                company_name=company,
+                description="Stub fundamentals",
+                business_model="Stub business model",
+                sector="Technology",
+            )
+        if model_class is InvestmentThesis:
+            return InvestmentThesis(
+                thesis="Stub thesis",
+                bull_case="Bull narrative with specifics",
+                base_case="Base narrative with specifics",
+                bear_case="Bear narrative with specifics",
+                catalysts=["Catalyst A"],
+            )
+        if hasattr(fallback, "model_copy"):
+            return fallback.model_copy()
+        return fallback
+
+    monkeypatch.setattr(eq, "_parse_with_retry", _parse_with_thesis)
+
+    analysis = run_analysis(
+        "AAPL",
+        company_type="public",
+        quick_mode=False,
+        full_report=True,
+        cli_mode=False,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("report_mode")) == "full"
+    assert analysis.thesis.bull_case == "Bull narrative with specifics"
+    assert analysis.thesis.base_case == "Base narrative with specifics"
+    assert analysis.thesis.bear_case == "Bear narrative with specifics"
+
+
+def test_source_backed_context_without_quant_inputs_stays_qualitative_only(monkeypatch):
+    import goldroger.pipelines.equity as eq
+
+    md = MarketData(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        sector="Technology",
+        current_price=200.0,
+        market_cap=4200000.0,
+        shares_outstanding=21000.0,
+        total_debt=120000.0,
+        cash_and_equivalents=60000.0,
+        net_debt=60000.0,
+        enterprise_value=4260000.0,
+        revenue_ttm=400000.0,
+        ebitda_ttm=130000.0,
+        ebitda_margin=0.325,
+        fcf_ttm=95000.0,
+        ev_ebitda_market=25.0,
+        additional_metadata={
+            "industry": "Consumer Electronics",
+            "country": "United States",
+            "exchange": "NMS",
+            "quote_currency": "USD",
+            "financial_currency": "USD",
+            "market_cap_currency": "USD",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "AAPL",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "AAPL", md)
+    monkeypatch.setattr(
+        eq,
+        "build_market_context_pack",
+        lambda **kwargs: MarketContextPack(
+            source_backed=True,
+            source_count=2,
+            trends=[
+                MarketContextItem(
+                    text="Demand trend (source-backed)",
+                    source="example",
+                    date="2026-05-10",
+                    confidence="medium",
+                    url="https://example.com/a",
+                )
+            ],
+            catalysts=[],
+            risks=[],
+            fallback_used=False,
+            note="",
+        ),
+    )
+
+    analysis = run_analysis(
+        "AAPL",
+        company_type="public",
+        quick_mode=False,
+        full_report=False,
+        cli_mode=False,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("market_context_source_backed")) == "yes"
+    assert str(ps.get("research_source")) == "source_backed"
+    assert bool(ps.get("source_backed_market_context_available")) is True
+    # Qualitative context is available, but quant assumptions still unresolved in this stub.
+    assert bool(ps.get("source_backed_quant_market_inputs_available")) is False
+    assert bool(ps.get("source_backed_quant_market_inputs_used_in_valuation")) is False

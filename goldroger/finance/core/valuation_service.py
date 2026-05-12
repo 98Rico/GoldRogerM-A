@@ -29,6 +29,7 @@ from typing import Optional
 from goldroger.config import DEFAULT_CONFIG as _cfg
 from goldroger.data.fx import get_fx_rate
 from goldroger.data.sector_multiples import get_sector_multiples, is_financial_sector
+from goldroger.utils.money import format_money_millions, format_price, normalize_currency_code
 from goldroger.finance.core.wacc import (
     compute_capm_wacc,
     capm_cost_of_equity,
@@ -121,6 +122,21 @@ def compute_valuation_weights(
 class ValuationService:
     PROJECTION_YEARS = 5
 
+    @staticmethod
+    def _report_currency(assumptions: dict, market_data) -> str:
+        ccy = str(assumptions.get("normalization_quote_currency") or "").strip().upper()
+        if ccy:
+            return ccy
+        if market_data and isinstance(getattr(market_data, "additional_metadata", None), dict):
+            raw = str(
+                market_data.additional_metadata.get("quote_currency_normalized")
+                or market_data.additional_metadata.get("quote_currency")
+                or "USD"
+            )
+            norm, _, _ = normalize_currency_code(raw)
+            return norm or "USD"
+        return "USD"
+
     def run_full_valuation(
         self,
         financials: dict,
@@ -131,6 +147,7 @@ class ValuationService:
     ) -> FullValuationOutput:
 
         sector_m = get_sector_multiples(sector)
+        report_ccy = self._report_currency(assumptions, market_data)
         notes: list[str] = []
         use_financial_path = is_financial_sector(sector)
 
@@ -240,7 +257,7 @@ class ValuationService:
         # ── Populate field_sources ────────────────────────────────────────
         _rev_src = market_data.data_source if market_data else "llm"
         _rev_val = market_data.revenue_ttm if market_data and market_data.revenue_ttm else revenue_current
-        field_sources["Revenue TTM"] = (f"${_rev_val:.0f}M", _rev_src, rev_confidence)
+        field_sources["Revenue TTM"] = (format_money_millions(_rev_val, report_ccy), _rev_src, rev_confidence)
         field_sources["EBITDA Margin"] = (f"{ebitda_margin:.1%}", _rev_src, ebitda_confidence)
         field_sources["WACC"] = (f"{wacc:.2%}", "capm_model", wacc_confidence)
         field_sources["Terminal Growth"] = (f"{terminal_growth:.2%}", "sector_default", "inferred")
@@ -264,13 +281,13 @@ class ValuationService:
                 f"{market_data.forward_revenue_growth:+.1%}", _fg_src, _fg_conf
             )
         if market_data and market_data.market_cap:
-            field_sources["Market Cap"] = (f"${market_data.market_cap:.0f}M", _rev_src, "verified")
+            field_sources["Market Cap"] = (format_money_millions(market_data.market_cap, report_ccy), _rev_src, "verified")
         if market_data and market_data.ev_ebitda_market:
             field_sources["EV/EBITDA (market)"] = (
                 f"{market_data.ev_ebitda_market:.1f}x", _rev_src, "verified"
             )
         if market_data and market_data.net_debt is not None:
-            field_sources["Net Debt"] = (f"${market_data.net_debt:.0f}M", _rev_src, "verified")
+            field_sources["Net Debt"] = (format_money_millions(market_data.net_debt, report_ccy), _rev_src, "verified")
 
         # ── 3. DCF ───────────────────────────────────────────────────────
         dcf_input = DCFInput(
@@ -298,9 +315,11 @@ class ValuationService:
             _terminal_fcf = _y5_fcf * (1 + terminal_growth) if _y5_fcf else 0.0
             _tv_undisc = dcf_output.terminal_value * ((1 + wacc) ** len(revenue_series)) if revenue_series else 0.0
             notes.append(
-                f"DCF calibration — Starting FCF: ${_fcf0:.0f}M; Year-5 FCF: ${_y5_fcf:.0f}M; "
-                f"Terminal FCF: ${_terminal_fcf:.0f}M; WACC: {wacc:.1%}; TG: {terminal_growth:.1%}; "
-                f"Terminal value (undiscounted): ${_tv_undisc:.0f}M."
+                f"DCF calibration — Starting FCF: {format_money_millions(_fcf0, report_ccy)}; "
+                f"Year-5 FCF: {format_money_millions(_y5_fcf, report_ccy)}; "
+                f"Terminal FCF: {format_money_millions(_terminal_fcf, report_ccy)}; "
+                f"WACC: {wacc:.1%}; TG: {terminal_growth:.1%}; "
+                f"Terminal value (undiscounted): {format_money_millions(_tv_undisc, report_ccy)}."
             )
             if _y5_ebitda and dcf_output.enterprise_value > 0:
                 _implied_exit = dcf_output.enterprise_value / _y5_ebitda
@@ -355,7 +374,8 @@ class ValuationService:
                             f"DCF implied {_implied_exit:.1f}x."
                         )
                         notes.append(
-                            f"Normalized terminal multiple cross-check: {_anchor_mult:.1f}x implies EV ${_anchor_ev:.0f}M."
+                            f"Normalized terminal multiple cross-check: {_anchor_mult:.1f}x implies EV "
+                            f"{format_money_millions(_anchor_ev, report_ccy)}."
                         )
                         if _implied_exit < (0.6 * min(_anchor_candidates)):
                             notes.append(
@@ -783,7 +803,7 @@ class ValuationService:
                         "Discount rationale to test: growth deceleration, innovation exposure, and cyclicality."
                     )
         field_sources["Enterprise Value (blended)"] = (
-            f"${blended.blended:.0f}M",
+            format_money_millions(blended.blended, report_ccy),
             "valuation_engine",
             "inferred",
         )
@@ -796,7 +816,7 @@ class ValuationService:
             net_debt = market_data.net_debt or 0.0
             equity_value = blended.blended - net_debt
             field_sources["Equity Value"] = (
-                f"${equity_value:.0f}M",
+                format_money_millions(equity_value, report_ccy),
                 "valuation_bridge",
                 "verified",
             )
@@ -806,7 +826,7 @@ class ValuationService:
                 "verified",
             )
             field_sources["Implied Target Price"] = (
-                f"${recommendation.intrinsic_price:.2f}",
+                format_price(recommendation.intrinsic_price, report_ccy, decimals=2),
                 "valuation_bridge",
                 "verified",
             )
@@ -845,7 +865,8 @@ class ValuationService:
                     _px_lo = (_ev_lo - _nd) / market_data.shares_outstanding
                     _px_hi = (_ev_hi - _nd) / market_data.shares_outstanding
                     field_sources["Fair Value Range"] = (
-                        f"${min(_px_lo, _px_hi):.2f}–${max(_px_lo, _px_hi):.2f}",
+                        f"{format_price(min(_px_lo, _px_hi), report_ccy, decimals=2)}–"
+                        f"{format_price(max(_px_lo, _px_hi), report_ccy, decimals=2)}",
                         "valuation_sensitivity",
                         "inferred",
                     )
@@ -1074,6 +1095,7 @@ class ValuationService:
     def _financial_comps(self, market_data, sector_m, notes):
         """P/E and P/B based equity valuation for banks/insurers."""
         notes.append("Financial sector detected — using P/E + P/B valuation path.")
+        report_ccy = self._report_currency({}, market_data)
 
         pe_low, _, pe_high = sector_m.pe_range or (10.0, 13.0, 17.0)
         _, pb_mid, _ = sector_m.pb_range or (0.8, 1.2, 1.8)
@@ -1084,7 +1106,7 @@ class ValuationService:
             pe_ev_low = fwd_earnings * pe_low
             pe_ev_high = fwd_earnings * pe_high
             notes.append(
-                f"P/E comps: fwd earnings ${fwd_earnings:.0f}M × "
+                f"P/E comps: fwd earnings {format_money_millions(fwd_earnings, report_ccy)} × "
                 f"{pe_low:.0f}x–{pe_high:.0f}x P/E."
             )
         elif market_data and market_data.net_income_ttm:
@@ -1106,7 +1128,7 @@ class ValuationService:
         if market_data and market_data.total_equity:
             pb_ev = market_data.total_equity * pb_mid
             notes.append(
-                f"P/B comps: book equity ${market_data.total_equity:.0f}M × {pb_mid:.1f}x P/B."
+                f"P/B comps: book equity {format_money_millions(market_data.total_equity, report_ccy)} × {pb_mid:.1f}x P/B."
             )
         else:
             pb_ev = comps.mid
@@ -1252,7 +1274,7 @@ class ValuationService:
             # (excess cash is treated as unlevered balance sheet, not negative leverage)
             if net_debt < 0:
                 notes.append(
-                    f"Net cash position (net debt ${net_debt:.0f}M) — "
+                    f"Net cash position (net debt {format_money_millions(net_debt, self._report_currency(assumptions, market_data))}) — "
                     "WACC computed as unlevered (D=0 in weights)."
                 )
             wacc = compute_capm_wacc(
@@ -1331,7 +1353,10 @@ class ValuationService:
     def _compute_recommendation(self, blended, market_data, notes):
         ev_blended = blended.blended
         intrinsic_price = current_price = market_cap = upside_pct = None
+        _upside_price_basis: Optional[float] = None
+        _upside_mcap_basis: Optional[float] = None
         rec = "HOLD"
+        report_ccy = self._report_currency({}, market_data)
 
         if (
             market_data
@@ -1345,7 +1370,29 @@ class ValuationService:
             intrinsic_price = equity_value / market_data.shares_outstanding
             current_price = market_data.current_price
             market_cap = market_data.market_cap
-            upside_pct = (intrinsic_price - current_price) / current_price
+            _upside_price_basis = (
+                (intrinsic_price - current_price) / current_price
+                if current_price
+                else None
+            )
+            _upside_mcap_basis = (
+                (equity_value - market_cap) / market_cap
+                if market_cap
+                else None
+            )
+            upside_pct = _upside_price_basis
+            if (
+                _upside_price_basis is not None
+                and _upside_mcap_basis is not None
+                and abs(_upside_price_basis - _upside_mcap_basis) > 0.25
+            ):
+                # Prefer market-cap basis when per-share and market-cap comparisons diverge
+                # materially. This protects against quote-unit/share-basis edge cases.
+                upside_pct = _upside_mcap_basis
+                notes.append(
+                    "Upside basis reconciled to market-cap comparison due to "
+                    "material per-share/market-cap mismatch."
+                )
 
             if upside_pct > 0.15:
                 rec = "BUY"
@@ -1353,9 +1400,15 @@ class ValuationService:
                 rec = "SELL"
 
             notes.append(
-                f"Intrinsic ${intrinsic_price:.2f} vs market ${current_price:.2f} "
+                f"Intrinsic {format_price(intrinsic_price, report_ccy, decimals=2, per_share=True)} "
+                f"vs market {format_price(current_price, report_ccy, decimals=2, per_share=True)} "
                 f"→ {upside_pct:+.1%} → {rec}."
             )
+            if _upside_price_basis is not None and _upside_mcap_basis is not None:
+                notes.append(
+                    f"Upside basis diagnostics: per-share {_upside_price_basis:+.1%}; "
+                    f"market-cap {_upside_mcap_basis:+.1%}."
+                )
         else:
             notes.append("Recommendation defaulted to HOLD (no live price data).")
 
