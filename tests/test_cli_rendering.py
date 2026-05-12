@@ -41,7 +41,8 @@ def test_pipeline_status_block_is_normalized_and_compact():
     assert "Peers: PEERS_FAILED" in block
     assert "Valuation: LOW_CONFIDENCE" in block
     assert "Recommendation: HOLD / LOW CONVICTION" in block
-    assert "Research source: fallback | Research depth: limited | Market context source-backed: no" in block
+    assert "Research collection: fallback | Qualitative context: fallback | Quantitative market inputs: unavailable" in block
+    assert "Thesis mode: deterministic fallback" in block
     assert "Research used in valuation: no | Research used in thesis: conservative template only" in block
     assert reason == "DCF/comps disagreement"
 
@@ -102,7 +103,8 @@ def test_pipeline_status_skipped_quick_mode_uses_skipped_research_source():
         }
     )
     assert "Research: SKIPPED_QUICK_MODE" in block
-    assert "Research source: skipped | Research depth: none | Market context source-backed: no" in block
+    assert "Research collection: skipped_quick_mode" in block
+    assert "Thesis mode: deterministic fallback" in block
 
 
 def test_fmt_timing_s_hides_none_like_values():
@@ -185,6 +187,8 @@ def test_pipeline_status_renders_market_context_and_filing_sourcing_lines():
             "research_depth": "limited",
             "market_data_source_backed": "yes",
             "market_context_source_count": 3,
+            "market_context_relevant_source_count": 3,
+            "market_context_fetched_source_count": 8,
             "market_context_fallback_used": False,
             "filings_source_count": 2,
             "filings_source_backed": True,
@@ -192,7 +196,7 @@ def test_pipeline_status_renders_market_context_and_filing_sourcing_lines():
             "filings_latest_date": "2026-02-01",
         }
     )
-    assert "Market context sources: 3" in block
+    assert "Market context sources: 3 relevant / 8 fetched" in block
     assert "Filing sources: 2 | Latest filing: 10-K (2026-02-01) | source-backed" in block
 
 
@@ -259,4 +263,4 @@ def test_pipeline_status_prefers_market_context_source_backed_field():
             "market_context_source_backed": "yes",
         }
     )
-    assert "Market context source-backed: yes" in block
+    assert "Research collection: source-backed" in block

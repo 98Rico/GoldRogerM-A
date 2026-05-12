@@ -94,10 +94,9 @@ def test_market_context_pack_source_backed_from_news(monkeypatch):
         industry="Consumer Electronics",
         filings_pack=None,
     )
-    assert pack.source_backed is True
-    assert pack.source_count >= 1
-    assert any("guidance" in x.text.lower() for x in pack.catalysts)
-    assert any("probe" in x.text.lower() for x in pack.risks)
+    assert pack.source_backed is False
+    assert pack.fallback_used is True
+    assert pack.relevant_source_count == 0
 
 
 def test_market_context_pack_falls_back_to_sector_profile(monkeypatch):
@@ -140,9 +139,116 @@ def test_market_context_pack_uses_filings_anchor_without_news(monkeypatch):
             records=[filing],
         ),
     )
+    assert pack.source_backed is False
+    assert pack.fallback_used is True
+    assert pack.relevant_source_count >= 1
+
+
+def test_market_context_relevance_filters_out_irrelevant_aapl_items(monkeypatch):
+    market_context_cache.clear()
+    monkeypatch.setattr(
+        "goldroger.data.market_context._extract_news_entries",
+        lambda ticker, count=10: [
+            {"title": "Fast food stocks rally on consumer traffic", "url": "https://news.example.com/fast-food", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "Alibaba earnings beat expectations", "url": "https://news.example.com/alibaba", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "Tower Semiconductor posts mixed quarter", "url": "https://news.example.com/tower", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "Apple updates App Store policy guidance", "url": "https://news.example.com/apple-app-store", "source": "ExampleWire", "date": "2026-05-10"},
+        ],
+    )
+    filing = FilingRecord(
+        filing_type="10-K",
+        filing_date="2026-03-01",
+        accession_number="0000320193-26-000001",
+        source_url="https://www.sec.gov/Archives/edgar/data/320193/test.htm",
+        source_name="sec_edgar_submissions",
+        confidence="verified",
+    )
+    pack = build_market_context_pack(
+        company="Apple Inc.",
+        ticker="AAPL_RELEVANCE",
+        sector="Technology",
+        industry="Consumer Electronics",
+        filings_pack=FilingsPack(
+            company="Apple Inc.",
+            ticker="AAPL",
+            source_backed=True,
+            source_count=1,
+            records=[filing],
+        ),
+    )
+    rendered = " ".join([x.text for x in [*pack.trends, *pack.catalysts, *pack.risks]]).lower()
+    assert "fast food" not in rendered
+    assert "alibaba" not in rendered
+    assert "tower semiconductor" not in rendered
+    assert "app store" in rendered
+    assert pack.relevant_source_count >= 2
+    assert pack.fetched_source_count >= 4
     assert pack.source_backed is True
-    assert pack.source_count >= 1
-    assert any("Latest 10-K filing" in x.text for x in pack.trends)
+
+
+def test_market_context_requires_at_least_two_relevant_sources(monkeypatch):
+    market_context_cache.clear()
+    monkeypatch.setattr(
+        "goldroger.data.market_context._extract_news_entries",
+        lambda ticker, count=10: [
+            {"title": "Apple launches new iPhone cycle", "url": "https://news.example.com/apple-launch", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "Global macro roundup", "url": "https://news.example.com/macro", "source": "ExampleWire", "date": "2026-05-10"},
+        ],
+    )
+    pack = build_market_context_pack(
+        company="Apple Inc.",
+        ticker="AAPL_MIN_SRC",
+        sector="Technology",
+        industry="Consumer Electronics",
+        filings_pack=None,
+    )
+    assert pack.relevant_source_count <= 1
+    assert pack.source_backed is False
+    assert pack.fallback_used is True
+
+
+def test_market_context_accepts_tobacco_relevant_items(monkeypatch):
+    market_context_cache.clear()
+    monkeypatch.setattr(
+        "goldroger.data.market_context._extract_news_entries",
+        lambda ticker, count=10: [
+            {"title": "BAT pricing and nicotine category update", "url": "https://news.example.com/bat-pricing", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "PM and MO discuss reduced-risk product momentum", "url": "https://news.example.com/pm-mo-rrp", "source": "ExampleWire", "date": "2026-05-09"},
+            {"title": "Excise tax proposals could pressure tobacco margins", "url": "https://news.example.com/excise", "source": "ExampleWire", "date": "2026-05-08"},
+        ],
+    )
+    pack = build_market_context_pack(
+        company="British American Tobacco p.l.c.",
+        ticker="BATS.L_CTX",
+        sector="Consumer Staples",
+        industry="Tobacco",
+        filings_pack=None,
+    )
+    rendered = " ".join([x.text for x in [*pack.trends, *pack.catalysts, *pack.risks]]).lower()
+    assert "tobacco" in rendered or "nicotine" in rendered
+    assert pack.relevant_source_count >= 2
+
+
+def test_market_context_accepts_nhy_aluminum_relevant_items(monkeypatch):
+    market_context_cache.clear()
+    monkeypatch.setattr(
+        "goldroger.data.market_context._extract_news_entries",
+        lambda ticker, count=10: [
+            {"title": "Norsk Hydro updates low-carbon aluminum and recycling strategy", "url": "https://news.example.com/hydro-recycling", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "LME aluminum pricing and energy costs remain key for margins", "url": "https://news.example.com/lme-energy", "source": "ExampleWire", "date": "2026-05-09"},
+            {"title": "CBAM policy updates may affect European aluminum flows", "url": "https://news.example.com/cbam", "source": "ExampleWire", "date": "2026-05-08"},
+        ],
+    )
+    pack = build_market_context_pack(
+        company="Norsk Hydro ASA",
+        ticker="NHY.OL_CTX",
+        sector="Materials",
+        industry="Aluminum",
+        filings_pack=None,
+    )
+    rendered = " ".join([x.text for x in [*pack.trends, *pack.catalysts, *pack.risks]]).lower()
+    assert any(k in rendered for k in ("aluminum", "aluminium", "lme", "recycling", "cbam"))
+    assert pack.relevant_source_count >= 2
 
 
 def test_filing_url_classification_examples():

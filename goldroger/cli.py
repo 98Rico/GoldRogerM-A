@@ -684,6 +684,32 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _used_in_thesis = "yes" if _qual_backed_used else "conservative template only"
     else:
         _used_in_thesis = "conservative template only" if research_state in {"PARTIAL_FALLBACK", "FAILED"} else "yes"
+    _research_source_raw = str(pipeline_status.get("research_source", "") or "").strip().lower()
+    if research_state == "FAILED":
+        _research_collection = "failed"
+    elif research_state == "SKIPPED_QUICK_MODE":
+        _research_collection = "skipped_quick_mode"
+    elif _research_source_raw == "source_backed":
+        _research_collection = "source-backed"
+    elif _research_source_raw == "fallback":
+        _research_collection = "fallback"
+    else:
+        _research_collection = "fallback"
+    _qual_context_state = "available" if bool(_qual_backed_avail) else ("fallback" if research_state in {"PARTIAL_FALLBACK", "SKIPPED_QUICK_MODE"} else "unavailable")
+    _quant_context_state = "available" if bool(_quant_backed_avail) else "unavailable"
+    _thesis_stage = str(pipeline_status.get("thesis", "") or "").strip().upper()
+    if _thesis_stage == "TIMEOUT":
+        _thesis_mode = "timeout fallback"
+    elif _thesis_stage == "DEGRADED_API_CAPACITY":
+        _thesis_mode = "LLM fallback"
+    elif _thesis_stage == "FAILED":
+        _thesis_mode = "deterministic fallback"
+    elif research_state in {"PARTIAL_FALLBACK", "SKIPPED_QUICK_MODE"}:
+        _thesis_mode = "deterministic fallback"
+    elif _research_collection == "source-backed":
+        _thesis_mode = "LLM source-backed"
+    else:
+        _thesis_mode = "LLM fallback"
     block = (
         "[bold]Pipeline status:[/bold]\n"
         f"  Market data: {market_data_state}\n"
@@ -695,19 +721,12 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _report_mode = str(pipeline_status.get("report_mode", "") or "").strip().upper()
     if _report_mode:
         block += f"\n  Report mode: {_report_mode}"
-    _r_src = str(pipeline_status.get("research_source", "") or "").strip()
-    _r_depth = str(pipeline_status.get("research_depth", "") or "").strip()
-    _r_backed = str(
-        pipeline_status.get("market_context_source_backed")
-        or pipeline_status.get("market_data_source_backed")
-        or ""
-    ).strip()
-    if _r_src or _r_depth or _r_backed:
-        block += (
-            "\n  Research source: " + (_r_src or "n/a")
-            + " | Research depth: " + (_r_depth or "n/a")
-            + " | Market context source-backed: " + (_r_backed or "n/a")
-        )
+    block += (
+        f"\n  Research collection: {_research_collection}"
+        f" | Qualitative context: {_qual_context_state}"
+        f" | Quantitative market inputs: {_quant_context_state}"
+        f"\n  Thesis mode: {_thesis_mode}"
+    )
     if isinstance(_qual_backed_avail, bool) or isinstance(_quant_backed_avail, bool):
         block += (
             "\n  Qualitative source-backed context available: "
@@ -716,13 +735,21 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             + ("yes" if bool(_quant_backed_avail) else "no")
         )
     _ctx_count = pipeline_status.get("market_context_source_count")
+    _ctx_rel = pipeline_status.get("market_context_relevant_source_count")
+    _ctx_fetch = pipeline_status.get("market_context_fetched_source_count")
     _ctx_fallback = bool(pipeline_status.get("market_context_fallback_used"))
     _ctx_date = str(pipeline_status.get("market_context_latest_source_date", "") or "").strip()
-    if _ctx_count is not None:
-        try:
-            _ctx_txt = f"{int(_ctx_count)}"
-        except Exception:
-            _ctx_txt = str(_ctx_count)
+    if _ctx_count is not None or _ctx_rel is not None:
+        if _ctx_rel is not None and _ctx_fetch is not None:
+            try:
+                _ctx_txt = f"{int(_ctx_rel)} relevant / {int(_ctx_fetch)} fetched"
+            except Exception:
+                _ctx_txt = f"{_ctx_rel} relevant / {_ctx_fetch} fetched"
+        else:
+            try:
+                _ctx_txt = f"{int(_ctx_count)}"
+            except Exception:
+                _ctx_txt = str(_ctx_count)
         block += (
             f"\n  Market context sources: {_ctx_txt}"
             + (" (fallback-only context)" if _ctx_fallback else "")

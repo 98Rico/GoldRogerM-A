@@ -4,6 +4,14 @@ from goldroger.data.fetcher import MarketData
 from goldroger.data.filings import FilingsPack
 from goldroger.data.market_context import MarketContextItem, MarketContextPack
 from goldroger.data.comparables import PeerData, PeerMultiples
+from goldroger.finance.core.valuation_service import (
+    FullValuationOutput,
+    RecommendationOutput,
+)
+from goldroger.finance.valuation.aggregator import ValuationResult
+from goldroger.finance.valuation.comps import CompsOutput
+from goldroger.finance.valuation.dcf import DCFOutput
+from goldroger.finance.valuation.transactions import TransactionOutput
 from goldroger.models import Fundamentals, InvestmentThesis
 from goldroger.pipelines.equity import run_analysis
 
@@ -448,3 +456,272 @@ def test_source_backed_context_without_quant_inputs_stays_qualitative_only(monke
     # Qualitative context is available, but quant assumptions still unresolved in this stub.
     assert bool(ps.get("source_backed_quant_market_inputs_available")) is False
     assert bool(ps.get("source_backed_quant_market_inputs_used_in_valuation")) is False
+
+
+def test_reportwriter_timeout_uses_fast_structured_fallback(monkeypatch):
+    import time
+    import goldroger.pipelines.equity as eq
+
+    md = MarketData(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        sector="Technology",
+        current_price=200.0,
+        market_cap=4200000.0,
+        shares_outstanding=21000.0,
+        total_debt=120000.0,
+        cash_and_equivalents=60000.0,
+        net_debt=60000.0,
+        enterprise_value=4260000.0,
+        revenue_ttm=400000.0,
+        ebitda_ttm=130000.0,
+        ebitda_margin=0.325,
+        fcf_ttm=95000.0,
+        ev_ebitda_market=25.0,
+        additional_metadata={
+            "industry": "Consumer Electronics",
+            "country": "United States",
+            "exchange": "NMS",
+            "quote_currency": "USD",
+            "financial_currency": "USD",
+            "market_cap_currency": "USD",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "AAPL",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "AAPL", md)
+    monkeypatch.setattr(eq, "_REPORT_WRITER_TIMEOUT_STANDARD", 1)
+    monkeypatch.setattr(
+        eq,
+        "build_market_context_pack",
+        lambda **kwargs: MarketContextPack(
+            source_backed=True,
+            source_count=2,
+            fetched_source_count=3,
+            relevant_source_count=2,
+            trends=[MarketContextItem(text="Apple demand trend", source="example", date="2026-05-10", confidence="medium", url="https://example.com/apple")],
+            catalysts=[],
+            risks=[],
+            fallback_used=False,
+            note="",
+        ),
+    )
+
+    def _slow_parse(agent, company, company_type, context, model_class, fallback, **kwargs):
+        if model_class is Fundamentals:
+            return Fundamentals(
+                company_name=company,
+                description="Stub fundamentals",
+                business_model="Stub business model",
+                sector="Technology",
+            )
+        if model_class is InvestmentThesis:
+            time.sleep(3)
+            return InvestmentThesis(thesis="slow thesis")
+        if hasattr(fallback, "model_copy"):
+            return fallback.model_copy()
+        return fallback
+
+    monkeypatch.setattr(eq, "_parse_with_retry", _slow_parse)
+    t0 = time.perf_counter()
+    analysis = run_analysis(
+        "AAPL",
+        company_type="public",
+        quick_mode=False,
+        full_report=False,
+        cli_mode=False,
+    )
+    elapsed = time.perf_counter() - t0
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    timings = (analysis.data_quality or {}).get("timings_s", {})
+    assert str(ps.get("thesis")) == "TIMEOUT"
+    assert elapsed < 3.2
+    assert float(timings.get("thesis") or 0.0) <= 1.8
+    assert "device upgrade cycles" in str((analysis.thesis.thesis or "")).lower()
+
+
+def test_cyclical_and_extreme_signal_guardrails_cap_recommendation(monkeypatch):
+    import goldroger.pipelines.equity as eq
+
+    md = MarketData(
+        ticker="NHY.OL",
+        company_name="Norsk Hydro ASA",
+        sector="Materials",
+        current_price=60.0,
+        market_cap=70000.0,
+        shares_outstanding=2000.0,
+        total_debt=18000.0,
+        cash_and_equivalents=5000.0,
+        net_debt=13000.0,
+        enterprise_value=35000.0,
+        revenue_ttm=200000.0,
+        ebitda_ttm=20000.0,
+        ebitda_margin=0.10,
+        fcf_ttm=2500.0,
+        ev_ebitda_market=8.0,
+        revenue_history=[],  # force cyclical-review-required path
+        additional_metadata={
+            "industry": "Aluminum",
+            "country": "Norway",
+            "exchange": "OSL",
+            "quote_currency": "NOK",
+            "financial_currency": "NOK",
+            "market_cap_currency": "NOK",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "NHY.OL",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "NHY.OL", md)
+    def _parse_materials(agent, company, company_type, context, model_class, fallback, **kwargs):
+        if model_class is Fundamentals:
+            return Fundamentals(
+                company_name=company,
+                description="Stub fundamentals",
+                business_model="Aluminum producer",
+                sector="Materials",
+            )
+        if hasattr(fallback, "model_copy"):
+            return fallback.model_copy()
+        return fallback
+    monkeypatch.setattr(eq, "_parse_with_retry", _parse_materials)
+
+    def _stub_high_upside(self, financials, assumptions, market_data=None, sector="", company_type="public"):
+        dcf = DCFOutput(
+            free_cash_flows=[1000.0, 1100.0, 1200.0],
+            discounted_cash_flows=[900.0, 850.0, 800.0],
+            terminal_value=15000.0,
+            enterprise_value=48000.0,
+            terminal_value_pct=0.72,
+        )
+        comps = CompsOutput(low=42000.0, mid=46000.0, high=50000.0)
+        tx = TransactionOutput(implied_value=30000.0)
+        blended = ValuationResult(low=43000.0, mid=47000.0, high=51000.0, blended=47000.0)
+        rec = RecommendationOutput(
+            recommendation="BUY",
+            upside_pct=0.95,
+            intrinsic_price=120.0,
+            current_price=60.0,
+            market_cap=70000.0,
+            ev_blended=47000.0,
+        )
+        return FullValuationOutput(
+            dcf=dcf,
+            comps=comps,
+            transactions=tx,
+            blended=blended,
+            lbo=None,
+            recommendation=rec,
+            sensitivity=None,
+            wacc_used=0.09,
+            terminal_growth_used=0.02,
+            data_confidence="verified",
+            sector=sector or "Materials",
+            valuation_path="ev_ebitda",
+            has_revenue=True,
+            weights_used={"dcf": 0.6, "comps": 0.4, "transactions": 0.0},
+            notes=[],
+            field_sources={"DCF Status": ("normal", "valuation_engine", "inferred")},
+        )
+
+    monkeypatch.setattr(eq.ValuationService, "run_full_valuation", _stub_high_upside)
+    analysis = run_analysis(
+        "Norsk Hydro",
+        company_type="public",
+        quick_mode=True,
+        cli_mode=True,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert bool(ps.get("cyclical_review_required")) is True
+    assert bool(ps.get("extreme_signal_review")) is True
+    assert str(analysis.valuation.recommendation) in {"WATCH / REVIEW REQUIRED", "WATCH / LOW CONVICTION", "HOLD / LOW CONVICTION"}
+    assert "extreme_signal_review" in str(ps.get("confidence_reason", ""))
+
+
+def test_mature_extreme_upside_signal_gets_review_cap(monkeypatch):
+    import goldroger.pipelines.equity as eq
+
+    md = MarketData(
+        ticker="BATS.L",
+        company_name="British American Tobacco p.l.c.",
+        sector="Consumer Staples",
+        current_price=32.0,
+        market_cap=100000.0,
+        shares_outstanding=3100.0,
+        total_debt=42000.0,
+        cash_and_equivalents=9000.0,
+        net_debt=33000.0,
+        enterprise_value=133000.0,
+        revenue_ttm=26000.0,
+        ebitda_ttm=12000.0,
+        ebitda_margin=0.46,
+        fcf_ttm=3000.0,
+        ev_ebitda_market=9.5,
+        additional_metadata={
+            "industry": "Tobacco",
+            "country": "United Kingdom",
+            "exchange": "LSE",
+            "quote_currency": "GBP",
+            "financial_currency": "GBP",
+            "market_cap_currency": "GBP",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "BATS.L",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "BATS.L", md)
+
+    def _stub_extreme(self, financials, assumptions, market_data=None, sector="", company_type="public"):
+        dcf = DCFOutput(
+            free_cash_flows=[1000.0, 1000.0, 1000.0],
+            discounted_cash_flows=[900.0, 820.0, 750.0],
+            terminal_value=15000.0,
+            enterprise_value=150000.0,
+            terminal_value_pct=0.70,
+        )
+        comps = CompsOutput(low=90000.0, mid=100000.0, high=110000.0)
+        tx = TransactionOutput(implied_value=0.0)
+        blended = ValuationResult(low=98000.0, mid=132000.0, high=154000.0, blended=132000.0)
+        rec = RecommendationOutput(
+            recommendation="BUY",
+            upside_pct=0.99,
+            intrinsic_price=64.0,
+            current_price=32.0,
+            market_cap=100000.0,
+            ev_blended=132000.0,
+        )
+        return FullValuationOutput(
+            dcf=dcf,
+            comps=comps,
+            transactions=tx,
+            blended=blended,
+            lbo=None,
+            recommendation=rec,
+            sensitivity=None,
+            wacc_used=0.09,
+            terminal_growth_used=0.02,
+            data_confidence="verified",
+            sector=sector or "Consumer Staples",
+            valuation_path="ev_ebitda",
+            has_revenue=True,
+            weights_used={"dcf": 0.6, "comps": 0.4, "transactions": 0.0},
+            notes=[],
+            field_sources={"DCF Status": ("normal", "valuation_engine", "inferred")},
+        )
+
+    monkeypatch.setattr(eq.ValuationService, "run_full_valuation", _stub_extreme)
+    analysis = run_analysis(
+        "British American Tobacco",
+        company_type="public",
+        quick_mode=True,
+        cli_mode=True,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert bool(ps.get("extreme_signal_review")) is True
+    assert "extreme_signal_review" in str(ps.get("confidence_reason", ""))
+    assert str(analysis.valuation.recommendation) in {
+        "WATCH / REVIEW REQUIRED",
+        "BUY / LOW CONVICTION",
+        "HOLD / LOW CONVICTION",
+    }

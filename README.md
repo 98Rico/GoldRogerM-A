@@ -84,6 +84,13 @@ Gold Roger distinguishes:
 Qualitative market context does **not** automatically change valuation assumptions.
 Valuation assumptions are only changed when explicit numeric, source-backed inputs are available.
 
+Pipeline status semantics:
+- `Research collection`: source-backed / fallback / failed / skipped_quick_mode
+- `Qualitative context`: available / fallback / unavailable
+- `Quantitative market inputs`: available / unavailable
+- `Thesis mode`: LLM source-backed / LLM fallback / deterministic fallback / timeout fallback
+- `Research used in valuation`: yes/no (qualitative-only context does not count as valuation input)
+
 ## Data Sourcing and Reliability
 
 ### Source hierarchy (prototype)
@@ -93,6 +100,22 @@ Valuation assumptions are only changed when explicit numeric, source-backed inpu
 - Company metadata: profile source -> cache -> deterministic fallback.
 - Filings: SEC/official sources when available; IR fallback otherwise.
 - Market context: source-backed links when available; sector fallback otherwise.
+
+### Market-context relevance gate
+
+Source-backed market context is now filtered by deterministic relevance scoring before use:
+- each fetched item gets `relevance_score` (0-100),
+- low-relevance items are rejected (default threshold: 60),
+- direct company/ticker/legal-name/filing matches outrank broad sector mentions,
+- generic market headlines are rejected unless tied to the company or core archetype/industry.
+
+At least **2 relevant sources** are required to keep `source_backed=true`.
+Otherwise context is downgraded to fallback:
+
+`Fallback Market Context — sector profile only; not source-backed; not used in valuation.`
+
+CLI reports relevance coverage as:
+- `Market context sources: <relevant> relevant / <fetched> fetched`
 
 ### Source contracts
 
@@ -112,11 +135,45 @@ When critical integrity checks fail:
 - Explicit input ticker is respected, but unresolved share basis can still suppress recommendations.
 - Peer validation excludes same-issuer alternate listings (for example local line vs ADR/OTC mirror) from comparable sets.
 
+## Archetype Fallback System
+
+Fallback thesis/risk/catalyst text uses deterministic company archetypes, not a single generic sector paragraph.
+
+Examples:
+- `AAPL` -> `premium_device_platform`
+- `BATS.L` -> `tobacco_nicotine_cash_return`
+- `NHY.OL` -> `commodity_cyclical_aluminum`
+
+This prevents cross-sector leakage (for example software/cloud wording in Apple hardware fallback or platform-policy wording in tobacco fallback unless explicitly source-backed).
+
+## Cyclical and Extreme-Signal Guardrails
+
+### Cyclical guardrail
+
+For cyclical sectors (materials/mining/energy/industrials), the pipeline now tracks a `cyclical_review_required` flag.
+If normalized/mid-cycle support is weak or unavailable, output is explicitly cautionary and conviction is capped:
+
+`Cyclical review required — valuation may reflect current-cycle margins, not mid-cycle earnings.`
+
+### Mature-company extreme-signal guardrail
+
+For mature public companies, extreme signals trigger `extreme_signal_review`:
+- upside > +75%, or
+- downside < -60%.
+
+If corroboration is insufficient (for example DCF/comps direction, FCF/dividend support, cyclical normalization support), recommendation is capped to review-oriented labels (for example `WATCH / REVIEW REQUIRED`).
+
 ## Report Modes
 
 - `--quick`: deterministic screen, bounded runtime, no long narrative.
 - default (no flag): standard concise report.
 - `--full-report`: extended thesis + scenarios + catalysts + source appendix sections.
+
+### ReportWriter timeout behavior
+
+ReportWriter is executed under a hard wall-clock timeout per mode.
+On timeout, Gold Roger returns an immediate structured archetype fallback thesis.
+Timeout fallback is explicitly labeled in pipeline status (`Thesis mode: timeout fallback`).
 
 `--quick` and `--full-report` are mutually exclusive.
 
@@ -201,6 +258,12 @@ For validation benchmarks and expected invariants, see [docs/VALIDATION.md](docs
 - Thesis/scenario text is source-informed and still requires human review.
 - Excel/PPT exports are not client-ready without analyst review.
 - Static FX fallback is low confidence and should not be treated as production-grade pricing.
+
+## Public Validation Examples
+
+- `AAPL`: expected `USD/USD`, normalization `OK`, adjacent-reference peer set, low-conviction recommendation.
+- `BATS.L`: expected `GBP/GBP`, normalization `OK`, no same-issuer `BTI` peer inclusion, tobacco archetype context.
+- `NHY.OL`: expected `NOK/NOK`, normalization `OK`, aluminum/cyclical caution and recommendation cap when normalization support is weak.
 
 ## Additional Docs
 

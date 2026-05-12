@@ -50,7 +50,12 @@ from goldroger.data.normalization import (
 )
 from goldroger.data.private_quality import merge_private_market_data
 from goldroger.data.quality_gate import assess_data_quality
-from goldroger.data.sector_profiles import get_sector_profile, detect_sector_profile
+from goldroger.data.sector_profiles import (
+    archetype_fallback,
+    detect_company_archetype,
+    detect_sector_profile,
+    get_sector_profile,
+)
 from goldroger.utils.json_parser import normalise_revenue_string
 from goldroger.data.registry import DEFAULT_REGISTRY
 from goldroger.finance.core.scenarios import run_scenarios
@@ -405,7 +410,17 @@ def _quality_tier(score: int) -> str:
     return "D"
 
 
-def _fallback_catalysts(company: str, sector: str, industry: str = "") -> list[str]:
+def _fallback_catalysts(
+    company: str,
+    sector: str,
+    industry: str = "",
+    ticker: str = "",
+) -> list[str]:
+    _arch = detect_company_archetype(company=company, ticker=ticker, sector=sector, industry=industry)
+    _arch_tpl = archetype_fallback(_arch)
+    _arch_cats = _arch_tpl.get("catalysts") if isinstance(_arch_tpl, dict) else None
+    if isinstance(_arch_cats, tuple) and _arch_cats:
+        return [str(x) for x in _arch_cats]
     prof = get_sector_profile(sector or "", industry or "")
     if prof.fallback_catalysts:
         return [str(x) for x in prof.fallback_catalysts]
@@ -423,17 +438,37 @@ def _build_fallback_thesis(
     reason: str,
     model_signal: str = "N/A",
     industry: str = "",
+    ticker: str = "",
 ) -> InvestmentThesis:
+    _arch = detect_company_archetype(company=company, ticker=ticker, sector=sector, industry=industry)
+    _arch_tpl = archetype_fallback(_arch)
     prof = get_sector_profile(sector or "", industry or "")
-    cats = _fallback_catalysts(company, sector, industry)
-    _drivers = ", ".join(prof.demand_drivers[:3]) if prof.demand_drivers else "demand resilience and execution discipline"
-    _margins = ", ".join(prof.margin_drivers[:3]) if prof.margin_drivers else "mix and operating leverage"
-    _risks = ", ".join(prof.common_risks[:3]) if prof.common_risks else "competition, regulation, and macro volatility"
+    cats = _fallback_catalysts(company, sector, industry, ticker=ticker)
+    _arch_label = str(_arch_tpl.get("label") or _arch) if isinstance(_arch_tpl, dict) else _arch
+    _arch_drivers = _arch_tpl.get("demand_drivers") if isinstance(_arch_tpl, dict) else None
+    _arch_margins = _arch_tpl.get("margin_drivers") if isinstance(_arch_tpl, dict) else None
+    _arch_risks = _arch_tpl.get("risks") if isinstance(_arch_tpl, dict) else None
+    _drivers = ", ".join(_arch_drivers[:3]) if isinstance(_arch_drivers, tuple) and _arch_drivers else (
+        ", ".join(prof.demand_drivers[:3]) if prof.demand_drivers else "demand resilience and execution discipline"
+    )
+    _margins = ", ".join(_arch_margins[:3]) if isinstance(_arch_margins, tuple) and _arch_margins else (
+        ", ".join(prof.margin_drivers[:3]) if prof.margin_drivers else "mix and operating leverage"
+    )
+    _risks = ", ".join(_arch_risks[:3]) if isinstance(_arch_risks, tuple) and _arch_risks else (
+        ", ".join(prof.common_risks[:3]) if prof.common_risks else "competition, regulation, and macro volatility"
+    )
+    _cash_return_line = (
+        "- Cash return frame: dividends, payout durability, and deleveraging remain key.\n"
+        if _arch == "tobacco_nicotine_cash_return"
+        else ""
+    )
     thesis = (
         f"Thesis:\n"
         f"- Sector profile: {prof.label if prof.label else (sector or 'Default fallback')}.\n"
+        f"- Archetype: {_arch_label}.\n"
         f"- Demand drivers: {_drivers}.\n"
         f"- Margin drivers: {_margins}.\n"
+        f"{_cash_return_line}"
         f"- Valuation: model signal is {model_signal}, but final recommendation is {recommendation} "
         "because valuation confidence is low and source-backed market context is unavailable.\n"
         f"- Confidence note: {reason}.\n"
@@ -1574,7 +1609,8 @@ def run_analysis(
             if market_context_pack.source_count:
                 sources.add_once(
                     "Market Context Sources",
-                    str(market_context_pack.source_count),
+                    f"{int(market_context_pack.relevant_source_count or market_context_pack.source_count)} relevant / "
+                    f"{int(market_context_pack.fetched_source_count or market_context_pack.source_count)} fetched",
                     ("market_context_source_backed" if market_context_pack.source_backed else "market_context_fallback"),
                     ("verified" if market_context_pack.source_backed else "estimated"),
                 )
@@ -2472,6 +2508,20 @@ def run_analysis(
     _hard_suppression_reasons: list[str] = []
     _model_equity_val = None
     _mcap_cmp_upside = None
+    _profile_key_for_guard = detect_sector_profile(
+        fund.sector or "",
+        _target_industry if "_target_industry" in locals() else "",
+    )
+    _is_cyclical_profile_for_guard = _profile_key_for_guard in {
+        "materials_chemicals_mining",
+        "energy_oil_gas",
+        "industrials",
+    }
+    _cyclical_review_required = False
+    _normalized_ebitda_supported = False
+    _normalized_ebitda_proxy = None
+    _avg_rev_3y = None
+    _avg_rev_5y = None
     if _md_val and blended_ev is not None:
         try:
             _model_equity_val = float(blended_ev) - float(_md_val.net_debt or 0.0)
@@ -2484,6 +2534,27 @@ def run_analysis(
         _hard_suppression_reasons.append(
             f"data normalization failed: {normalization_audit.get('reason')}"
         )
+    if company_type == "public" and _is_cyclical_profile_for_guard and _md_val:
+        _rev_hist = [float(x) for x in (_md_val.revenue_history or []) if x and x > 0]
+        _rev_now = float(_md_val.revenue_ttm or 0.0)
+        _ebitda_now = float(_md_val.ebitda_ttm or 0.0)
+        if len(_rev_hist) >= 3:
+            _avg_rev_3y = sum(_rev_hist[-3:]) / 3.0
+        if len(_rev_hist) >= 5:
+            _avg_rev_5y = sum(_rev_hist[-5:]) / 5.0
+        _rev_norm = _avg_rev_5y or _avg_rev_3y
+        if _rev_norm and _rev_now > 0 and _ebitda_now > 0:
+            _curr_margin = _ebitda_now / _rev_now
+            _normalized_ebitda_proxy = _rev_norm * _curr_margin
+            if _normalized_ebitda_proxy and _normalized_ebitda_proxy > 0:
+                _ratio = _ebitda_now / _normalized_ebitda_proxy
+                _normalized_ebitda_supported = 0.70 <= _ratio <= 1.30
+        else:
+            _cyclical_review_required = True
+        if _normalized_ebitda_proxy is None:
+            _cyclical_review_required = True
+        elif not _normalized_ebitda_supported:
+            _cyclical_review_required = True
     if (
         company_type == "public"
         and _md_val
@@ -2533,6 +2604,51 @@ def run_analysis(
         _hard_suppression_reasons.append(
             "market-cap-to-revenue ratio is extremely low; verify currency and revenue units"
         )
+    _mature_company = bool(
+        company_type == "public"
+        and _md_val
+        and _md_val.market_cap
+        and _md_val.market_cap >= 10000
+        and (_md_val.ebitda_ttm or 0) > 0
+        and (
+            _md_val.forward_revenue_growth is None
+            or float(_md_val.forward_revenue_growth) <= 0.15
+        )
+    )
+    _extreme_signal_review = False
+    _extreme_signal_corroboration = 0
+    if _mature_company and rec.upside_pct is not None and (rec.upside_pct >= 0.75 or rec.upside_pct <= -0.60):
+        _extreme_signal_review = True
+        # Anchor 1: DCF and comps imply same directional sign.
+        _dcf_up = None
+        _comps_up = None
+        if _md_val.market_cap and _md_val.market_cap > 0 and result.dcf and result.comps:
+            try:
+                _dcf_eq = float(result.dcf.enterprise_value) - float(_md_val.net_debt or 0.0)
+                _comps_eq = float(result.comps.mid) - float(_md_val.net_debt or 0.0)
+                _dcf_up = (_dcf_eq - float(_md_val.market_cap)) / float(_md_val.market_cap)
+                _comps_up = (_comps_eq - float(_md_val.market_cap)) / float(_md_val.market_cap)
+                if ((_dcf_up > 0 and _comps_up > 0 and rec.upside_pct > 0) or (_dcf_up < 0 and _comps_up < 0 and rec.upside_pct < 0)):
+                    _extreme_signal_corroboration += 1
+            except Exception:
+                pass
+        # Anchor 2: FCF yield support for upside calls.
+        if rec.upside_pct > 0 and _md_val.fcf_ttm and _md_val.market_cap and _md_val.market_cap > 0:
+            try:
+                _fcf_yield = float(_md_val.fcf_ttm) / float(_md_val.market_cap)
+                if _fcf_yield >= 0.05:
+                    _extreme_signal_corroboration += 1
+            except Exception:
+                pass
+        # Anchor 3: Dividend yield support for mature cash-return sectors.
+        _div_yld = None
+        if isinstance(_md_val.additional_metadata, dict):
+            _div_yld = _normalize_dividend_yield(_md_val.additional_metadata.get("dividend_yield"))
+        if rec.upside_pct > 0 and _div_yld is not None and _div_yld >= 0.04:
+            _extreme_signal_corroboration += 1
+        # Anchor 4: Cyclical normalization corroboration.
+        if _is_cyclical_profile_for_guard and _normalized_ebitda_supported:
+            _extreme_signal_corroboration += 1
     if _hard_suppression_reasons:
         _eq_ctx = ""
         if _model_equity_val is not None and _md_val and _md_val.market_cap is not None:
@@ -3030,6 +3146,7 @@ def run_analysis(
                     company,
                     fund.sector or "",
                     _target_industry if "_target_industry" in locals() else "",
+                    ticker=(market_data.ticker if market_data else ""),
                 )
             )[:3],
             key_questions=[
@@ -3052,6 +3169,7 @@ def run_analysis(
             reason="research fallback mode (source-backed market context unavailable)",
             model_signal=_model_signal_for_text,
             industry=_target_industry if "_target_industry" in locals() else "",
+            ticker=(market_data.ticker if market_data else ""),
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -3068,6 +3186,7 @@ def run_analysis(
             reason="global runtime budget reached",
             model_signal=_model_signal_for_text,
             industry=_target_industry if "_target_industry" in locals() else "",
+            ticker=(market_data.ticker if market_data else ""),
         )
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
@@ -3126,23 +3245,24 @@ def run_analysis(
             "latest_filing_type": (filings_pack.latest.filing_type if (filings_pack and filings_pack.latest) else ""),
             "latest_filing_date": (filings_pack.latest.filing_date if (filings_pack and filings_pack.latest) else ""),
         }
+        _tp = ThreadPoolExecutor(max_workers=1)
+        _fut_thesis = _tp.submit(
+            lambda: _parse_with_retry(
+                thesis_agent,
+                company,
+                company_type,
+                _thesis_ctx,
+                InvestmentThesis,
+                InvestmentThesis(thesis="N/A"),
+                retry_on_fail=(not quick_mode),
+                log_raw_errors=debug,
+            )
+        )
         try:
-            with ThreadPoolExecutor(max_workers=1) as _tp:
-                _fut_thesis = _tp.submit(
-                    lambda: _parse_with_retry(
-                        thesis_agent,
-                        company,
-                        company_type,
-                        _thesis_ctx,
-                        InvestmentThesis,
-                        InvestmentThesis(thesis="N/A"),
-                        retry_on_fail=(not quick_mode),
-                        log_raw_errors=debug,
-                    )
-                )
-                thesis = _fut_thesis.result(timeout=_report_timeout)
+            thesis = _fut_thesis.result(timeout=_report_timeout)
         except FutureTimeoutError:
             thesis_status = "TIMEOUT"
+            _fut_thesis.cancel()
             console.print(f"  [yellow]Investment thesis timeout > {_report_timeout}s — using structured fallback.[/yellow]")
             thesis = _build_fallback_thesis(
                 company=company,
@@ -3150,6 +3270,7 @@ def run_analysis(
                 recommendation=val.recommendation or "HOLD",
                 reason="thesis timeout",
                 model_signal=_model_signal_for_text,
+                ticker=(market_data.ticker if market_data else ""),
             )
         except APICapacityError:
             thesis_status = "DEGRADED_API_CAPACITY"
@@ -3160,6 +3281,7 @@ def run_analysis(
                 recommendation=val.recommendation or "HOLD",
                 reason="report-writer API capacity",
                 model_signal=_model_signal_for_text,
+                ticker=(market_data.ticker if market_data else ""),
             )
         except Exception as _th_err:
             thesis_status = "FAILED"
@@ -3170,7 +3292,10 @@ def run_analysis(
                 recommendation=val.recommendation or "HOLD",
                 reason="thesis generation failure",
                 model_signal=_model_signal_for_text,
+                ticker=(market_data.ticker if market_data else ""),
             )
+        finally:
+            _tp.shutdown(wait=False, cancel_futures=True)
         thesis.catalysts = _sanitize_catalysts(thesis.catalysts)
         log.end_step("thesis", t0)
         _done("Investment Thesis", t0)
@@ -3475,6 +3600,14 @@ def run_analysis(
         _confidence_reasons.append(
             "commodity/cyclical caution: valuation may reflect current-cycle margins rather than mid-cycle normalization"
         )
+    if company_type == "public" and _is_cyclical_profile and _cyclical_review_required:
+        _confidence_reasons.append(
+            "cyclical_review_required (mid-cycle EBITDA normalization support is limited)"
+        )
+    if _extreme_signal_review:
+        _confidence_reasons.append(
+            f"extreme_signal_review (corroboration anchors: {_extreme_signal_corroboration}/2)"
+        )
     _dcf_status = "normal"
     _dcf_src = result.field_sources.get("DCF Status")
     if _dcf_src and _dcf_src[0]:
@@ -3505,6 +3638,12 @@ def run_analysis(
         )
         if _cyclical_warn not in quality.warnings:
             quality.warnings.append(_cyclical_warn)
+    if company_type == "public" and _is_cyclical_profile and _cyclical_review_required:
+        _cy_warn = (
+            "Cyclical review required — valuation may reflect current-cycle margins, not mid-cycle earnings."
+        )
+        if _cy_warn not in quality.warnings:
+            quality.warnings.append(_cy_warn)
     if _norm_status == "OK_FX_NORMALIZED" and _confidence_level == "High":
         _confidence_level = "Medium"
     if _norm_share_basis == "foreign_us_listing_unverified_share_basis":
@@ -3553,6 +3692,21 @@ def run_analysis(
         # Full-mode fallback should never output high-conviction calls.
         if (not quick_mode) and str(_research_source) != "source_backed" and _rec in {"BUY", "SELL", "BUY / MODERATE CONVICTION", "SELL / MODERATE CONVICTION"}:
             _rec = "BUY / LOW CONVICTION" if _raw_signal_label.startswith("Positive") else "HOLD / LOW CONVICTION"
+        # Cyclical guardrail: high upside without normalization support is watchlist-only.
+        if (
+            company_type == "public"
+            and _is_cyclical_profile
+            and _cyclical_review_required
+            and rec.upside_pct is not None
+            and rec.upside_pct >= 0.60
+        ):
+            _rec = "WATCH / LOW CONVICTION"
+        # Mature-company extreme signal review cap.
+        if _extreme_signal_review and _extreme_signal_corroboration < 2:
+            if rec.upside_pct is not None and rec.upside_pct > 0:
+                _rec = "WATCH / REVIEW REQUIRED"
+            elif rec.upside_pct is not None and rec.upside_pct < 0:
+                _rec = "HOLD / LOW CONVICTION"
         val.recommendation = _rec
     elif valuation_failed or _suppressed_no_rating or valuation_status == "FAILED":
         _rec = "INCONCLUSIVE"
@@ -3595,6 +3749,16 @@ def run_analysis(
     )
     # Current prototype does not deterministically map qualitative context into valuation assumptions.
     _quant_market_inputs_used_in_valuation = False
+    if market_status == "SKIPPED_QUICK_MODE":
+        _research_depth = "none"
+    elif _research_source != "source_backed":
+        _research_depth = "limited"
+    elif thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
+        _research_depth = "partial"
+    elif not _quant_market_inputs_available:
+        _research_depth = "partial"
+    else:
+        _research_depth = "full"
     if _qual_context_backed_available and (not _quant_market_inputs_available):
         if "Source-backed quantitative market assumptions unavailable." not in quality.warnings:
             quality.warnings.append("Source-backed quantitative market assumptions unavailable.")
@@ -3657,6 +3821,10 @@ def run_analysis(
                     if _confidence_reasons
                     else "valuation inputs and enrichment are consistent"
                 ),
+                "cyclical_review_required": bool(_cyclical_review_required),
+                "normalized_ebitda_supported": bool(_normalized_ebitda_supported),
+                "extreme_signal_review": bool(_extreme_signal_review),
+                "extreme_signal_corroboration": int(_extreme_signal_corroboration),
                 "research_source": _research_source,
                 "research_depth": _research_depth,
                 "market_data_source_backed": "yes" if _market_source_backed else "no",
@@ -3667,6 +3835,16 @@ def run_analysis(
                 "source_backed_quant_market_inputs_used_in_valuation": _quant_market_inputs_used_in_valuation,
                 "market_context_source_count": (
                     int(market_context_pack.source_count)
+                    if market_context_pack is not None
+                    else 0
+                ),
+                "market_context_relevant_source_count": (
+                    int(market_context_pack.relevant_source_count)
+                    if market_context_pack is not None
+                    else 0
+                ),
+                "market_context_fetched_source_count": (
+                    int(market_context_pack.fetched_source_count)
                     if market_context_pack is not None
                     else 0
                 ),

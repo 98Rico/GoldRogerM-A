@@ -79,3 +79,58 @@ def test_profile_context_guard_blocks_cross_sector_leakage():
     leaked = "Platform/services monetization and App Store policy are key."
     out = _enforce_profile_context_guard(leaked, "consumer_staples_tobacco")
     assert "sector profile only, not source-backed" in out
+
+
+def test_aapl_fallback_thesis_uses_device_platform_language():
+    th = _build_fallback_thesis(
+        company="Apple Inc.",
+        ticker="AAPL",
+        sector="Technology",
+        industry="Consumer Electronics",
+        recommendation="HOLD / LOW CONVICTION",
+        reason="fallback mode",
+        model_signal="Negative valuation signal",
+    )
+    text = (th.thesis or "").lower()
+    assert "device upgrade cycles" in text
+    assert "services attach" in text
+    assert "installed base" in text
+    assert "app store" in text
+    assert "enterprise software adoption" not in text
+    assert "cloud migration" not in text
+
+
+def test_bat_fallback_thesis_uses_tobacco_cash_return_language():
+    th = _build_fallback_thesis(
+        company="British American Tobacco p.l.c.",
+        ticker="BATS.L",
+        sector="Consumer Staples",
+        industry="Tobacco",
+        recommendation="BUY / LOW CONVICTION",
+        reason="fallback mode",
+        model_signal="Positive valuation signal",
+    )
+    text = (th.thesis or "").lower()
+    assert "combustible volume" in text
+    assert "reduced-risk" in text
+    assert "excise" in text
+    assert "litigation" in text
+    assert "cash return" in text
+
+
+def test_nhy_fallback_thesis_uses_aluminum_cyclical_language():
+    th = _build_fallback_thesis(
+        company="Norsk Hydro ASA",
+        ticker="NHY.OL",
+        sector="Materials",
+        industry="Aluminum",
+        recommendation="WATCH / LOW CONVICTION",
+        reason="fallback mode",
+        model_signal="Positive valuation signal",
+    )
+    text = (th.thesis or "").lower()
+    assert "aluminum" in text or "aluminium" in text
+    assert "lme" in text
+    assert "energy" in text
+    assert "recycling" in text
+    assert "commodity-cycle volatility" in text

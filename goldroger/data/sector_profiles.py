@@ -18,6 +18,188 @@ class SectorProfile:
     fallback_catalysts: tuple[str, ...] = field(default_factory=tuple)
 
 
+_ARCHETYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "premium_device_platform": (
+        "apple",
+        "iphone",
+        "ipad",
+        "mac",
+        "wearable",
+        "device",
+        "installed base",
+        "ecosystem",
+        "services attach",
+        "app store",
+    ),
+    "consumer_hardware_ecosystem": (
+        "smartphone",
+        "consumer electronics",
+        "device upgrade",
+        "services attach",
+        "ecosystem",
+    ),
+    "tobacco_nicotine_cash_return": (
+        "tobacco",
+        "nicotine",
+        "combustible",
+        "reduced-risk",
+        "rrp",
+        "excise",
+        "litigation",
+        "pricing",
+        "volume decline",
+        "dividend",
+        "cash return",
+    ),
+    "commodity_cyclical_aluminum": (
+        "aluminum",
+        "aluminium",
+        "lme",
+        "smelter",
+        "recycling",
+        "low-carbon",
+        "energy cost",
+        "commodity cycle",
+        "cbam",
+        "alumina",
+    ),
+    "software_platform": (
+        "software",
+        "saas",
+        "cloud",
+        "enterprise software",
+        "platform",
+    ),
+    "semiconductor": (
+        "semiconductor",
+        "chip",
+        "foundry",
+        "memory",
+        "gpu",
+        "wafer",
+    ),
+    "financials": (
+        "bank",
+        "insurance",
+        "deposit",
+        "lending",
+        "combined ratio",
+    ),
+    "consumer_staples": (
+        "consumer staples",
+        "pricing",
+        "volume",
+        "brand",
+        "distribution",
+    ),
+    "healthcare": (
+        "pharma",
+        "drug",
+        "pipeline",
+        "trial",
+        "medical device",
+    ),
+    "default": (),
+}
+
+
+_ARCHETYPE_FALLBACKS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    "premium_device_platform": {
+        "label": "premium_device_platform",
+        "demand_drivers": (
+            "device upgrade cycles",
+            "services attach to installed base",
+            "ecosystem engagement and retention",
+        ),
+        "margin_drivers": (
+            "services mix",
+            "product mix and premiumization",
+            "supply-chain efficiency",
+        ),
+        "risks": (
+            "App Store/platform-policy regulation",
+            "product-cycle weakness",
+            "supply-chain and geographic concentration",
+        ),
+        "catalysts": (
+            "Next earnings update: device demand, services growth, and margin guidance.",
+            "Product/software cycle updates: signs of sustained upgrade activity.",
+            "Platform/regulatory developments: potential impact on ecosystem monetization.",
+        ),
+    },
+    "consumer_hardware_ecosystem": {
+        "label": "consumer_hardware_ecosystem",
+        "demand_drivers": (
+            "device replacement cycles",
+            "services attach and recurring usage",
+            "installed-base engagement",
+        ),
+        "margin_drivers": (
+            "mix",
+            "component costs",
+            "operating leverage",
+        ),
+        "risks": (
+            "competition",
+            "regulatory pressure",
+            "demand-cycle volatility",
+        ),
+        "catalysts": (
+            "Next earnings update: demand, services attach, and margin guidance.",
+            "Product cycle updates: evidence of replacement-cycle support.",
+            "Policy/platform updates: potential impact on monetization.",
+        ),
+    },
+    "tobacco_nicotine_cash_return": {
+        "label": "tobacco_nicotine_cash_return",
+        "demand_drivers": (
+            "pricing power",
+            "combustible volume and mix",
+            "reduced-risk product adoption",
+        ),
+        "margin_drivers": (
+            "excise passthrough",
+            "product mix",
+            "operating leverage and cost control",
+        ),
+        "risks": (
+            "regulation and excise changes",
+            "litigation and enforcement",
+            "combustible volume decline",
+            "illicit trade",
+        ),
+        "catalysts": (
+            "Next earnings update: pricing, volume, and margin guidance.",
+            "Reduced-risk product update: progress on mix transition.",
+            "Regulatory/tax updates: potential impact on cash returns.",
+        ),
+    },
+    "commodity_cyclical_aluminum": {
+        "label": "commodity_cyclical_aluminum",
+        "demand_drivers": (
+            "aluminum demand and end-market industrial activity",
+            "recycling and low-carbon aluminum demand",
+            "regional supply/demand balance",
+        ),
+        "margin_drivers": (
+            "LME aluminum pricing",
+            "alumina/raw-material costs",
+            "energy costs and operating efficiency",
+        ),
+        "risks": (
+            "commodity-cycle volatility",
+            "energy-cost shocks",
+            "trade/regulatory shifts (including CBAM)",
+        ),
+        "catalysts": (
+            "Next earnings update: realized prices, energy costs, and margin guidance.",
+            "Operational updates: smelting, alumina, recycling, and energy assets.",
+            "Commodity/regulatory updates: LME pricing and trade-policy developments.",
+        ),
+    },
+}
+
+
 _PROFILES: dict[str, SectorProfile] = {
     "technology_software": SectorProfile(
         key="technology_software",
@@ -277,3 +459,39 @@ def detect_sector_profile(sector: str, industry: str = "") -> str:
 
 def get_sector_profile(sector: str, industry: str = "") -> SectorProfile:
     return _PROFILES.get(detect_sector_profile(sector, industry), _PROFILES["default"])
+
+
+def detect_company_archetype(
+    company: str = "",
+    ticker: str = "",
+    sector: str = "",
+    industry: str = "",
+) -> str:
+    txt = f"{company or ''} {ticker or ''} {sector or ''} {industry or ''}".lower()
+    if "aapl" in txt or "apple" in txt:
+        return "premium_device_platform"
+    if any(k in txt for k in ("tobacco", "nicotine", "bats", "bti", "british american tobacco")):
+        return "tobacco_nicotine_cash_return"
+    if any(k in txt for k in ("norsk hydro", "nhy", "aluminum", "aluminium", "alumina")):
+        return "commodity_cyclical_aluminum"
+    if any(k in txt for k in ("consumer electronics", "smartphone", "device", "wearable")):
+        return "consumer_hardware_ecosystem"
+    if any(k in txt for k in ("software", "saas", "cloud", "platform")):
+        return "software_platform"
+    if any(k in txt for k in ("semiconductor", "chip", "foundry", "memory", "gpu")):
+        return "semiconductor"
+    if any(k in txt for k in ("bank", "insurance", "financial")):
+        return "financials"
+    if any(k in txt for k in ("pharma", "biotech", "medical", "healthcare")):
+        return "healthcare"
+    if any(k in txt for k in ("consumer staples", "beverage", "household products")):
+        return "consumer_staples"
+    return "default"
+
+
+def archetype_keywords(archetype: str) -> tuple[str, ...]:
+    return _ARCHETYPE_KEYWORDS.get(archetype, ())
+
+
+def archetype_fallback(archetype: str) -> dict[str, tuple[str, ...] | str]:
+    return _ARCHETYPE_FALLBACKS.get(archetype, {})
