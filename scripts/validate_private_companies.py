@@ -23,6 +23,11 @@ class PrivateValidationRow:
     country_hint: str
     resolved_name: str
     legal_identifier: str
+    identity_status: str
+    revenue_quality: str
+    financials_quality: str
+    private_peers_state: str
+    private_valuation_mode: str
     revenue_value: str
     revenue_currency: str
     revenue_source: str
@@ -73,6 +78,11 @@ def summarize(company: str, country_hint: str, result) -> PrivateValidationRow:
     rec = str(getattr(result.valuation, "recommendation", "") or "")
     val_status = str(ps.get("valuation", "UNKNOWN") or "UNKNOWN")
     confidence = str(ps.get("confidence", "unknown") or "unknown")
+    identity_status = str(ps.get("private_identity_status", "UNRESOLVED") or "UNRESOLVED")
+    revenue_quality = str(ps.get("private_revenue_quality", "UNAVAILABLE") or "UNAVAILABLE")
+    financials_quality = str(ps.get("private_financials_quality", "UNAVAILABLE") or "UNAVAILABLE")
+    private_peers_state = str(ps.get("private_peers_state", "FAILED") or "FAILED")
+    private_valuation_mode = str(ps.get("private_valuation_mode", "FAILED") or "FAILED")
     legal_id = (
         (src.get("Company Number (GB)", {}) or {}).get("value")
         or (src.get("SIREN", {}) or {}).get("value")
@@ -92,6 +102,11 @@ def summarize(company: str, country_hint: str, result) -> PrivateValidationRow:
         country_hint=country_hint,
         resolved_name=str(getattr(result.fundamentals, "company_name", "") or ""),
         legal_identifier=str(legal_id),
+        identity_status=identity_status,
+        revenue_quality=revenue_quality,
+        financials_quality=financials_quality,
+        private_peers_state=private_peers_state,
+        private_valuation_mode=private_valuation_mode,
         revenue_value=rev_value or "N/A",
         revenue_currency=_extract_currency(rev_value),
         revenue_source=rev_source,
@@ -131,6 +146,11 @@ def main() -> int:
                     country_hint=country,
                     resolved_name="",
                     legal_identifier="",
+                    identity_status="UNRESOLVED",
+                    revenue_quality="UNAVAILABLE",
+                    financials_quality="UNAVAILABLE",
+                    private_peers_state="FAILED",
+                    private_valuation_mode="FAILED",
                     revenue_value="N/A",
                     revenue_currency="unknown",
                     revenue_source="error",
@@ -155,6 +175,8 @@ def main() -> int:
         for r in rows:
             print(
                 f"- {r.input_query} ({r.country_hint}) | rec={r.recommendation} | "
+                f"identity={r.identity_status} | rev_q={r.revenue_quality} | "
+                f"mode={r.private_valuation_mode} | "
                 f"rev={r.revenue_value} [{r.revenue_confidence}] | "
                 f"status={r.valuation_status} | provenance={'ok' if r.provenance_complete else 'missing'}"
             )

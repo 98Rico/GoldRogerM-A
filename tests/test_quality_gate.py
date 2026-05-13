@@ -32,6 +32,19 @@ def test_private_quality_gate_blocks_when_revenue_missing():
     assert out.tier in {"C", "D"}
 
 
+def test_private_quality_gate_ignores_llm_financial_revenue_without_provider_revenue():
+    md = MarketData(
+        ticker="",
+        company_name="WeakPrivateCo",
+        sector="Technology",
+        revenue_ttm=None,
+        confidence="inferred",
+    )
+    out = assess_data_quality("private", md, {"revenue_current": 1300.0})
+    assert out.is_blocked is True
+    assert "Missing revenue" in out.blockers
+
+
 def test_public_quality_penalized_when_market_context_missing():
     md = MarketData(
         ticker="AAPL",

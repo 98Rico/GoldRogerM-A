@@ -444,6 +444,24 @@ def _archetype_sector_display(
         return "Consumer Staples / Tobacco"
     if archetype == "commodity_cyclical_aluminum":
         return "Materials / Aluminum"
+    if archetype == "healthtech_platform":
+        return "Healthcare / HealthTech Platform"
+    if archetype == "fintech_digital_bank_payments":
+        return "Financials / Fintech & Digital Payments"
+    if archetype == "hrtech_saas":
+        return "Technology / HR Tech SaaS"
+    if archetype == "b2b_saas":
+        return "Technology / B2B SaaS"
+    if archetype == "marketplace":
+        return "Consumer Internet / Marketplace"
+    if archetype == "consumer_brand":
+        return "Consumer / Brand-led"
+    if archetype == "industrial_private":
+        return "Industrials"
+    if archetype == "professional_services":
+        return "Professional Services"
+    if archetype == "healthcare_services":
+        return "Healthcare / Services"
     return profile_label or sector or "Default fallback"
 
 
@@ -454,6 +472,15 @@ def _archetype_market_segment(archetype: str) -> str:
         "consumer_hardware_ecosystem": "Consumer hardware and services ecosystem",
         "tobacco_nicotine_cash_return": "Tobacco and nicotine products",
         "commodity_cyclical_aluminum": "Aluminum, recycling, and low-carbon metals",
+        "healthtech_platform": "Digital healthcare workflow and patient-access platforms",
+        "fintech_digital_bank_payments": "Digital banking, payments, and financial services",
+        "hrtech_saas": "Human-resources software and payroll/workforce platforms",
+        "b2b_saas": "Enterprise subscription software platforms",
+        "marketplace": "Online marketplace transactions and take-rate economics",
+        "consumer_brand": "Brand-led consumer products and omnichannel distribution",
+        "industrial_private": "Industrial production, automation, and backlog-driven demand",
+        "professional_services": "Project-based advisory and professional services",
+        "healthcare_services": "Healthcare delivery and reimbursement-linked services",
         "software_platform": "Software platforms and enterprise applications",
         "semiconductor": "Semiconductors and semiconductor value chain",
         "financials": "Financial services and balance-sheet businesses",
@@ -461,6 +488,22 @@ def _archetype_market_segment(archetype: str) -> str:
         "healthcare": "Healthcare products and services",
     }
     return mapping.get(key, "")
+
+
+def _private_archetype_peer_hints(archetype: str) -> list[str]:
+    key = str(archetype or "").strip().lower()
+    mapping: dict[str, list[str]] = {
+        "healthtech_platform": ["TDOC", "DOCS", "VEEV", "ELV", "UNH"],
+        "fintech_digital_bank_payments": ["PYPL", "SQ", "ADYEY", "WIZEY", "NU"],
+        "hrtech_saas": ["PAYC", "PAYX", "WDAY", "ADP", "SAP"],
+        "b2b_saas": ["CRM", "NOW", "ADBE", "ORCL", "SAP"],
+        "marketplace": ["EBAY", "MELI", "ETSY", "SE", "DASH"],
+        "consumer_brand": ["NKE", "LULU", "PG", "KO", "PEP"],
+        "industrial_private": ["HON", "ETN", "EMR", "ROK", "ITW"],
+        "professional_services": ["ACN", "CTSH", "GIB", "EPAM", "IBM"],
+        "healthcare_services": ["HCA", "UHS", "DVA", "EHC", "THC"],
+    }
+    return mapping.get(key, [])
 
 
 def _parse_iso_date(raw: str) -> date | None:
@@ -670,7 +713,17 @@ def run_analysis(
     _private_triangulation_used = False
     _private_provider_merge_notes: list[str] = []
     _private_identity_resolved = False
+    _private_identity_status = "UNRESOLVED"
     _private_revenue_status = "unavailable"
+    _private_revenue_quality = "UNAVAILABLE"
+    _private_financials_quality = "UNAVAILABLE"
+    _private_valuation_mode = "FAILED"
+    _private_peers_state = "FAILED"
+    _private_screen_only = False
+    _private_screen_only_reasons: list[str] = []
+    _private_missing_pappers_key = False
+    _private_missing_companies_house_key = False
+    _private_missing_provider_notes: list[str] = []
     if company_type == "private":
         t0 = _step("Registry (EU filings)")
         _provider_records: list[MarketData] = []
@@ -730,6 +783,17 @@ def run_analysis(
         # ── Data-source selection (interactive or CLI) ───────────────────
         from goldroger.data.source_selector import run_source_selection, resolve_source_selection
         _country_hint = (country_hint or _country_hint_from_market_data(market_data)).upper()
+        if company_identifier:
+            sources.add_once(
+                "Confirmed Company Identifier",
+                str(company_identifier),
+                "confirmation_input",
+                "verified",
+            )
+            if _country_hint == "GB":
+                sources.add_once("Company Number (GB)", str(company_identifier), "confirmation_input", "verified")
+            if _country_hint == "FR":
+                sources.add_once("SIREN (FR)", str(company_identifier), "confirmation_input", "verified")
         if interactive:
             _sel = run_source_selection(company, country_hint=_country_hint, console=console)
         else:
@@ -746,9 +810,32 @@ def run_analysis(
                     "  [yellow]Skipped (missing credentials):[/] "
                     + ", ".join(_sel.skipped_missing_credentials)
                 )
+                _private_missing_provider_notes = list(_sel.skipped_missing_credentials)
+                _private_missing_pappers_key = "pappers" in _sel.skipped_missing_credentials
+                _private_missing_companies_house_key = "companies_house" in _sel.skipped_missing_credentials
             if _sel.selected_providers:
                 console.print(
                     "  [dim]Using additional sources:[/] " + ", ".join(_sel.selected_providers)
+                )
+            if _country_hint == "FR" and _private_missing_pappers_key:
+                console.print(
+                    "  [yellow]Verified revenue unavailable because Pappers key is not configured.[/yellow]"
+                )
+                sources.add_once(
+                    "Private Revenue Limitation",
+                    "Verified revenue unavailable because Pappers key is not configured.",
+                    "source_selector",
+                    "inferred",
+                )
+            if _country_hint == "GB" and _private_missing_companies_house_key:
+                console.print(
+                    "  [yellow]Companies House API key missing; UK registry enrichment may be limited.[/yellow]"
+                )
+                sources.add_once(
+                    "Private Identity Limitation",
+                    "Companies House API key missing; UK private identity/filing enrichment may be limited.",
+                    "source_selector",
+                    "inferred",
                 )
 
         # Manual revenue override takes precedence over registry
@@ -901,10 +988,67 @@ def run_analysis(
                     in _private_strong_identity_sources
                 )
             )
+            _private_identity_status = (
+                "RESOLVED"
+                if _private_identity_resolved
+                else ("WEAK" if str(market_data.company_name or "").strip() else "UNRESOLVED")
+            )
+            _rev_source = str(market_data.data_source or "").strip().lower()
+            if _private_revenue_status == "verified":
+                _private_revenue_quality = "VERIFIED"
+            elif _private_revenue_status == "estimated":
+                if _rev_source in {"companies_house", "sec_edgar", "handelsregister"} and not _private_triangulation_used:
+                    _private_revenue_quality = "HIGH_CONFIDENCE_ESTIMATE"
+                else:
+                    _private_revenue_quality = "LOW_CONFIDENCE_ESTIMATE"
+            elif _private_revenue_status == "inferred":
+                _private_revenue_quality = "LOW_CONFIDENCE_ESTIMATE"
+            else:
+                _private_revenue_quality = "UNAVAILABLE"
+            _private_valuation_grade_ready = bool(
+                _private_identity_status == "RESOLVED"
+                and _private_revenue_quality in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}
+            )
+            _private_screen_only = not _private_valuation_grade_ready
+            if _private_screen_only:
+                if _private_identity_status != "RESOLVED":
+                    _private_screen_only_reasons.append("identity gate not satisfied")
+                if _private_revenue_quality not in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}:
+                    _private_screen_only_reasons.append("revenue gate not satisfied")
+            _rev_ccy = "USD"
+            if isinstance(market_data.additional_metadata, dict):
+                _rev_ccy = str(
+                    market_data.additional_metadata.get("financial_currency")
+                    or market_data.additional_metadata.get("currency")
+                    or "USD"
+                ).upper()
+            if not _re.match(r"^[A-Z]{3}$", _rev_ccy):
+                _rev_ccy = "USD"
+            if market_data.revenue_ttm:
+                if _private_revenue_quality == "VERIFIED":
+                    sources.add_once(
+                        "Revenue TTM",
+                        f"{_rev_ccy} {float(market_data.revenue_ttm):.0f}M",
+                        market_data.data_source or "private_pipeline",
+                        "verified",
+                    )
+                else:
+                    sources.add_once(
+                        "Revenue TTM",
+                        f"{_rev_ccy} {float(market_data.revenue_ttm):.0f}M [indicative estimate — not valuation-grade]",
+                        market_data.data_source or "private_pipeline",
+                        str(market_data.confidence or "estimated"),
+                    )
             sources.add_once(
                 "Private Revenue Status",
                 _private_revenue_status,
                 market_data.data_source or "private_pipeline",
+                "inferred",
+            )
+            sources.add_once(
+                "Private Revenue Quality",
+                _private_revenue_quality,
+                "private_revenue_gate",
                 "inferred",
             )
             sources.add_once(
@@ -913,6 +1057,24 @@ def run_analysis(
                 "private_identity_guard",
                 "inferred",
             )
+            sources.add_once(
+                "Private Identity Status",
+                _private_identity_status,
+                "private_identity_guard",
+                "inferred",
+            )
+            if _private_screen_only_reasons:
+                sources.add_once(
+                    "Private Valuation Mode",
+                    "SCREEN_ONLY",
+                    "private_valuation_gate",
+                    "inferred",
+                )
+        else:
+            _private_identity_status = "UNRESOLVED"
+            _private_revenue_quality = "UNAVAILABLE"
+            _private_screen_only = True
+            _private_screen_only_reasons = ["identity and revenue data unavailable"]
 
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
@@ -1525,7 +1687,13 @@ def run_analysis(
     def _do_financials():
         _t = _step("Financials")
         try:
-            if market_data and market_data.revenue_ttm:
+            if company_type == "private" and _private_screen_only:
+                f = _fin_fallback()
+                console.print(
+                    "  [dim]Private screen-only mode: valuation-grade financial modeling skipped "
+                    "(identity/revenue gate not satisfied).[/dim]"
+                )
+            elif market_data and market_data.revenue_ttm:
                 f = _fin_from_market(market_data)
                 _f_ccy = str(normalization_audit.get("financial_statement_currency") or "USD")
                 console.print(
@@ -1694,21 +1862,46 @@ def run_analysis(
             "yfinance",
             "verified",
         )
-    # Strict provenance policy for confirmed low-data private entities:
+    # Strict provenance policy for private screen-only entities:
     # do not surface unsourced LLM financial metrics as factual numbers.
     _strict_registry_mode = bool(
         company_type == "private"
-        and company_identifier
-        and market_data
-        and market_data.data_source == "companies_house"
-        and not market_data.revenue_ttm
+        and (
+            _private_screen_only
+            or (
+                company_identifier
+                and market_data
+                and market_data.data_source == "companies_house"
+                and not market_data.revenue_ttm
+            )
+        )
     )
     if _strict_registry_mode:
-        fin.revenue_growth = "Not available [no verified source]"
-        fin.gross_margin = "Not available [no verified source]"
-        fin.ebitda_margin = "Not available [no verified source]"
-        fin.free_cash_flow = "Not available [no verified source]"
-        fin.net_margin = "Not available [no verified source]"
+        fin.revenue_current = "N/A"
+        fin.revenue_series = []
+        fin.revenue_growth = "Not available [screen-only: non-valuation-grade]"
+        fin.gross_margin = "Not available [screen-only: non-valuation-grade]"
+        fin.ebitda_margin = "Not available [screen-only: non-valuation-grade]"
+        fin.free_cash_flow = "Not available [screen-only: non-valuation-grade]"
+        fin.net_margin = "Not available [screen-only: non-valuation-grade]"
+    if company_type == "private":
+        if _private_revenue_quality == "VERIFIED":
+            _private_financials_quality = "VERIFIED"
+        elif _private_revenue_quality in {"HIGH_CONFIDENCE_ESTIMATE", "LOW_CONFIDENCE_ESTIMATE"}:
+            _private_financials_quality = "ESTIMATED"
+        else:
+            _private_financials_quality = "UNAVAILABLE"
+        if (country_hint or "").upper() == "DE" and _private_identity_status != "RESOLVED":
+            console.print(
+                "  [yellow]German registry identity unresolved; use a legal-entity identifier "
+                "or provide verified revenue manually. Run remains screen-only.[/yellow]"
+            )
+            sources.add_once(
+                "Private Identity Limitation",
+                "German registry identity unresolved; use manual legal entity identifier or verified revenue input.",
+                "identity_resolution_guard",
+                "inferred",
+            )
 
     _parallel_elapsed = time.time() - _parallel_t0
     if debug:
@@ -1841,6 +2034,19 @@ def run_analysis(
         )
     except Exception:
         _deterministic_base = []
+    if company_type == "private" and not _deterministic_base:
+        _private_arch = detect_company_archetype(
+            company=company,
+            ticker=(market_data.ticker if market_data else ""),
+            sector=fund.sector or "",
+            industry=_target_industry,
+        )
+        _deterministic_base = _private_archetype_peer_hints(_private_arch)
+        if _deterministic_base:
+            console.print(
+                "  [dim]Private peer hint set from archetype "
+                f"({_private_arch}): {', '.join(_deterministic_base[:6])}[/dim]"
+            )
 
     if _peers_raw or _deterministic_base:
         try:
@@ -2105,6 +2311,16 @@ def run_analysis(
                         "system_clock",
                         "verified",
                     )
+                    _peer_quote_ccy = str(
+                        normalization_audit.get("quote_currency")
+                        or getattr(market_data_valuation, "quote_currency", None)
+                        or getattr(market_data_valuation, "currency", None)
+                        or getattr(market_data, "quote_currency", None)
+                        or getattr(market_data, "currency", None)
+                        or "USD"
+                    ).upper()
+                    if not _re.match(r"^[A-Z]{3}$", _peer_quote_ccy):
+                        _peer_quote_ccy = "USD"
                     peer_comps_table = PeerCompsTable(
                         peers=[
                             PeerComp(
@@ -2118,7 +2334,7 @@ def run_analysis(
                                         (
                                             p.quote_currency
                                             if getattr(p, "quote_currency", None)
-                                            else _quote_ccy
+                                            else _peer_quote_ccy
                                         ),
                                     )
                                     if p.market_cap
@@ -2173,6 +2389,13 @@ def run_analysis(
             console.print(f"  [yellow]Peer finder skipped: {_peers_err}[/yellow]")
     if _missing_consumer_ecosystem_bucket and peers_status == "OK":
         peers_status = "OK_ADJACENT"
+    if company_type == "private":
+        if peer_multiples and (peer_multiples.n_valuation_peers or 0) >= 3:
+            _private_peers_state = "OK"
+        elif peer_multiples and (peer_multiples.n_peers or 0) > 0:
+            _private_peers_state = "WEAK"
+        else:
+            _private_peers_state = "FAILED"
     _peer_post_elapsed = round(time.time() - _peer_post_t0, 2)
     _done("Peer Validation", _peer_post_t0)
     try:
@@ -2469,10 +2692,31 @@ def run_analysis(
     # Use sector benchmarks (deterministic) unless a verified deal database is integrated.
 
     _md_val = market_data_valuation or market_data
+    _valuation_financials = fin.model_dump()
+    _valuation_md = _md_val
+    if company_type == "private" and _private_screen_only:
+        # Hard gate for private weak-data runs: keep output screen-only and avoid
+        # presenting LLM/triangulated estimates as valuation-grade anchors.
+        if _valuation_md is not None:
+            _valuation_md = _copy.deepcopy(_valuation_md)
+            _valuation_md.revenue_ttm = None
+            _valuation_md.revenue_history = []
+            _valuation_md.ebitda_ttm = None
+            _valuation_md.fcf_ttm = None
+            _valuation_md.ebitda_margin = None
+            _valuation_md.net_margin = None
+            _valuation_md.gross_margin = None
+        _valuation_financials["revenue_current"] = None
+        _valuation_financials["revenue_series"] = []
+        _valuation_financials["revenue_growth"] = None
+        console.print(
+            "  [yellow]Private valuation gated:[/yellow] run is screen-only until identity and "
+            "revenue quality gates are satisfied."
+        )
     result = svc.run_full_valuation(
-        financials=fin.model_dump(),
+        financials=_valuation_financials,
         assumptions=assumptions_dict,
-        market_data=_md_val,
+        market_data=_valuation_md,
         sector=fund.sector or "",
         company_type=company_type,
     )
@@ -2957,30 +3201,30 @@ def run_analysis(
         _rec = _raw_rec
     if company_type == "private":
         _private_conf_raw = str((market_data.confidence if market_data else "") or "").strip().lower()
-        _private_revenue_unverified = _private_revenue_status in {"estimated", "inferred"}
-        if not _private_identity_resolved:
+        _private_revenue_unverified = _private_revenue_quality not in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}
+        if _private_identity_status != "RESOLVED":
             _low_conviction = True
             if not _private_cap_reason:
                 _private_cap_reason = "private identity not fully resolved from strong registry sources"
             if "Private identity resolution is weak; valuation is indicative only." not in quality.warnings:
                 quality.warnings.append("Private identity resolution is weak; valuation is indicative only.")
-        if (not result.has_revenue) or _private_revenue_status in {"unavailable", "inferred"}:
+        if _private_screen_only or (not result.has_revenue) or _private_revenue_quality in {"UNAVAILABLE", "LOW_CONFIDENCE_ESTIMATE"}:
             _rec = "INCONCLUSIVE"
             _target_price = None
             _ev_str = "N/A"
             rec.upside_pct = None
             rec.intrinsic_price = None
-            valuation_status = "FAILED"
+            valuation_status = "FAILED" if _private_revenue_quality == "UNAVAILABLE" else "DEGRADED"
             if not _private_cap_reason:
                 _private_cap_reason = (
-                    "private revenue not verified (unavailable/inferred); recommendation suppressed"
+                    "private revenue is not verified/high-confidence; run is screen-only and recommendation is suppressed"
                 )
             if quality.score > 55:
                 quality.score = 55
             quality.tier = _quality_tier(quality.score)
-            if "Private revenue is unavailable/inferred; recommendation suppressed (INCONCLUSIVE)." not in quality.warnings:
+            if "Private run is screen-only due to weak identity/revenue confidence; recommendation suppressed (INCONCLUSIVE)." not in quality.warnings:
                 quality.warnings.append(
-                    "Private revenue is unavailable/inferred; recommendation suppressed (INCONCLUSIVE)."
+                    "Private run is screen-only due to weak identity/revenue confidence; recommendation suppressed (INCONCLUSIVE)."
                 )
         elif _private_revenue_unverified or _private_conf_raw in {"estimated", "inferred"}:
             _low_conviction = True
@@ -3014,6 +3258,19 @@ def run_analysis(
         _rec = "INCONCLUSIVE"
         _target_price = None
         _ev_str = "N/A"
+    if company_type == "private":
+        if _private_screen_only or _rec == "INCONCLUSIVE":
+            _private_valuation_mode = "SCREEN_ONLY"
+        elif valuation_status == "FAILED":
+            _private_valuation_mode = "FAILED"
+        else:
+            _private_valuation_mode = "VALUATION_GRADE"
+        sources.add_once(
+            "Private Valuation Mode",
+            _private_valuation_mode,
+            "private_valuation_gate",
+            "inferred",
+        )
 
     # Dump all per-field provenance from the valuation engine.
     # add_once deduplicates by metric name — equity.py may have already logged
@@ -3050,12 +3307,16 @@ def run_analysis(
     sources.add_once("Target Price", _target_price or "N/A", "valuation_engine", "inferred")
     sources.add_once("Upside/Downside", val.upside_downside or "N/A", "valuation_engine", "inferred")
 
-    if result.lbo:
+    if result.lbo and not (company_type == "private" and _private_screen_only):
         lbo = result.lbo
         console.print(
             f"  LBO: {'✓ FEASIBLE' if lbo.is_feasible else '✗ INFEASIBLE'} — "
             f"IRR {lbo.irr:.1%} / {lbo.moic:.1f}x MOIC / "
             f"{lbo.leverage_at_entry:.1f}x entry leverage"
+        )
+    elif result.lbo and company_type == "private" and _private_screen_only:
+        console.print(
+            "  [dim]LBO diagnostic suppressed: private run is screen-only (identity/revenue gate not satisfied).[/dim]"
         )
     if result.sensitivity and result.sensitivity.ev_matrix:
         try:
@@ -3124,6 +3385,8 @@ def run_analysis(
     football_field: FootballField | None = None
     ic_summary: ICScoreSummary | None = None
     try:
+        if company_type == "private" and _private_screen_only:
+            raise ValueError("private screen-only mode: valuation scenarios suppressed (identity/revenue gate)")
         if normalization_blocked:
             raise ValueError("valuation blocked due to failed currency/share normalization")
         if _hard_suppression_reasons:
@@ -3340,6 +3603,11 @@ def run_analysis(
                 "  [yellow]Scenarios suppressed:[/yellow] valuation recommendation is INCONCLUSIVE "
                 "after sanity-breaker trigger."
             )
+        if "private screen-only mode" in _scenario_err.lower():
+            console.print(
+                "  [yellow]Scenarios suppressed:[/yellow] private run is screen-only until identity and revenue "
+                "quality gates are satisfied."
+            )
         if "scenario ordering failed" in _scenario_err.lower():
             quality.warnings.append("Scenario ordering failed; football field suppressed.")
             if valuation_status == "OK":
@@ -3407,46 +3675,62 @@ def run_analysis(
     else:
         _report_timeout = _REPORT_WRITER_TIMEOUT_STANDARD
     if quick_mode:
-        _modeled_growth = (result.field_sources.get("Modeled Revenue Growth") or ("N/A", "", ""))[0]
         _fv_range = (result.field_sources.get("Fair Value Range") or ("N/A", "", ""))[0]
         _prof = get_sector_profile(
             fund.sector or "",
             _target_industry if "_target_industry" in locals() else "",
         )
-        _drivers = ", ".join(_prof.demand_drivers[:2]) if _prof.demand_drivers else "demand resilience and execution discipline"
-        _margins = ", ".join(_prof.margin_drivers[:2]) if _prof.margin_drivers else "mix and operating leverage"
-        _risk_list = list(_prof.common_risks[:3]) if _prof.common_risks else [
-            "demand-cycle volatility",
-            "regulatory/policy pressure",
-            "peer-vs-DCF valuation dispersion",
-        ]
-        _quick_text = (
-            "Thesis:\n"
-            f"- Sector profile: {_prof.label or (fund.sector or 'Default fallback')}.\n"
-            f"- Demand drivers: {_drivers}.\n"
-            f"- Margin drivers: {_margins}.\n"
-            f"- Valuation signal: {_model_signal_for_text} ({val.upside_downside or 'N/A'}); "
-            f"final recommendation {_rec} due to confidence/dispersion guardrails.\n"
-            f"- Indicative fair value: {_fv_range} (use range over point estimate when confidence is low).\n"
-            "\nRisks:\n"
-            + "".join(f"- {r}.\n" for r in _risk_list)
-        ).rstrip()
-        thesis = InvestmentThesis(
-            thesis=_quick_text,
-            catalysts=_sanitize_catalysts(
-                _fallback_catalysts(
-                    company,
-                    fund.sector or "",
-                    _target_industry if "_target_industry" in locals() else "",
-                    ticker=(market_data.ticker if market_data else ""),
-                )
-            )[:3],
-            key_questions=[
-                "What metric would move conviction most next quarter?",
-                "How robust is margin durability vs peers?",
-                "What catalyst could change the recommendation?",
-            ],
-        )
+        if company_type == "private":
+            _private_reason = (
+                "archetype-based deterministic fallback (private screen-only mode)"
+                if _private_screen_only
+                else "archetype-based deterministic fallback"
+            )
+            thesis = _build_fallback_thesis(
+                company=company,
+                sector=fund.sector or "",
+                recommendation=val.recommendation or "INCONCLUSIVE",
+                reason=_private_reason,
+                model_signal=_model_signal_for_text,
+                industry=_target_industry if "_target_industry" in locals() else "",
+                ticker=(market_data.ticker if market_data else ""),
+            )
+            thesis.catalysts = _sanitize_catalysts(thesis.catalysts)[:3]
+        else:
+            _drivers = ", ".join(_prof.demand_drivers[:2]) if _prof.demand_drivers else "demand resilience and execution discipline"
+            _margins = ", ".join(_prof.margin_drivers[:2]) if _prof.margin_drivers else "mix and operating leverage"
+            _risk_list = list(_prof.common_risks[:3]) if _prof.common_risks else [
+                "demand-cycle volatility",
+                "regulatory/policy pressure",
+                "peer-vs-DCF valuation dispersion",
+            ]
+            _quick_text = (
+                "Thesis:\n"
+                f"- Sector profile: {_prof.label or (fund.sector or 'Default fallback')}.\n"
+                f"- Demand drivers: {_drivers}.\n"
+                f"- Margin drivers: {_margins}.\n"
+                f"- Valuation signal: {_model_signal_for_text} ({val.upside_downside or 'N/A'}); "
+                f"final recommendation {_rec} due to confidence/dispersion guardrails.\n"
+                f"- Indicative fair value: {_fv_range} (use range over point estimate when confidence is low).\n"
+                "\nRisks:\n"
+                + "".join(f"- {r}.\n" for r in _risk_list)
+            ).rstrip()
+            thesis = InvestmentThesis(
+                thesis=_quick_text,
+                catalysts=_sanitize_catalysts(
+                    _fallback_catalysts(
+                        company,
+                        fund.sector or "",
+                        _target_industry if "_target_industry" in locals() else "",
+                        ticker=(market_data.ticker if market_data else ""),
+                    )
+                )[:3],
+                key_questions=[
+                    "What metric would move conviction most next quarter?",
+                    "How robust is margin durability vs peers?",
+                    "What catalyst could change the recommendation?",
+                ],
+            )
         log.end_step("thesis", t0)
         _done("Investment Thesis", t0)
     elif cli_mode and _research_source != "source_backed":
@@ -4253,9 +4537,16 @@ def run_analysis(
                 "peer_quality_score": _peer_quality_score,
                 "financial_data_quality_score": _financial_data_quality_score,
                 "report_mode": _report_mode,
+                "company_type": company_type,
                 "private_revenue_status": _private_revenue_status if company_type == "private" else "",
+                "private_revenue_quality": _private_revenue_quality if company_type == "private" else "",
                 "private_triangulation_used": bool(_private_triangulation_used) if company_type == "private" else False,
                 "private_identity_resolved": bool(_private_identity_resolved) if company_type == "private" else True,
+                "private_identity_status": _private_identity_status if company_type == "private" else "",
+                "private_financials_quality": _private_financials_quality if company_type == "private" else "",
+                "private_peers_state": _private_peers_state if company_type == "private" else "",
+                "private_valuation_mode": _private_valuation_mode if company_type == "private" else "",
+                "private_screen_only_reasons": list(dict.fromkeys(_private_screen_only_reasons)) if company_type == "private" else [],
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),

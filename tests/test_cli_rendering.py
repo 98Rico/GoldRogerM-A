@@ -309,3 +309,29 @@ def test_private_confidence_improvement_actions_are_private_specific():
     joined = " | ".join(tips).lower()
     assert "private" in joined
     assert "apple-like peer context" not in joined
+
+
+def test_pipeline_status_block_uses_private_status_semantics():
+    block, _ = _render_pipeline_status_block(
+        {
+            "company_type": "private",
+            "research_enrichment": "PARTIAL_FALLBACK",
+            "peers": "FAILED",
+            "valuation": "FAILED",
+            "confidence": "Low",
+            "recommendation": "INCONCLUSIVE",
+            "private_revenue_status": "estimated",
+            "private_revenue_quality": "LOW_CONFIDENCE_ESTIMATE",
+            "private_identity_status": "WEAK",
+            "private_financials_quality": "ESTIMATED",
+            "private_peers_state": "FAILED",
+            "private_valuation_mode": "SCREEN_ONLY",
+            "private_screen_only_reasons": ["identity gate not satisfied", "revenue gate not satisfied"],
+        }
+    )
+    assert "Market data: N/A (private providers)" in block
+    assert "Identity: WEAK" in block
+    assert "Revenue: LOW_CONFIDENCE_ESTIMATE" in block
+    assert "Financials: ESTIMATED" in block
+    assert "Private valuation mode: SCREEN_ONLY" in block
+    assert "Screen-only reasons: identity gate not satisfied, revenue gate not satisfied" in block

@@ -85,6 +85,7 @@ def _run_private_case(
     provider_results: dict[str, MarketData | None] | None = None,
     triangulation_result: TriangulationResult | None = None,
     country_hint: str = "",
+    skipped_missing_credentials: list[str] | None = None,
 ):
     import goldroger.data.private_triangulation as tri_mod
     import goldroger.data.source_selector as selector_mod
@@ -106,7 +107,7 @@ def _run_private_case(
             manual_revenue_usd_m=None,
             country_iso=(country_hint or None),
             unknown_sources=[],
-            skipped_missing_credentials=[],
+            skipped_missing_credentials=list(skipped_missing_credentials or []),
             requested_sources=list(requested or []),
         ),
     )
@@ -200,6 +201,9 @@ def test_private_no_verified_revenue_is_inconclusive(monkeypatch):
     assert analysis.valuation.recommendation == "INCONCLUSIVE"
     assert analysis.valuation.target_price in {None, "N/A"}
     assert str(ps.get("private_revenue_status")) == "unavailable"
+    assert str(ps.get("private_revenue_quality")) == "UNAVAILABLE"
+    assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
+    assert analysis.football_field is None
 
 
 def test_private_triangulated_revenue_is_tagged_and_capped(monkeypatch):
@@ -224,7 +228,11 @@ def test_private_triangulated_revenue_is_tagged_and_capped(monkeypatch):
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert bool(ps.get("private_triangulation_used")) is True
     assert str(ps.get("private_revenue_status")) == "estimated"
-    assert "LOW CONVICTION" in str(analysis.valuation.recommendation)
+    assert str(ps.get("private_revenue_quality")) == "LOW_CONFIDENCE_ESTIMATE"
+    assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
+    assert str(analysis.valuation.recommendation) == "INCONCLUSIVE"
+    assert analysis.valuation.target_price in {None, "N/A"}
+    assert analysis.football_field is None
     assert "triangulation" in (analysis.sources_md or "").lower()
 
 
@@ -239,11 +247,14 @@ def test_private_verified_revenue_uses_private_label_taxonomy(monkeypatch):
         country_hint="FR",
     )
     rec = str(analysis.valuation.recommendation or "")
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert not rec.startswith(("BUY", "SELL", "HOLD"))
     assert any(
         rec.startswith(lbl)
         for lbl in ("ATTRACTIVE ENTRY", "CONDITIONAL GO", "SELECTIVE BUY", "FULL PRICE", "NEUTRAL", "INCONCLUSIVE")
     )
+    assert str(ps.get("private_revenue_quality")) in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}
+    assert str(ps.get("private_valuation_mode")) in {"VALUATION_GRADE", "SCREEN_ONLY"}
 
 
 def test_private_provider_conflict_notes_are_in_provenance(monkeypatch):
@@ -280,7 +291,27 @@ def test_private_unresolved_identity_is_not_high_conviction(monkeypatch):
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     rec = str(analysis.valuation.recommendation or "")
     assert bool(ps.get("private_identity_resolved")) is False
-    assert ("LOW CONVICTION" in rec) or rec.startswith("INCONCLUSIVE")
+    assert str(ps.get("private_identity_status")) in {"WEAK", "UNRESOLVED"}
+    assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
+    assert analysis.football_field is None
+    assert analysis.valuation.target_price in {None, "N/A"}
+    assert rec.startswith("INCONCLUSIVE")
+
+
+def test_private_missing_pappers_key_is_logged_as_limitation(monkeypatch):
+    md = _md(company="Doctolib", source="infogreffe", revenue_m=None, confidence="inferred")
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Doctolib",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+        skipped_missing_credentials=["pappers"],
+    )
+    md_text = analysis.sources_md or ""
+    assert "Private Revenue Limitation" in md_text
+    assert "Pappers key is not configured" in md_text
 
 
 @pytest.mark.parametrize(

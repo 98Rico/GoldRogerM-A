@@ -658,7 +658,9 @@ def _normalize_valuation_status(raw_status: str, confidence: str) -> str:
 
 
 def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
-    market_data_state = "OK"
+    _company_type = str(pipeline_status.get("company_type", "") or "").strip().lower()
+    _is_private = _company_type == "private" or bool(pipeline_status.get("private_revenue_status"))
+    market_data_state = "N/A (private providers)" if _is_private else "OK"
     research_state = _normalize_research_status(str(pipeline_status.get("research_enrichment", "OK")))
     peers_state = str(pipeline_status.get("peers", "N/A")).upper()
     if peers_state == "DEGRADED_API_CAPACITY":
@@ -671,6 +673,10 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         str(pipeline_status.get("valuation", "N/A")),
         str(pipeline_status.get("confidence", "")),
     )
+    if _is_private:
+        _p_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
+        if _p_val_mode in {"VALUATION_GRADE", "SCREEN_ONLY", "FAILED"}:
+            valuation_state = _p_val_mode
     rec_state = str(pipeline_status.get("recommendation", "N/A"))
     _qual_backed_avail = pipeline_status.get("source_backed_market_context_available")
     _qual_backed_used = pipeline_status.get("source_backed_market_context_used_in_thesis")
@@ -757,13 +763,33 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         block += f"\n  Report mode: {_report_mode}"
     _private_rev_status = str(pipeline_status.get("private_revenue_status", "") or "").strip()
     if _private_rev_status:
+        _private_identity_status = str(pipeline_status.get("private_identity_status", "") or "").strip().upper() or (
+            "RESOLVED" if bool(pipeline_status.get("private_identity_resolved")) else "UNRESOLVED"
+        )
+        _private_rev_quality = str(pipeline_status.get("private_revenue_quality", "") or "").strip().upper()
+        _private_fin_q = str(pipeline_status.get("private_financials_quality", "") or "").strip().upper()
+        _private_peers = str(pipeline_status.get("private_peers_state", "") or "").strip().upper()
+        _private_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
         _private_tri = bool(pipeline_status.get("private_triangulation_used"))
         _private_id_ok = bool(pipeline_status.get("private_identity_resolved"))
+        _private_screen_reasons = pipeline_status.get("private_screen_only_reasons") or []
+        _private_screen_txt = ""
+        if isinstance(_private_screen_reasons, list) and _private_screen_reasons:
+            _private_screen_txt = ", ".join(str(x) for x in _private_screen_reasons if str(x).strip())
         block += (
             f"\n  Private revenue status: {_private_rev_status}"
             + (" | triangulation used" if _private_tri else "")
             + (" | identity resolved" if _private_id_ok else " | identity unresolved")
         )
+        block += (
+            f"\n  Identity: {_private_identity_status}"
+            f"\n  Revenue: {_private_rev_quality or _private_rev_status.upper()}"
+            f"\n  Financials: {_private_fin_q or 'UNAVAILABLE'}"
+            f"\n  Private peers: {_private_peers or 'FAILED'}"
+            f"\n  Private valuation mode: {_private_val_mode or 'SCREEN_ONLY'}"
+        )
+        if _private_screen_txt:
+            block += f"\n  Screen-only reasons: {_private_screen_txt}"
     block += (
         f"\n  Research collection: {_research_collection}"
         f" | Qualitative context: {_qual_context_state}"
@@ -1293,19 +1319,37 @@ def print_result(result, debug: bool = False):
     kpi_table = Table(title="Key Financials", show_header=True, header_style="bold magenta")
     kpi_table.add_column("Metric")
     kpi_table.add_column("Value")
-    for row in [
-        ("Revenue", _source_value("Revenue") or _source_value("Revenue TTM") or fin.revenue_current),
-        ("Revenue Growth", fin.revenue_growth),
-        ("Modeled Revenue Growth", _source_value("Modeled Revenue Growth")),
-        ("Gross Margin", fin.gross_margin),
-        ("EBITDA Margin", fin.ebitda_margin),
-        ("Net Margin", fin.net_margin),
-        ("Free Cash Flow", _source_value("Free Cash Flow") or fin.free_cash_flow),
-        ("TAM", m.market_size),
-        ("Market Growth", m.market_growth),
-        ("Terminal Growth", _source_value("Terminal Growth")),
-    ]:
-        kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
+    _private_val_mode = str((_pipeline_status or {}).get("private_valuation_mode", "") or "").strip().upper()
+    _private_screen_only_mode = (_private_val_mode == "SCREEN_ONLY")
+    if str(getattr(result, "company_type", "")).lower() == "private" and _private_screen_only_mode:
+        _private_rows = [
+            ("Revenue", _source_value("Revenue TTM") or _source_value("Revenue") or "N/A"),
+            ("Revenue Growth", "N/A [screen-only: non-valuation-grade]"),
+            ("Modeled Revenue Growth", "N/A [screen-only: non-valuation-grade]"),
+            ("Gross Margin", "N/A [screen-only: non-valuation-grade]"),
+            ("EBITDA Margin", "N/A [screen-only: non-valuation-grade]"),
+            ("Net Margin", "N/A [screen-only: non-valuation-grade]"),
+            ("Free Cash Flow", "N/A [screen-only: non-valuation-grade]"),
+            ("TAM", m.market_size),
+            ("Market Growth", m.market_growth),
+            ("Terminal Growth", _source_value("Terminal Growth")),
+        ]
+        for row in _private_rows:
+            kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
+    else:
+        for row in [
+            ("Revenue", _source_value("Revenue") or _source_value("Revenue TTM") or fin.revenue_current),
+            ("Revenue Growth", fin.revenue_growth),
+            ("Modeled Revenue Growth", _source_value("Modeled Revenue Growth")),
+            ("Gross Margin", fin.gross_margin),
+            ("EBITDA Margin", fin.ebitda_margin),
+            ("Net Margin", fin.net_margin),
+            ("Free Cash Flow", _source_value("Free Cash Flow") or fin.free_cash_flow),
+            ("TAM", m.market_size),
+            ("Market Growth", m.market_growth),
+            ("Terminal Growth", _source_value("Terminal Growth")),
+        ]:
+            kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
     console.print(kpi_table)
     _sector_ind = f"{f.sector or ''} {(_source_value('Industry') or '')}".lower()
     if any(tok in _sector_ind for tok in ("tobacco", "nicotine")):

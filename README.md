@@ -301,9 +301,26 @@ This mechanism already exists in the current codebase and is used by `--type pri
   - `Private Identity Resolution`
   - `private_triangulation_used` (pipeline status)
 - Conservative behavior:
-  - no revenue or inferred/unavailable revenue -> `INCONCLUSIVE`
-  - estimated revenue -> recommendation is capped to `... / LOW CONVICTION`
+  - no revenue or low-confidence inferred/triangulated revenue -> `SCREEN_ONLY` + `INCONCLUSIVE`
+  - weak identity resolution -> `SCREEN_ONLY` + `INCONCLUSIVE`
+  - only verified/high-confidence revenue with resolved identity can be `VALUATION_GRADE`
   - weak identity resolution -> low-conviction warning and cap behavior
+
+### 5b) Private status semantics
+
+Private runs use private-specific trust labels in `Pipeline status`:
+- `Identity`: `RESOLVED` / `WEAK` / `UNRESOLVED`
+- `Revenue`: `VERIFIED` / `HIGH_CONFIDENCE_ESTIMATE` / `LOW_CONFIDENCE_ESTIMATE` / `UNAVAILABLE`
+- `Financials`: `VERIFIED` / `ESTIMATED` / `UNAVAILABLE`
+- `Private peers`: `OK` / `WEAK` / `FAILED`
+- `Private valuation mode`: `VALUATION_GRADE` / `SCREEN_ONLY` / `FAILED`
+
+When `SCREEN_ONLY` is active:
+- recommendation is forced to `INCONCLUSIVE`,
+- target/upside stay `N/A`,
+- football-field scenarios are suppressed,
+- LBO feasibility is treated as diagnostic and not rendered as investable output,
+- key financial lines are shown as non-valuation-grade when necessary.
 
 ### 6) Valuation path and labels
 - Valuation math remains deterministic (same engine, private weights are sector/type-aware).
@@ -314,6 +331,7 @@ This mechanism already exists in the current codebase and is used by `--type pri
   - `FULL PRICE`
   - `INCONCLUSIVE` when integrity is insufficient
 - If confidence is weak, private labels are explicitly marked `LOW CONVICTION`.
+- LLM or triangulated revenue estimates are never treated as verified valuation-grade inputs.
 
 ### 7) Exports and provenance
 - Excel/PPT exports still run on degraded private cases without crashing.
@@ -420,6 +438,9 @@ For validation benchmarks and expected invariants, see [docs/VALIDATION.md](docs
 - Private triangulation uses heuristic signals and should not be treated as filing-grade financial truth.
 - Provider schema differences and stale filings can create dispersion in private value ranges.
 - Private outputs are suitable for prototype screening and prioritization, not client-ready valuation opinions without analyst verification.
+- FR: without `PAPPERS_API_KEY`, verified revenue is commonly unavailable for SAS entities; runs may remain `SCREEN_ONLY`.
+- GB: Companies House provides strong identity/filing metadata but revenue extraction is best-effort and can remain unavailable.
+- DE: Handelsregister identity/revenue coverage can be sparse; unresolved identity should be treated as `SCREEN_ONLY` until a legal identifier or verified revenue is provided.
 
 ## Public Validation Examples
 

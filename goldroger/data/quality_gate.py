@@ -38,10 +38,15 @@ def assess_data_quality(
     checks: dict[str, str] = {}
     has_estimated_inputs = False
 
-    rev = _num(
-        (market_data.revenue_ttm if market_data else None)
-        or financials.get("revenue_current")
-    )
+    if company_type == "private":
+        # Private guardrail: do not treat LLM financials as valuation-grade revenue.
+        # Revenue must come from provider/registry/verified private pipeline records.
+        rev = _num(market_data.revenue_ttm if market_data else None)
+    else:
+        rev = _num(
+            (market_data.revenue_ttm if market_data else None)
+            or financials.get("revenue_current")
+        )
     ebitda_margin = _num(
         (market_data.ebitda_margin if market_data else None)
         or financials.get("ebitda_margin")

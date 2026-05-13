@@ -19,6 +19,76 @@ class SectorProfile:
 
 
 _ARCHETYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "healthtech_platform": (
+        "healthtech",
+        "digital health",
+        "medical scheduling",
+        "provider workflow",
+        "telemedicine",
+        "patient engagement",
+    ),
+    "fintech_digital_bank_payments": (
+        "fintech",
+        "digital bank",
+        "neobank",
+        "payments",
+        "card issuance",
+        "interchange",
+        "lending",
+        "compliance",
+    ),
+    "hrtech_saas": (
+        "hr tech",
+        "hrtech",
+        "human resources",
+        "hcm",
+        "payroll",
+        "workforce management",
+        "talent",
+    ),
+    "b2b_saas": (
+        "b2b saas",
+        "subscription software",
+        "enterprise workflow",
+        "arr",
+        "seat expansion",
+    ),
+    "marketplace": (
+        "marketplace",
+        "take rate",
+        "gross merchandise value",
+        "gmv",
+        "seller liquidity",
+    ),
+    "consumer_brand": (
+        "consumer brand",
+        "apparel",
+        "beauty",
+        "wellness",
+        "d2c",
+        "retail expansion",
+    ),
+    "industrial_private": (
+        "industrial",
+        "manufacturing",
+        "automation",
+        "capital equipment",
+        "order backlog",
+    ),
+    "professional_services": (
+        "consulting",
+        "advisory",
+        "professional services",
+        "utilization",
+        "billable rate",
+    ),
+    "healthcare_services": (
+        "healthcare services",
+        "care delivery",
+        "provider network",
+        "reimbursement",
+        "patient volumes",
+    ),
     "premium_device_platform": (
         "apple",
         "iphone",
@@ -104,6 +174,213 @@ _ARCHETYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
 
 
 _ARCHETYPE_FALLBACKS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    "healthtech_platform": {
+        "label": "healthtech_platform",
+        "demand_drivers": (
+            "provider and clinic digitalization",
+            "patient adoption of digital access and telehealth",
+            "workflow stickiness and platform expansion",
+        ),
+        "margin_drivers": (
+            "software mix and recurring subscriptions",
+            "sales efficiency and retention",
+            "implementation/support cost leverage",
+        ),
+        "risks": (
+            "clinical/workflow switching friction",
+            "regulatory and data-privacy requirements",
+            "competitive platform pressure",
+        ),
+        "catalysts": (
+            "Next operating update: provider growth, retention, and monetization.",
+            "Product rollout update: workflow adoption and engagement durability.",
+            "Regulatory/policy updates affecting digital healthcare operations.",
+        ),
+    },
+    "fintech_digital_bank_payments": {
+        "label": "fintech_digital_bank_payments",
+        "demand_drivers": (
+            "customer-account growth and engagement",
+            "payments volume and card usage",
+            "product expansion across banking and adjacent services",
+        ),
+        "margin_drivers": (
+            "interchange and fee mix",
+            "credit/funding cost dynamics",
+            "operating leverage versus compliance and risk costs",
+        ),
+        "risks": (
+            "credit quality and macro sensitivity",
+            "regulatory/compliance requirements",
+            "competition from incumbents and other fintech platforms",
+        ),
+        "catalysts": (
+            "Next operating update: customer growth, ARPU, and margin guidance.",
+            "Credit/funding update: delinquency, loss, and funding-cost trends.",
+            "Regulatory updates affecting product scope or economics.",
+        ),
+    },
+    "hrtech_saas": {
+        "label": "hrtech_saas",
+        "demand_drivers": (
+            "SMB/enterprise HR software adoption",
+            "seat growth and module expansion",
+            "retention and upsell durability",
+        ),
+        "margin_drivers": (
+            "subscription mix",
+            "sales and onboarding efficiency",
+            "operating leverage in support and G&A",
+        ),
+        "risks": (
+            "budget-cycle pressure in SMB/enterprise customers",
+            "competition in payroll/HCM stack",
+            "implementation complexity and churn risk",
+        ),
+        "catalysts": (
+            "Next operating update: ARR/retention and margin trajectory.",
+            "Product roadmap update: payroll/HCM module adoption.",
+            "Macro hiring trends affecting seat expansion.",
+        ),
+    },
+    "b2b_saas": {
+        "label": "b2b_saas",
+        "demand_drivers": (
+            "enterprise software spending",
+            "net retention and account expansion",
+            "new-logo acquisition efficiency",
+        ),
+        "margin_drivers": (
+            "subscription gross margin",
+            "sales productivity",
+            "operating leverage",
+        ),
+        "risks": (
+            "IT budget tightening",
+            "competitive pricing pressure",
+            "platform concentration risk",
+        ),
+        "catalysts": (
+            "Next operating update: ARR growth, retention, and margin guidance.",
+            "Go-to-market update: sales efficiency and payback trends.",
+            "Product/pricing update: evidence of durable expansion.",
+        ),
+    },
+    "marketplace": {
+        "label": "marketplace",
+        "demand_drivers": (
+            "GMV growth and transaction frequency",
+            "buyer/seller liquidity depth",
+            "geographic/category expansion",
+        ),
+        "margin_drivers": (
+            "take-rate evolution",
+            "marketing efficiency",
+            "fulfillment and support-cost leverage",
+        ),
+        "risks": (
+            "demand cyclicality",
+            "competition and subsidy intensity",
+            "regulatory pressure in platform economics",
+        ),
+        "catalysts": (
+            "Next operating update: GMV, take-rate, and contribution margin trends.",
+            "Liquidity update: buyer/seller growth and retention.",
+            "Regulatory/platform updates affecting marketplace economics.",
+        ),
+    },
+    "consumer_brand": {
+        "label": "consumer_brand",
+        "demand_drivers": (
+            "brand momentum and repeat purchase",
+            "channel mix (D2C vs wholesale/retail)",
+            "new category and geographic expansion",
+        ),
+        "margin_drivers": (
+            "pricing power",
+            "gross-margin mix and input costs",
+            "marketing efficiency",
+        ),
+        "risks": (
+            "consumer demand volatility",
+            "inventory and markdown risk",
+            "channel concentration",
+        ),
+        "catalysts": (
+            "Next operating update: growth, gross margin, and inventory discipline.",
+            "Channel update: D2C performance versus wholesale/retail partners.",
+            "Product launch update: evidence of repeat demand and pricing resilience.",
+        ),
+    },
+    "industrial_private": {
+        "label": "industrial_private",
+        "demand_drivers": (
+            "industrial production and end-market demand",
+            "order intake and backlog conversion",
+            "aftermarket/service attachment",
+        ),
+        "margin_drivers": (
+            "utilization and mix",
+            "input-cost management",
+            "operating leverage and productivity",
+        ),
+        "risks": (
+            "cyclical demand swings",
+            "project-execution variability",
+            "input-cost and supply-chain pressure",
+        ),
+        "catalysts": (
+            "Next operating update: orders, backlog, and margin guidance.",
+            "Execution update: delivery cadence and cost-control progress.",
+            "Macro/industrial activity updates affecting demand visibility.",
+        ),
+    },
+    "professional_services": {
+        "label": "professional_services",
+        "demand_drivers": (
+            "client-project pipeline and renewal rates",
+            "advisory demand in core verticals",
+            "cross-sell and account expansion",
+        ),
+        "margin_drivers": (
+            "utilization rates",
+            "billable-rate realization",
+            "delivery efficiency",
+        ),
+        "risks": (
+            "project timing volatility",
+            "talent retention and wage inflation",
+            "client concentration",
+        ),
+        "catalysts": (
+            "Next operating update: utilization, bookings, and margin cadence.",
+            "Talent update: hiring, retention, and wage trend impact.",
+            "Client-mix update: demand breadth across key verticals.",
+        ),
+    },
+    "healthcare_services": {
+        "label": "healthcare_services",
+        "demand_drivers": (
+            "patient volumes and case mix",
+            "provider-network reach",
+            "service-line expansion",
+        ),
+        "margin_drivers": (
+            "payer mix and reimbursement",
+            "labor productivity",
+            "occupancy/utilization dynamics",
+        ),
+        "risks": (
+            "reimbursement policy changes",
+            "labor cost pressure",
+            "regulatory/compliance intensity",
+        ),
+        "catalysts": (
+            "Next operating update: patient volumes, payer mix, and margin guidance.",
+            "Reimbursement/policy updates with potential earnings impact.",
+            "Capacity and staffing updates affecting service throughput.",
+        ),
+    },
     "premium_device_platform": {
         "label": "premium_device_platform",
         "demand_drivers": (
@@ -468,6 +745,24 @@ def detect_company_archetype(
     industry: str = "",
 ) -> str:
     txt = f"{company or ''} {ticker or ''} {sector or ''} {industry or ''}".lower()
+    if any(k in txt for k in ("doctolib", "healthtech", "digital health", "telemedicine")):
+        return "healthtech_platform"
+    if any(k in txt for k in ("revolut", "monzo", "wise", "adyen", "fintech", "digital bank", "payments")):
+        return "fintech_digital_bank_payments"
+    if any(k in txt for k in ("personio", "hr tech", "hrtech", "human resources", "hcm", "payroll platform")):
+        return "hrtech_saas"
+    if any(k in txt for k in ("b2b saas", "subscription software", "enterprise workflow")):
+        return "b2b_saas"
+    if any(k in txt for k in ("marketplace", "gmv", "take rate", "platform marketplace")):
+        return "marketplace"
+    if any(k in txt for k in ("consumer brand", "apparel", "beauty", "wellness", "d2c")):
+        return "consumer_brand"
+    if any(k in txt for k in ("industrial", "manufacturing", "automation", "capital equipment")):
+        return "industrial_private"
+    if any(k in txt for k in ("professional services", "consulting", "advisory")):
+        return "professional_services"
+    if any(k in txt for k in ("healthcare services", "care delivery", "provider network")):
+        return "healthcare_services"
     if "aapl" in txt or "apple" in txt:
         return "premium_device_platform"
     if any(k in txt for k in ("tobacco", "nicotine", "bats", "bti", "british american tobacco")):

@@ -109,11 +109,12 @@ uv run python -m goldroger.cli --company "Personio" --type private --quick
 ### Private invariants
 
 - No verified/high-confidence revenue:
-  - recommendation must be `INCONCLUSIVE` or private label + `LOW CONVICTION`
-  - no high-conviction private call.
+  - `Private valuation mode` must be `SCREEN_ONLY`
+  - recommendation must be `INCONCLUSIVE`
+  - no valuation-grade target/upside should be shown.
 - Triangulated revenue:
   - must be provenance-tagged (`triangulation`)
-  - must be confidence-capped.
+  - must be treated as `LOW_CONFIDENCE_ESTIMATE` (non-valuation-grade).
 - Private recommendation labels:
   - must use private taxonomy (`ATTRACTIVE ENTRY`, `CONDITIONAL GO`, `SELECTIVE BUY`, `FULL PRICE`, `INCONCLUSIVE`)
   - must not fall back to public BUY/HOLD/SELL labels.
