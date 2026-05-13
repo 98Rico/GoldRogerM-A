@@ -755,6 +755,15 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _report_mode = str(pipeline_status.get("report_mode", "") or "").strip().upper()
     if _report_mode:
         block += f"\n  Report mode: {_report_mode}"
+    _private_rev_status = str(pipeline_status.get("private_revenue_status", "") or "").strip()
+    if _private_rev_status:
+        _private_tri = bool(pipeline_status.get("private_triangulation_used"))
+        _private_id_ok = bool(pipeline_status.get("private_identity_resolved"))
+        block += (
+            f"\n  Private revenue status: {_private_rev_status}"
+            + (" | triangulation used" if _private_tri else "")
+            + (" | identity resolved" if _private_id_ok else " | identity unresolved")
+        )
     block += (
         f"\n  Research collection: {_research_collection}"
         f" | Qualitative context: {_qual_context_state}"
@@ -917,12 +926,26 @@ def _confidence_improvement_actions(
     confidence_reason: str,
     research_state: str,
     peers_state: str,
+    company_type: str = "public",
 ) -> list[str]:
     sec = (sector or "").lower()
     rs = (research_state or "").upper()
     ps = (peers_state or "").upper()
     reasons = (confidence_reason or "").lower()
+    ctype = (company_type or "").lower()
     tips: list[str] = []
+    if ctype == "private":
+        if rs in {"PARTIAL_FALLBACK", "FAILED", "SKIPPED_QUICK_MODE"}:
+            tips.append("add source-backed private-company context (registry filings, verified revenue, and legal identifiers)")
+        if "identity" in reasons:
+            tips.append("resolve legal identity using a strong registry identifier (SIREN/company number) before valuation")
+        if "revenue" in reasons:
+            tips.append("add verified or high-confidence revenue input; triangulated/inferred revenue should remain indicative")
+        if ps in {"PEERS_FAILED", "NO_PURE_COMPS", "ADJACENT_COMPS_LOW_DIVERSITY"}:
+            tips.append("improve private-peer set quality with closer business-model comparables")
+        if not tips:
+            tips.append("collect verified private financial inputs and strengthen legal-identity provenance")
+        return tips[:4]
     if rs in {"PARTIAL_FALLBACK", "FAILED"}:
         tips.append("add source-backed market context (trends/catalysts) instead of fallback-only research")
     if ps in {"ADJACENT_COMPS_LOW_DIVERSITY", "ADJACENT_COMPS", "ADJACENT_COMPS_OK", "NO_PURE_COMPS", "PEERS_DEGRADED"}:
@@ -1083,6 +1106,7 @@ def print_result(result, debug: bool = False):
             confidence_reason=_status_reason,
             research_state=_research_state_for_tips,
             peers_state=_peers_state_for_tips,
+            company_type=getattr(result, "company_type", "public"),
         )
         if _tips and str(_pipeline_status.get("confidence", "")).lower() == "low":
             console.print("[bold]What Would Improve Confidence:[/bold]")

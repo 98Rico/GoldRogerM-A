@@ -256,6 +256,106 @@ uv run python -m goldroger.cli --company "AAPL" --type public --full-report
 uv run python -m goldroger.cli --company "Doctolib" --type private
 ```
 
+## Private Company Valuation — Current Mechanism
+
+This mechanism already exists in the current codebase and is used by `--type private`.
+
+### 1) Entrypoint and routing
+- CLI entrypoint: `goldroger/cli.py`
+- Orchestration entrypoint: `goldroger/orchestrator.py`
+- Main private flow: `goldroger/pipelines/equity.py` inside `run_analysis(..., company_type="private")`
+
+### 2) Source selection and provider flow
+- Private runs start with registry/provider discovery, then optional additional providers:
+  - SIREN path (FR) when provided.
+  - Name-based resolver + `DEFAULT_REGISTRY.fetch_by_name(...)`.
+  - Source selection from `goldroger/data/source_selector.py`:
+    - `--sources auto` (default): country-relevant + global non-premium providers
+    - explicit `--sources ...`
+    - `--interactive` for manual provider prompts and optional manual revenue override.
+- Provider orchestration registry: `goldroger/data/registry.py`
+  - country-priority routing table (`FR`, `GB`, `DE`, `NL`, `ES`, `US`) before global fallbacks.
+
+### 3) Country/provider behavior (prototype)
+- FR: `pappers` (verified revenue when key present), `infogreffe` (sector/identity, no revenue)
+- GB: `companies_house` (identity + filings metadata, revenue best-effort)
+- DE: `handelsregister` (best-effort revenue extraction)
+- NL: `kvk` (identity/sector, no revenue)
+- ES: `registro_mercantil` (existence/registry context, no revenue)
+- US: `sec_edgar` (filer/XBRL revenue where available)
+- Global supplemental: `crunchbase` (estimated), `triangulation` fallback
+
+### 4) Revenue discovery and deterministic merge
+- Private revenue candidate merge is deterministic (`goldroger/data/private_quality.py`):
+  - weighted by source reliability and confidence,
+  - verified cohorts preferred,
+  - outlier trimming applied,
+  - merge notes emitted.
+- If providers still have no revenue, deterministic triangulation can run (`goldroger/data/private_triangulation.py`).
+
+### 5) Confidence/provenance and suppression
+- Revenue confidence states are explicit (`verified` / `estimated` / `inferred` / unavailable).
+- `sources.md` records provenance for key fields and merge notes.
+- Private pipeline now surfaces:
+  - `Private Revenue Status`
+  - `Private Identity Resolution`
+  - `private_triangulation_used` (pipeline status)
+- Conservative behavior:
+  - no revenue or inferred/unavailable revenue -> `INCONCLUSIVE`
+  - estimated revenue -> recommendation is capped to `... / LOW CONVICTION`
+  - weak identity resolution -> low-conviction warning and cap behavior
+
+### 6) Valuation path and labels
+- Valuation math remains deterministic (same engine, private weights are sector/type-aware).
+- Private recommendation taxonomy is used (not public BUY/HOLD/SELL labels):
+  - `ATTRACTIVE ENTRY`
+  - `CONDITIONAL GO`
+  - `SELECTIVE BUY`
+  - `FULL PRICE`
+  - `INCONCLUSIVE` when integrity is insufficient
+- If confidence is weak, private labels are explicitly marked `LOW CONVICTION`.
+
+### 7) Exports and provenance
+- Excel/PPT exports still run on degraded private cases without crashing.
+- `sources.md` is the primary trust artifact for demo/review: it must show whether revenue is verified, estimated, inferred, or unavailable.
+
+## Private Company Validation
+
+### Lightweight regression harness (tests)
+
+```bash
+uv run pytest -q tests/test_private_company_validation.py
+```
+
+This suite checks that:
+- missing/unverified private revenue cannot produce high-conviction recommendations,
+- triangulated revenue is clearly tagged and capped,
+- private labels remain private-label taxonomy (not public BUY/HOLD/SELL),
+- provider merge/outlier behavior is visible in provenance (`sources.md`),
+- unresolved private identity yields low-conviction or inconclusive outcomes.
+
+### Optional CLI validation script
+
+```bash
+uv run python scripts/validate_private_companies.py
+uv run python scripts/validate_private_companies.py --json
+```
+
+Target basket:
+- Doctolib, Sézane, Alan, Contentsquare
+- Revolut, Monzo, Gymshark
+- Personio, Picnic, Glovo
+
+The script is designed to degrade gracefully when provider credentials are missing. It flags trust issues (for example uncapped weak-confidence recommendations), not normal source sparsity.
+
+### Private smoke commands
+
+```bash
+uv run python -m goldroger.cli --company "Doctolib" --type private --quick
+uv run python -m goldroger.cli --company "Revolut" --type private --quick
+uv run python -m goldroger.cli --company "Personio" --type private --quick
+```
+
 ### Source inspection
 
 ```bash
@@ -311,6 +411,15 @@ For validation benchmarks and expected invariants, see [docs/VALIDATION.md](docs
 - Thesis/scenario text is source-informed and still requires human review.
 - Excel/PPT exports are not client-ready without analyst review.
 - Static FX fallback is low confidence and should not be treated as production-grade pricing.
+
+## Known Private-Company Limitations
+
+- Private coverage quality is country/provider dependent; many registries return sector/identity but no revenue.
+- Some private runs rely on estimated or triangulated revenue; these outputs are indicative and conviction-capped.
+- Identity confidence can be weak for same-name entities without a strong legal identifier in context.
+- Private triangulation uses heuristic signals and should not be treated as filing-grade financial truth.
+- Provider schema differences and stale filings can create dispersion in private value ranges.
+- Private outputs are suitable for prototype screening and prioritization, not client-ready valuation opinions without analyst verification.
 
 ## Public Validation Examples
 

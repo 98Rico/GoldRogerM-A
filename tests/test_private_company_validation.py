@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+import copy
+import re
+
+import pytest
+
+from goldroger.cli import _parse_sources_md
+from goldroger.data.comparables import PeerData, PeerMultiples
+from goldroger.data.fetcher import MarketData
+from goldroger.data.private_triangulation import TriangulationResult, TriangulationSignal
+from goldroger.data.source_selector import SourceSelectionResult
+from goldroger.models import Fundamentals
+from goldroger.pipelines.equity import run_analysis
+
+
+def _stub_parse_with_retry(agent, company, company_type, context, model_class, fallback, **kwargs):
+    if model_class is Fundamentals:
+        return Fundamentals(
+            company_name=company,
+            description="Private company used for deterministic validation tests.",
+            business_model="Private operating company",
+            sector="Technology",
+        )
+    if hasattr(fallback, "model_copy"):
+        return fallback.model_copy()
+    return fallback
+
+
+def _md(
+    *,
+    company: str,
+    source: str,
+    revenue_m: float | None,
+    confidence: str,
+    sector: str = "Technology",
+    ebitda_margin: float | None = 0.20,
+) -> MarketData:
+    return MarketData(
+        ticker=company.upper()[:6],
+        company_name=company,
+        sector=sector,
+        revenue_ttm=revenue_m,
+        ebitda_margin=ebitda_margin,
+        confidence=confidence,
+        data_source=source,
+        additional_metadata={},
+    )
+
+
+def _peer_stub() -> PeerMultiples:
+    peers = [
+        PeerData(name="Adobe", ticker="ADBE", ev_ebitda=18.0, market_cap=450000.0, bucket="software_services_platform", role="adjacent valuation peer", weight=0.30),
+        PeerData(name="Oracle", ticker="ORCL", ev_ebitda=15.0, market_cap=330000.0, bucket="software_services_platform", role="adjacent valuation peer", weight=0.25),
+        PeerData(name="SAP", ticker="SAP", ev_ebitda=17.0, market_cap=250000.0, bucket="software_services_platform", role="adjacent valuation peer", weight=0.25),
+        PeerData(name="Intuit", ticker="INTU", ev_ebitda=20.0, market_cap=180000.0, bucket="software_services_platform", role="adjacent valuation peer", weight=0.20),
+    ]
+    return PeerMultiples(
+        peers=peers,
+        ev_ebitda_median=17.5,
+        ev_ebitda_raw_median=17.5,
+        ev_ebitda_weighted=17.4,
+        ev_revenue_median=5.0,
+        ev_ebitda_low=15.0,
+        ev_ebitda_high=20.0,
+        ev_revenue_low=4.0,
+        ev_revenue_high=7.0,
+        n_peers=4,
+        n_valuation_peers=4,
+        n_qualitative_peers=0,
+        effective_peer_count=3.6,
+        pure_peer_weight_share=0.80,
+        adjacent_peer_weight_share=0.20,
+        peer_set_type="mixed_comps_ok",
+        source="yfinance_peers",
+    )
+
+
+def _run_private_case(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    company: str,
+    registry_md: MarketData | None,
+    selected_providers: list[str] | None = None,
+    provider_results: dict[str, MarketData | None] | None = None,
+    triangulation_result: TriangulationResult | None = None,
+    country_hint: str = "",
+):
+    import goldroger.data.private_triangulation as tri_mod
+    import goldroger.data.source_selector as selector_mod
+    import goldroger.pipelines.equity as eq
+
+    selected = list(selected_providers or [])
+    provider_map = dict(provider_results or {})
+
+    monkeypatch.setattr(eq, "_client", lambda llm=None: object())
+    monkeypatch.setattr(eq, "_parse_with_retry", _stub_parse_with_retry)
+    monkeypatch.setattr(eq, "find_peers_deterministic_quick", lambda **kwargs: ["ADBE", "ORCL", "SAP", "INTU"])
+    monkeypatch.setattr(eq, "build_peer_multiples", lambda *args, **kwargs: _peer_stub())
+    monkeypatch.setattr(eq.DEFAULT_REGISTRY, "fetch_by_name", lambda _company, country_hint="": copy.deepcopy(registry_md))
+    monkeypatch.setattr(
+        selector_mod,
+        "resolve_source_selection",
+        lambda requested=None, country_hint="": SourceSelectionResult(
+            selected_providers=list(selected),
+            manual_revenue_usd_m=None,
+            country_iso=(country_hint or None),
+            unknown_sources=[],
+            skipped_missing_credentials=[],
+            requested_sources=list(requested or []),
+        ),
+    )
+    monkeypatch.setattr(
+        eq,
+        "_fetch_provider",
+        lambda provider_name, _company, siren=None: copy.deepcopy(provider_map.get(provider_name)),
+    )
+    monkeypatch.setattr(
+        tri_mod,
+        "triangulate_revenue",
+        lambda company_name, sector="", country="", crunchbase_data=None: triangulation_result,
+    )
+
+    return run_analysis(
+        company=company,
+        company_type="private",
+        quick_mode=True,
+        cli_mode=True,
+        country_hint=country_hint,
+        data_sources=selected if selected else ["auto"],
+    )
+
+
+def _summarize_private_validation(input_query: str, country: str, analysis) -> dict:
+    ps = ((analysis.data_quality or {}).get("pipeline_status") or {}) if isinstance(analysis.data_quality, dict) else {}
+    src = _parse_sources_md(getattr(analysis, "sources_md", ""))
+    rev_entry = src.get("Revenue TTM", {})
+    rev_value = str(rev_entry.get("value", "") or "")
+    rev_conf = str(rev_entry.get("confidence", "unknown") or "unknown").lower()
+    rev_source = str(rev_entry.get("source", "unknown") or "unknown")
+    rev_currency = "USD"
+    m = re.match(r"^([A-Z]{3})\s+", rev_value)
+    if m:
+        rev_currency = m.group(1)
+    elif rev_value.startswith("$"):
+        rev_currency = "USD"
+    legal_id = (
+        (src.get("Company Number (GB)", {}) or {}).get("value")
+        or (src.get("SIREN", {}) or {}).get("value")
+        or ""
+    )
+    valuation_status = str(ps.get("valuation", "UNKNOWN") or "UNKNOWN")
+    recommendation = str(getattr(analysis.valuation, "recommendation", "") or "")
+    confidence = str(ps.get("confidence", "unknown") or "unknown")
+    tri_used = bool(ps.get("private_triangulation_used"))
+    revenue_status = str(ps.get("private_revenue_status", rev_conf or "unknown") or "unknown").lower()
+    provenance_complete = all(
+        [
+            "Revenue TTM" in src,
+            "Data Quality Score" in src,
+            "Private Revenue Status" in src,
+        ]
+    )
+    suppressed_or_degraded = bool(
+        recommendation.upper().startswith("INCONCLUSIVE")
+        or valuation_status in {"FAILED", "DEGRADED"}
+    )
+    exports_safe = not recommendation.upper().startswith("INCONCLUSIVE")
+    return {
+        "input_query": input_query,
+        "resolved_name": str(getattr(analysis.fundamentals, "company_name", "") or ""),
+        "country": country,
+        "legal_identifier": str(legal_id),
+        "revenue_source": rev_source,
+        "revenue_value": rev_value,
+        "revenue_currency": rev_currency,
+        "revenue_confidence": rev_conf,
+        "revenue_status": revenue_status,
+        "triangulation_used": tri_used,
+        "valuation_status": valuation_status,
+        "private_recommendation": recommendation,
+        "confidence_level": confidence,
+        "suppressed_or_degraded": suppressed_or_degraded,
+        "exports_safe": exports_safe,
+        "provenance_completeness": provenance_complete,
+    }
+
+
+def test_private_no_verified_revenue_is_inconclusive(monkeypatch):
+    md = _md(company="NoRevenueCo", source="infogreffe", revenue_m=None, confidence="inferred")
+    analysis = _run_private_case(
+        monkeypatch,
+        company="NoRevenueCo",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert analysis.valuation.recommendation == "INCONCLUSIVE"
+    assert analysis.valuation.target_price in {None, "N/A"}
+    assert str(ps.get("private_revenue_status")) == "unavailable"
+
+
+def test_private_triangulated_revenue_is_tagged_and_capped(monkeypatch):
+    md = _md(company="TriangulatedCo", source="infogreffe", revenue_m=None, confidence="inferred")
+    tri = TriangulationResult(
+        revenue_estimate_m=420.0,
+        confidence="estimated",
+        signals=[
+            TriangulationSignal(estimate_m=430.0, confidence=0.55, source="press_nlp"),
+            TriangulationSignal(estimate_m=410.0, confidence=0.60, source="wikipedia"),
+        ],
+        notes=["triangulation test"],
+    )
+    analysis = _run_private_case(
+        monkeypatch,
+        company="TriangulatedCo",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=tri,
+        country_hint="FR",
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert bool(ps.get("private_triangulation_used")) is True
+    assert str(ps.get("private_revenue_status")) == "estimated"
+    assert "LOW CONVICTION" in str(analysis.valuation.recommendation)
+    assert "triangulation" in (analysis.sources_md or "").lower()
+
+
+def test_private_verified_revenue_uses_private_label_taxonomy(monkeypatch):
+    md = _md(company="VerifiedCo", source="pappers", revenue_m=620.0, confidence="verified")
+    analysis = _run_private_case(
+        monkeypatch,
+        company="VerifiedCo",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+    )
+    rec = str(analysis.valuation.recommendation or "")
+    assert not rec.startswith(("BUY", "SELL", "HOLD"))
+    assert any(
+        rec.startswith(lbl)
+        for lbl in ("ATTRACTIVE ENTRY", "CONDITIONAL GO", "SELECTIVE BUY", "FULL PRICE", "NEUTRAL", "INCONCLUSIVE")
+    )
+
+
+def test_private_provider_conflict_notes_are_in_provenance(monkeypatch):
+    base = _md(company="ConflictCo", source="crunchbase", revenue_m=1200.0, confidence="estimated")
+    providers = {
+        "pappers": _md(company="ConflictCo", source="pappers", revenue_m=220.0, confidence="verified"),
+        "companies_house": _md(company="ConflictCo", source="companies_house", revenue_m=210.0, confidence="verified"),
+    }
+    analysis = _run_private_case(
+        monkeypatch,
+        company="ConflictCo",
+        registry_md=base,
+        selected_providers=["pappers", "companies_house"],
+        provider_results=providers,
+        triangulation_result=None,
+        country_hint="FR",
+    )
+    md_text = analysis.sources_md or ""
+    assert "Private Data Merge Note" in md_text
+    assert "Dropped outlier revenue candidates" in md_text
+    assert "Private Revenue Status" in md_text
+
+
+def test_private_unresolved_identity_is_not_high_conviction(monkeypatch):
+    md = _md(company="WeakIdentityCo", source="crunchbase", revenue_m=300.0, confidence="estimated")
+    analysis = _run_private_case(
+        monkeypatch,
+        company="WeakIdentityCo",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="",
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    rec = str(analysis.valuation.recommendation or "")
+    assert bool(ps.get("private_identity_resolved")) is False
+    assert ("LOW CONVICTION" in rec) or rec.startswith("INCONCLUSIVE")
+
+
+@pytest.mark.parametrize(
+    ("company", "country", "scenario"),
+    [
+        ("Doctolib", "FR", "triangulated_estimated"),
+        ("Sézane", "FR", "no_revenue"),
+        ("Alan", "FR", "estimated_provider"),
+        ("Contentsquare", "FR", "verified"),
+        ("Revolut", "GB", "verified"),
+        ("Monzo", "GB", "no_revenue"),
+        ("Gymshark", "GB", "verified"),
+        ("Personio", "DE", "estimated_provider"),
+        ("Picnic", "NL", "triangulated_estimated"),
+        ("Glovo", "ES", "no_revenue"),
+    ],
+)
+def test_private_validation_harness_regression(monkeypatch, company, country, scenario):
+    if scenario == "verified":
+        md = _md(company=company, source="companies_house", revenue_m=550.0, confidence="verified", sector="Consumer")
+        tri = None
+    elif scenario == "estimated_provider":
+        md = _md(company=company, source="crunchbase", revenue_m=340.0, confidence="estimated", sector="Technology")
+        tri = None
+    elif scenario == "triangulated_estimated":
+        md = _md(company=company, source="infogreffe", revenue_m=None, confidence="inferred", sector="Technology")
+        tri = TriangulationResult(
+            revenue_estimate_m=260.0,
+            confidence="estimated",
+            signals=[
+                TriangulationSignal(estimate_m=250.0, confidence=0.50, source="press_nlp"),
+                TriangulationSignal(estimate_m=270.0, confidence=0.55, source="wikipedia"),
+            ],
+            notes=["validation harness triangulation"],
+        )
+    else:
+        md = _md(company=company, source="infogreffe", revenue_m=None, confidence="inferred", sector="Technology")
+        tri = None
+
+    analysis = _run_private_case(
+        monkeypatch,
+        company=company,
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=tri,
+        country_hint=country,
+    )
+    summary = _summarize_private_validation(company, country, analysis)
+
+    assert summary["input_query"] == company
+    assert summary["resolved_name"]
+    assert summary["provenance_completeness"] is True
+    assert not summary["private_recommendation"].startswith(("BUY", "SELL", "HOLD"))
+    if summary["revenue_status"] in {"estimated", "inferred", "unavailable"}:
+        assert (
+            "LOW CONVICTION" in summary["private_recommendation"]
+            or summary["private_recommendation"].startswith("INCONCLUSIVE")
+        )
+    if summary["triangulation_used"]:
+        assert "triangulation" in summary["revenue_source"].lower() or "triangulation" in (analysis.sources_md or "").lower()

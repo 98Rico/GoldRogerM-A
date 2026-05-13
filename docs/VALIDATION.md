@@ -87,3 +87,37 @@ Key test modules for these guarantees:
 - `tests/test_filings_market_context.py`
 - `tests/test_thesis_guardrails.py`
 
+## Private Validation Benchmarks (Prototype)
+
+Private validation is trust-focused (provenance/suppression/capping), not precision-focused.
+
+### How To Run
+
+```bash
+uv run pytest -q tests/test_private_company_validation.py
+uv run python scripts/validate_private_companies.py
+```
+
+Optional smoke:
+
+```bash
+uv run python -m goldroger.cli --company "Doctolib" --type private --quick
+uv run python -m goldroger.cli --company "Revolut" --type private --quick
+uv run python -m goldroger.cli --company "Personio" --type private --quick
+```
+
+### Private invariants
+
+- No verified/high-confidence revenue:
+  - recommendation must be `INCONCLUSIVE` or private label + `LOW CONVICTION`
+  - no high-conviction private call.
+- Triangulated revenue:
+  - must be provenance-tagged (`triangulation`)
+  - must be confidence-capped.
+- Private recommendation labels:
+  - must use private taxonomy (`ATTRACTIVE ENTRY`, `CONDITIONAL GO`, `SELECTIVE BUY`, `FULL PRICE`, `INCONCLUSIVE`)
+  - must not fall back to public BUY/HOLD/SELL labels.
+- Provenance:
+  - `sources.md` should contain `Data Quality Score`
+  - `Private Revenue Status`
+  - revenue source/confidence trace.

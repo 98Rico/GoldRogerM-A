@@ -667,6 +667,10 @@ def run_analysis(
     market_context_pack: MarketContextPack | None = None
     normalization_audit: dict = _build_data_normalization_audit(None)
     normalization_blocked = False
+    _private_triangulation_used = False
+    _private_provider_merge_notes: list[str] = []
+    _private_identity_resolved = False
+    _private_revenue_status = "unavailable"
     if company_type == "private":
         t0 = _step("Registry (EU filings)")
         _provider_records: list[MarketData] = []
@@ -799,8 +803,15 @@ def run_analysis(
         # Deterministic merge across all selected providers.
         _merge = merge_private_market_data(market_data, _provider_records)
         market_data = _merge.market_data
-        for _note in _merge.notes:
+        _private_provider_merge_notes = list(_merge.notes or [])
+        for _i_note, _note in enumerate(_merge.notes, start=1):
             console.print(f"  [dim]{_note}[/dim]")
+            sources.add_once(
+                f"Private Data Merge Note {_i_note}",
+                _note,
+                "private_quality_merge",
+                "inferred",
+            )
 
         # If still no revenue from providers, triangulate as deterministic fallback.
         if market_data and not market_data.revenue_ttm:
@@ -826,9 +837,16 @@ def run_analysis(
                     crunchbase_data=crunchbase_data,
                 )
                 if tri and tri.revenue_estimate_m > 0:
+                    _identity_source = market_data.data_source or "unknown"
                     market_data.revenue_ttm = tri.revenue_estimate_m
                     market_data.confidence = tri.confidence
                     market_data.data_source = "triangulation"
+                    _private_triangulation_used = True
+                    if not isinstance(market_data.additional_metadata, dict):
+                        market_data.additional_metadata = {}
+                    market_data.additional_metadata["identity_source"] = _identity_source
+                    market_data.additional_metadata["triangulation_used"] = True
+                    market_data.additional_metadata["triangulation_signal_count"] = len(tri.signals or [])
                     console.print(
                         f"  [cyan]Triangulation ({tri.confidence}) "
                         f"Rev=${tri.revenue_estimate_m:.0f}M "
@@ -842,6 +860,59 @@ def run_analysis(
                     )
             except Exception as _tri_e:
                 console.print(f"  [dim]Triangulation skipped: {_tri_e}[/dim]")
+        if market_data and not market_data.revenue_ttm:
+            sources.add_once(
+                "Revenue TTM",
+                "N/A",
+                "private_pipeline",
+                "unavailable",
+            )
+        _private_strong_identity_sources = {
+            "manual (user input)",
+            "pappers",
+            "infogreffe",
+            "companies_house",
+            "handelsregister",
+            "registro_mercantil",
+            "kvk",
+            "sec_edgar",
+        }
+        if market_data:
+            _private_revenue_status = (
+                "verified"
+                if market_data.revenue_ttm and str(market_data.confidence or "").lower() == "verified"
+                else "estimated"
+                if market_data.revenue_ttm and str(market_data.confidence or "").lower() == "estimated"
+                else "inferred"
+                if market_data.revenue_ttm
+                else "unavailable"
+            )
+            _id_source = str(market_data.data_source or "").strip().lower()
+            _private_identity_resolved = bool(
+                company_identifier
+                or (
+                    _id_source in _private_strong_identity_sources
+                    and str(market_data.company_name or "").strip()
+                )
+                or (
+                    _id_source == "triangulation"
+                    and isinstance(market_data.additional_metadata, dict)
+                    and str(market_data.additional_metadata.get("identity_source") or "").strip().lower()
+                    in _private_strong_identity_sources
+                )
+            )
+            sources.add_once(
+                "Private Revenue Status",
+                _private_revenue_status,
+                market_data.data_source or "private_pipeline",
+                "inferred",
+            )
+            sources.add_once(
+                "Private Identity Resolution",
+                "resolved" if _private_identity_resolved else "unresolved",
+                "private_identity_guard",
+                "inferred",
+            )
 
     if company_type == "public":
         t0 = _step("Market Data (yfinance)")
@@ -2865,6 +2936,7 @@ def run_analysis(
         _low_conviction = True
     if _model_signal.startswith("SELL") and (_raw_rec or "").upper() == "HOLD":
         _low_conviction = True
+    _private_cap_reason = ""
     _model_signal_for_text = _model_signal
     if _low_conviction and _model_signal_for_text.startswith("SELL /"):
         _model_signal_for_text = "Negative valuation signal"
@@ -2883,6 +2955,48 @@ def run_analysis(
         _rec = "NEUTRAL"
     else:
         _rec = _raw_rec
+    if company_type == "private":
+        _private_conf_raw = str((market_data.confidence if market_data else "") or "").strip().lower()
+        _private_revenue_unverified = _private_revenue_status in {"estimated", "inferred"}
+        if not _private_identity_resolved:
+            _low_conviction = True
+            if not _private_cap_reason:
+                _private_cap_reason = "private identity not fully resolved from strong registry sources"
+            if "Private identity resolution is weak; valuation is indicative only." not in quality.warnings:
+                quality.warnings.append("Private identity resolution is weak; valuation is indicative only.")
+        if (not result.has_revenue) or _private_revenue_status in {"unavailable", "inferred"}:
+            _rec = "INCONCLUSIVE"
+            _target_price = None
+            _ev_str = "N/A"
+            rec.upside_pct = None
+            rec.intrinsic_price = None
+            valuation_status = "FAILED"
+            if not _private_cap_reason:
+                _private_cap_reason = (
+                    "private revenue not verified (unavailable/inferred); recommendation suppressed"
+                )
+            if quality.score > 55:
+                quality.score = 55
+            quality.tier = _quality_tier(quality.score)
+            if "Private revenue is unavailable/inferred; recommendation suppressed (INCONCLUSIVE)." not in quality.warnings:
+                quality.warnings.append(
+                    "Private revenue is unavailable/inferred; recommendation suppressed (INCONCLUSIVE)."
+                )
+        elif _private_revenue_unverified or _private_conf_raw in {"estimated", "inferred"}:
+            _low_conviction = True
+            if _rec in {"ATTRACTIVE ENTRY", "CONDITIONAL GO", "SELECTIVE BUY", "FULL PRICE", "NEUTRAL"}:
+                _rec = f"{_rec} / LOW CONVICTION"
+            if valuation_status == "OK":
+                valuation_status = "DEGRADED"
+            if not _private_cap_reason:
+                _private_cap_reason = (
+                    "private valuation relies on estimated revenue (triangulated/provider estimate)"
+                )
+            if quality.score > 69:
+                quality.score = 69
+            quality.tier = _quality_tier(quality.score)
+            if "Private revenue is estimated; valuation is indicative only." not in quality.warnings:
+                quality.warnings.append("Private revenue is estimated; valuation is indicative only.")
     if _suppressed_no_rating:
         _rec = "INCONCLUSIVE"
         _target_price = None
@@ -3772,6 +3886,15 @@ def run_analysis(
         _confidence_reasons.append("limited market context")
     if thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
         _confidence_reasons.append("thesis generation degraded")
+    if company_type == "private":
+        if _private_revenue_status in {"unavailable", "inferred"}:
+            _confidence_reasons.append("private revenue unavailable/inferred")
+        elif _private_revenue_status == "estimated":
+            _confidence_reasons.append("private revenue estimated (indicative only)")
+        if _private_triangulation_used:
+            _confidence_reasons.append("triangulated private revenue input")
+        if not _private_identity_resolved:
+            _confidence_reasons.append("private legal identity not strongly resolved")
     if _hard_suppression_reasons:
         _confidence_reasons.append("sanity breaker triggered (recommendation suppressed)")
     if company_type == "public" and _is_cyclical_profile:
@@ -3841,7 +3964,7 @@ def run_analysis(
     else:
         _research_status_enum = "RESEARCH_PARTIAL_FALLBACK"
 
-    _recommendation_cap_reason = ""
+    _recommendation_cap_reason = _private_cap_reason if company_type == "private" else ""
     _missing_corroboration_items = sorted(set(_extreme_signal_missing))
     _raw_vs_final_reason = ""
 
@@ -4130,6 +4253,9 @@ def run_analysis(
                 "peer_quality_score": _peer_quality_score,
                 "financial_data_quality_score": _financial_data_quality_score,
                 "report_mode": _report_mode,
+                "private_revenue_status": _private_revenue_status if company_type == "private" else "",
+                "private_triangulation_used": bool(_private_triangulation_used) if company_type == "private" else False,
+                "private_identity_resolved": bool(_private_identity_resolved) if company_type == "private" else True,
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),

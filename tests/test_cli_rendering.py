@@ -1,4 +1,5 @@
 from goldroger.cli import (
+    _confidence_improvement_actions,
     _format_valuation_cell,
     _format_metric_value,
     _fmt_timing_s,
@@ -295,3 +296,16 @@ def test_pipeline_status_source_backed_context_with_timeout_thesis_is_consistent
     assert "Market context: source-backed" in block
     assert "Valuation inputs: market data only" in block
     assert "Research used in valuation: no — qualitative context only | Research used in thesis: timeout fallback" in block
+
+
+def test_private_confidence_improvement_actions_are_private_specific():
+    tips = _confidence_improvement_actions(
+        sector="Technology",
+        confidence_reason="private revenue unavailable/inferred; private legal identity not strongly resolved",
+        research_state="SKIPPED_QUICK_MODE",
+        peers_state="PEERS_FAILED",
+        company_type="private",
+    )
+    joined = " | ".join(tips).lower()
+    assert "private" in joined
+    assert "apple-like peer context" not in joined
