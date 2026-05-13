@@ -42,8 +42,8 @@ def test_pipeline_status_block_is_normalized_and_compact():
     assert "Valuation: LOW_CONFIDENCE" in block
     assert "Recommendation: HOLD / LOW CONVICTION" in block
     assert "Research collection: fallback | Qualitative context: fallback | Quantitative market inputs: unavailable" in block
-    assert "Thesis mode: deterministic fallback" in block
-    assert "Research used in valuation: no | Research used in thesis: conservative template only" in block
+    assert "Thesis mode: deterministic archetype fallback" in block
+    assert "Research used in valuation: no | Research used in thesis: archetype-based deterministic fallback" in block
     assert reason == "DCF/comps disagreement"
 
 
@@ -85,7 +85,7 @@ def test_pipeline_status_partial_fallback_line_is_rendered():
     assert "Research: PARTIAL_FALLBACK" in block
     assert (
         "Full research unavailable; report generated from verified market data, deterministic peer set, "
-        "and conservative fallback thesis template."
+        "and archetype-based deterministic fallback thesis."
     ) in block
 
 
@@ -103,8 +103,8 @@ def test_pipeline_status_skipped_quick_mode_uses_skipped_research_source():
         }
     )
     assert "Research: SKIPPED_QUICK_MODE" in block
-    assert "Research collection: skipped_quick_mode" in block
-    assert "Thesis mode: deterministic fallback" in block
+    assert "Research collection: unavailable" in block
+    assert "Thesis mode: deterministic archetype fallback" in block
 
 
 def test_fmt_timing_s_hides_none_like_values():
@@ -264,3 +264,27 @@ def test_pipeline_status_prefers_market_context_source_backed_field():
         }
     )
     assert "Research collection: source-backed" in block
+
+
+def test_pipeline_status_source_backed_context_with_timeout_thesis_is_consistent():
+    block, _ = _render_pipeline_status_block(
+        {
+            "research_enrichment": "RESEARCH_PARTIAL_SOURCE_BACKED",
+            "peers": "MIXED_COMPS_OK",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "HOLD / LOW CONVICTION",
+            "source_backed_market_context_available": True,
+            "source_backed_market_context_used_in_thesis": False,
+            "source_backed_quant_market_inputs_available": False,
+            "source_backed_quant_market_inputs_used_in_valuation": False,
+            "research_collection_semantic": "source-backed",
+            "qualitative_context_semantic": "source-backed",
+            "quantitative_market_inputs_semantic": "unavailable",
+            "thesis_mode_semantic": "timeout fallback",
+            "thesis": "TIMEOUT",
+        }
+    )
+    assert "Research collection: source-backed | Qualitative context: source-backed | Quantitative market inputs: unavailable" in block
+    assert "Thesis mode: timeout fallback" in block
+    assert "Research used in valuation: no — qualitative context only | Research used in thesis: timeout fallback" in block

@@ -6,7 +6,7 @@ import time
 import copy as _copy
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from datetime import date
+from datetime import date, datetime, timedelta
 from threading import Event
 
 from dotenv import load_dotenv
@@ -431,6 +431,57 @@ def _fallback_catalysts(
     ]
 
 
+def _archetype_sector_display(
+    *,
+    archetype: str,
+    profile_label: str,
+    sector: str,
+) -> str:
+    """User-facing sector line for deterministic fallback thesis text."""
+    if archetype in {"premium_device_platform", "consumer_hardware_ecosystem"}:
+        return "Technology / Consumer Hardware & Services Ecosystem"
+    if archetype == "tobacco_nicotine_cash_return":
+        return "Consumer Staples / Tobacco"
+    if archetype == "commodity_cyclical_aluminum":
+        return "Materials / Aluminum"
+    return profile_label or sector or "Default fallback"
+
+
+def _parse_iso_date(raw: str) -> date | None:
+    txt = str(raw or "").strip()
+    if not txt:
+        return None
+    try:
+        if len(txt) >= 10 and txt[4] == "-" and txt[7] == "-":
+            return date.fromisoformat(txt[:10])
+    except Exception:
+        return None
+    try:
+        return datetime.fromisoformat(txt).date()
+    except Exception:
+        return None
+
+
+def _has_recent_company_specific_catalyst(pack: MarketContextPack | None) -> bool:
+    """Corroboration helper for extreme-signal review in public equities."""
+    if pack is None:
+        return False
+    now = date.today()
+    for item in (pack.catalysts or []):
+        if int(getattr(item, "relevance_score", 0) or 0) < 70:
+            continue
+        reason = str(getattr(item, "relevance_reason", "") or "").lower()
+        if not any(tok in reason for tok in ("ticker_match", "company_name_match", "official_source_match")):
+            continue
+        d = _parse_iso_date(str(getattr(item, "date", "") or ""))
+        if d is None:
+            # Allow undated but high-relevance company-specific catalysts.
+            return True
+        if abs((now - d).days) <= 365:
+            return True
+    return False
+
+
 def _build_fallback_thesis(
     company: str,
     sector: str,
@@ -445,6 +496,11 @@ def _build_fallback_thesis(
     prof = get_sector_profile(sector or "", industry or "")
     cats = _fallback_catalysts(company, sector, industry, ticker=ticker)
     _arch_label = str(_arch_tpl.get("label") or _arch) if isinstance(_arch_tpl, dict) else _arch
+    _sector_display = _archetype_sector_display(
+        archetype=_arch,
+        profile_label=str(prof.label or ""),
+        sector=sector,
+    )
     _arch_drivers = _arch_tpl.get("demand_drivers") if isinstance(_arch_tpl, dict) else None
     _arch_margins = _arch_tpl.get("margin_drivers") if isinstance(_arch_tpl, dict) else None
     _arch_risks = _arch_tpl.get("risks") if isinstance(_arch_tpl, dict) else None
@@ -464,7 +520,7 @@ def _build_fallback_thesis(
     )
     thesis = (
         f"Thesis:\n"
-        f"- Sector profile: {prof.label if prof.label else (sector or 'Default fallback')}.\n"
+        f"- Sector profile: {_sector_display}.\n"
         f"- Archetype: {_arch_label}.\n"
         f"- Demand drivers: {_drivers}.\n"
         f"- Margin drivers: {_margins}.\n"
@@ -2617,7 +2673,43 @@ def run_analysis(
     )
     _extreme_signal_review = False
     _extreme_signal_corroboration = 0
-    if _mature_company and rec.upside_pct is not None and (rec.upside_pct >= 0.75 or rec.upside_pct <= -0.60):
+    _extreme_signal_missing: list[str] = []
+    _extreme_signal_anchor_labels: list[str] = []
+    _extreme_signal_cap_required = False
+    _market_context_fallback_pre = bool(market_context_pack.fallback_used) if market_context_pack is not None else False
+    _source_backed_quant_market_inputs_pre = bool(
+        _market_source_backed
+        and ((not _text_missing(mkt.market_growth)) or (not _text_missing(mkt.market_size)))
+    )
+    _forward_rev_analyst_available = bool(
+        _md_val is not None
+        and (
+            (_md_val.forward_revenue_1y is not None and float(_md_val.forward_revenue_1y or 0.0) > 0.0)
+            or (
+                isinstance(_md_val.additional_metadata, dict)
+                and (_md_val.additional_metadata.get("forward_revenue_estimate") is not None)
+            )
+        )
+    )
+    _peer_purity_share = float(peer_multiples.pure_peer_weight_share or 0.0) if peer_multiples else 0.0
+    _peer_purity_ok = _peer_purity_share >= 0.75
+    _dispersion_ok = _method_dispersion_ratio < 2.0
+    _norm_clean_ok = str(normalization_audit.get("status") or "").upper() == "OK"
+    _has_recent_company_catalyst = _has_recent_company_specific_catalyst(market_context_pack)
+    _extreme_upside_threshold = 0.50 if _is_cyclical_profile_for_guard else 0.75
+    _extreme_positive_signal = bool(
+        _md_val is not None
+        and
+        rec.upside_pct is not None
+        and rec.upside_pct >= _extreme_upside_threshold
+        and (_mature_company or _is_cyclical_profile_for_guard)
+    )
+    _extreme_negative_signal = bool(
+        _mature_company
+        and rec.upside_pct is not None
+        and rec.upside_pct <= -0.60
+    )
+    if _extreme_positive_signal or _extreme_negative_signal:
         _extreme_signal_review = True
         # Anchor 1: DCF and comps imply same directional sign.
         _dcf_up = None
@@ -2630,14 +2722,58 @@ def run_analysis(
                 _comps_up = (_comps_eq - float(_md_val.market_cap)) / float(_md_val.market_cap)
                 if ((_dcf_up > 0 and _comps_up > 0 and rec.upside_pct > 0) or (_dcf_up < 0 and _comps_up < 0 and rec.upside_pct < 0)):
                     _extreme_signal_corroboration += 1
+                    _extreme_signal_anchor_labels.append("DCF and comps direction align")
             except Exception:
                 pass
+        # Anchor 2: Source-backed quantitative market context.
+        if _source_backed_quant_market_inputs_pre:
+            _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("source-backed quantitative market inputs")
+        else:
+            _extreme_signal_missing.append("source-backed quantitative market inputs")
+        # Anchor 3: Analyst forward revenue/EBITDA estimates (not earnings proxy only).
+        if _forward_rev_analyst_available:
+            _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("analyst forward revenue/EBITDA support")
+        else:
+            _extreme_signal_missing.append("analyst forward revenue/EBITDA estimate")
+        # Anchor 4: High-purity peer set.
+        if _peer_purity_ok:
+            _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("peer purity >= 75%")
+        else:
+            _extreme_signal_missing.append("peer purity >= 75%")
+        # Anchor 5: Acceptable method dispersion.
+        if _dispersion_ok:
+            _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("DCF/comps dispersion < 2.0x")
+        else:
+            _extreme_signal_missing.append("DCF/comps dispersion < 2.0x")
+        # Anchor 6: Clean normalization status.
+        if _norm_clean_ok:
+            _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("normalization status OK")
+        else:
+            _extreme_signal_missing.append("clean normalization status")
+        # Anchor 7: No market-context fallback.
+        if (not _market_context_fallback_pre) and _market_source_backed:
+            _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("no fallback market context")
+        else:
+            _extreme_signal_missing.append("non-fallback market context")
+        # Anchor 8: Company-specific catalyst support.
+        if _has_recent_company_catalyst:
+            _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("company-specific catalyst (<=12m)")
+        else:
+            _extreme_signal_missing.append("company-specific catalyst within 12 months")
         # Anchor 2: FCF yield support for upside calls.
         if rec.upside_pct > 0 and _md_val.fcf_ttm and _md_val.market_cap and _md_val.market_cap > 0:
             try:
                 _fcf_yield = float(_md_val.fcf_ttm) / float(_md_val.market_cap)
                 if _fcf_yield >= 0.05:
                     _extreme_signal_corroboration += 1
+                    _extreme_signal_anchor_labels.append("FCF yield support")
             except Exception:
                 pass
         # Anchor 3: Dividend yield support for mature cash-return sectors.
@@ -2646,9 +2782,19 @@ def run_analysis(
             _div_yld = _normalize_dividend_yield(_md_val.additional_metadata.get("dividend_yield"))
         if rec.upside_pct > 0 and _div_yld is not None and _div_yld >= 0.04:
             _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("dividend yield support")
         # Anchor 4: Cyclical normalization corroboration.
         if _is_cyclical_profile_for_guard and _normalized_ebitda_supported:
             _extreme_signal_corroboration += 1
+            _extreme_signal_anchor_labels.append("mid-cycle normalization support")
+        elif _is_cyclical_profile_for_guard:
+            _extreme_signal_missing.append("mid-cycle normalization support")
+        _quant_corroboration_ok = bool(_source_backed_quant_market_inputs_pre or _forward_rev_analyst_available)
+        _required_extreme_anchors = 2 if _extreme_negative_signal else 3
+        if (not _quant_corroboration_ok) and _extreme_positive_signal:
+            _extreme_signal_cap_required = True
+        if _extreme_signal_corroboration < _required_extreme_anchors:
+            _extreme_signal_cap_required = True
     if _hard_suppression_reasons:
         _eq_ctx = ""
         if _model_equity_val is not None and _md_val and _md_val.market_cap is not None:
@@ -3160,7 +3306,7 @@ def run_analysis(
     elif cli_mode and _research_source != "source_backed":
         thesis_status = "DEGRADED"
         console.print(
-            "  [yellow]Research is fallback/partial; using conservative thesis template (no unsourced specifics).[/yellow]"
+            "  [yellow]Research is fallback/partial; using archetype-based deterministic fallback thesis (no unsourced specifics).[/yellow]"
         )
         thesis = _build_fallback_thesis(
             company=company,
@@ -3605,8 +3751,10 @@ def run_analysis(
             "cyclical_review_required (mid-cycle EBITDA normalization support is limited)"
         )
     if _extreme_signal_review:
+        _req = 2 if _extreme_negative_signal else 3
+        _missing_txt = ", ".join(sorted(set(_extreme_signal_missing))[:4]) if _extreme_signal_missing else "none"
         _confidence_reasons.append(
-            f"extreme_signal_review (corroboration anchors: {_extreme_signal_corroboration}/2)"
+            f"extreme_signal_review (corroboration anchors: {_extreme_signal_corroboration}/{_req}; missing: {_missing_txt})"
         )
     _dcf_status = "normal"
     _dcf_src = result.field_sources.get("DCF Status")
@@ -3661,6 +3809,10 @@ def run_analysis(
     else:
         _research_status_enum = "RESEARCH_PARTIAL_FALLBACK"
 
+    _recommendation_cap_reason = ""
+    _missing_corroboration_items = sorted(set(_extreme_signal_missing))
+    _raw_vs_final_reason = ""
+
     # Deterministic recommendation policy: separate raw valuation signal from final recommendation.
     if (
         not valuation_failed
@@ -3692,25 +3844,42 @@ def run_analysis(
         # Full-mode fallback should never output high-conviction calls.
         if (not quick_mode) and str(_research_source) != "source_backed" and _rec in {"BUY", "SELL", "BUY / MODERATE CONVICTION", "SELL / MODERATE CONVICTION"}:
             _rec = "BUY / LOW CONVICTION" if _raw_signal_label.startswith("Positive") else "HOLD / LOW CONVICTION"
+            _recommendation_cap_reason = (
+                "source-backed quantitative market inputs unavailable in full mode; conviction capped"
+            )
         # Cyclical guardrail: high upside without normalization support is watchlist-only.
         if (
             company_type == "public"
             and _is_cyclical_profile
             and _cyclical_review_required
             and rec.upside_pct is not None
-            and rec.upside_pct >= 0.60
+            and rec.upside_pct >= 0.50
         ):
-            _rec = "WATCH / LOW CONVICTION"
+            _rec = "HOLD / LOW CONVICTION"
+            _recommendation_cap_reason = (
+                "cyclical_review_required: upside exceeds cyclical plausibility threshold without mid-cycle normalization support"
+            )
         # Mature-company extreme signal review cap.
-        if _extreme_signal_review and _extreme_signal_corroboration < 2:
+        if _extreme_signal_review and _extreme_signal_cap_required:
             if rec.upside_pct is not None and rec.upside_pct > 0:
-                _rec = "WATCH / REVIEW REQUIRED"
+                _rec = "HOLD / LOW CONVICTION"
             elif rec.upside_pct is not None and rec.upside_pct < 0:
                 _rec = "HOLD / LOW CONVICTION"
+            if not _recommendation_cap_reason:
+                _recommendation_cap_reason = (
+                    "extreme_signal_review: implied upside/downside exceeds mature/cyclical plausibility thresholds without sufficient corroboration"
+                )
         val.recommendation = _rec
     elif valuation_failed or _suppressed_no_rating or valuation_status == "FAILED":
         _rec = "INCONCLUSIVE"
         val.recommendation = _rec
+    if _rec == "INCONCLUSIVE" and _hard_suppression_reasons:
+        _recommendation_cap_reason = "integrity warnings triggered sanity-breaker suppression"
+    if _model_signal_for_text and _rec and _rec not in {"N/A", ""} and _model_signal_for_text != _rec:
+        _raw_vs_final_reason = (
+            _recommendation_cap_reason
+            or "raw model signal capped by confidence and plausibility guardrails"
+        )
 
     # Final canonical sync after confidence guardrails so every module uses the same recommendation string.
     if thesis and val:
@@ -3765,6 +3934,35 @@ def run_analysis(
         if quality.score > 84:
             quality.score = 84
             quality.tier = _quality_tier(quality.score)
+    if market_status == "SKIPPED_QUICK_MODE":
+        _research_collection_semantic = "unavailable"
+    elif _market_source_backed and market_context_pack is not None and bool(market_context_pack.fallback_used):
+        _research_collection_semantic = "mixed"
+    elif _market_source_backed:
+        _research_collection_semantic = "source-backed"
+    elif market_status in {"FAILED", "TIMEOUT"} and market_context_pack is None:
+        _research_collection_semantic = "unavailable"
+    elif _research_source == "fallback":
+        _research_collection_semantic = "fallback"
+    else:
+        _research_collection_semantic = "mixed"
+    if _qual_context_backed_available:
+        _qual_context_semantic = "source-backed"
+    elif market_status == "SKIPPED_QUICK_MODE":
+        _qual_context_semantic = "fallback"
+    elif _research_source == "fallback":
+        _qual_context_semantic = "fallback"
+    else:
+        _qual_context_semantic = "unavailable"
+    _quant_context_semantic = "available" if _quant_market_inputs_available else "unavailable"
+    if thesis_status == "TIMEOUT":
+        _thesis_mode_semantic = "timeout fallback"
+    elif thesis_status in {"FAILED", "DEGRADED_API_CAPACITY"}:
+        _thesis_mode_semantic = "generic fallback"
+    elif (_report_mode == "quick") or (_research_source != "source_backed"):
+        _thesis_mode_semantic = "deterministic archetype fallback"
+    else:
+        _thesis_mode_semantic = "source-backed"
 
     analysis = AnalysisResult(
         company=company,
@@ -3825,8 +4023,16 @@ def run_analysis(
                 "normalized_ebitda_supported": bool(_normalized_ebitda_supported),
                 "extreme_signal_review": bool(_extreme_signal_review),
                 "extreme_signal_corroboration": int(_extreme_signal_corroboration),
+                "extreme_signal_missing_corroboration": sorted(set(_extreme_signal_missing)),
+                "extreme_signal_anchor_labels": sorted(set(_extreme_signal_anchor_labels)),
+                "recommendation_cap_reason": _recommendation_cap_reason,
+                "raw_vs_final_reason": _raw_vs_final_reason,
                 "research_source": _research_source,
                 "research_depth": _research_depth,
+                "research_collection_semantic": _research_collection_semantic,
+                "qualitative_context_semantic": _qual_context_semantic,
+                "quantitative_market_inputs_semantic": _quant_context_semantic,
+                "thesis_mode_semantic": _thesis_mode_semantic,
                 "market_data_source_backed": "yes" if _market_source_backed else "no",
                 "market_context_source_backed": "yes" if _market_source_backed else "no",
                 "source_backed_market_context_available": _qual_context_backed_available,
@@ -3954,10 +4160,7 @@ def run_analysis(
                 "Competitive trend: peer positioning should be interpreted with caution.",
                 "Regulatory trend: policy and macro conditions remain external variables.",
             ]
-            analysis.market.key_trends = [
-                "Fallback Market Context — sector profile only, not source-backed. Used for qualitative framing only, not valuation inputs.",
-                *_fallback_ctx[:4],
-            ]
+            analysis.market.key_trends = list(_fallback_ctx[:4])
             _prof_key = detect_sector_profile(fund.sector or "", _target_industry if '_target_industry' in locals() else "")
             analysis.market.key_trends = [_enforce_profile_context_guard(t, _prof_key) for t in analysis.market.key_trends]
         elif not _usable_trends:
@@ -3966,10 +4169,7 @@ def run_analysis(
                 "Competitive trend: peer positioning should be interpreted with caution.",
                 "Regulatory trend: policy and macro conditions remain external variables.",
             ]
-            analysis.market.key_trends = [
-                "Fallback Market Context — sector profile only, not source-backed. Used for qualitative framing only, not valuation inputs.",
-                *_fallback_ctx[:4],
-            ]
+            analysis.market.key_trends = list(_fallback_ctx[:4])
             _prof_key = detect_sector_profile(fund.sector or "", _target_industry if '_target_industry' in locals() else "")
             analysis.market.key_trends = [_enforce_profile_context_guard(t, _prof_key) for t in analysis.market.key_trends]
         else:

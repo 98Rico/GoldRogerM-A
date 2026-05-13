@@ -676,40 +676,71 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _qual_backed_used = pipeline_status.get("source_backed_market_context_used_in_thesis")
     _quant_backed_avail = pipeline_status.get("source_backed_quant_market_inputs_available")
     _quant_backed_used = pipeline_status.get("source_backed_quant_market_inputs_used_in_valuation")
+    _research_collection_sem = str(pipeline_status.get("research_collection_semantic", "") or "").strip().lower()
+    _qual_context_sem = str(pipeline_status.get("qualitative_context_semantic", "") or "").strip().lower()
+    _quant_context_sem = str(pipeline_status.get("quantitative_market_inputs_semantic", "") or "").strip().lower()
+    _thesis_mode_sem = str(pipeline_status.get("thesis_mode_semantic", "") or "").strip().lower()
     if isinstance(_quant_backed_used, bool):
         _used_in_valuation = "yes" if _quant_backed_used else "no — qualitative context only"
     else:
         _used_in_valuation = "no" if research_state in {"SKIPPED_QUICK_MODE", "PARTIAL_FALLBACK", "FAILED"} else "yes"
     if isinstance(_qual_backed_used, bool):
-        _used_in_thesis = "yes" if _qual_backed_used else "conservative template only"
+        if _qual_backed_used:
+            _used_in_thesis = "yes"
+        else:
+            if _thesis_mode_sem == "deterministic archetype fallback":
+                _used_in_thesis = "archetype-based deterministic fallback"
+            elif _thesis_mode_sem == "timeout fallback":
+                _used_in_thesis = "timeout fallback"
+            elif _thesis_mode_sem == "generic fallback":
+                _used_in_thesis = "generic fallback"
+            else:
+                _used_in_thesis = "fallback"
     else:
-        _used_in_thesis = "conservative template only" if research_state in {"PARTIAL_FALLBACK", "FAILED"} else "yes"
+        if research_state in {"PARTIAL_FALLBACK", "FAILED", "SKIPPED_QUICK_MODE"}:
+            _used_in_thesis = (
+                "archetype-based deterministic fallback"
+                if _thesis_mode_sem in {"", "deterministic archetype fallback"}
+                else _thesis_mode_sem
+            )
+        else:
+            _used_in_thesis = "yes"
     _research_source_raw = str(pipeline_status.get("research_source", "") or "").strip().lower()
-    if research_state == "FAILED":
-        _research_collection = "failed"
+    if _research_collection_sem in {"source-backed", "fallback", "mixed", "unavailable"}:
+        _research_collection = _research_collection_sem
+    elif research_state == "FAILED":
+        _research_collection = "unavailable"
     elif research_state == "SKIPPED_QUICK_MODE":
-        _research_collection = "skipped_quick_mode"
+        _research_collection = "unavailable"
     elif _research_source_raw == "source_backed":
         _research_collection = "source-backed"
     elif _research_source_raw == "fallback":
         _research_collection = "fallback"
     else:
-        _research_collection = "fallback"
-    _qual_context_state = "available" if bool(_qual_backed_avail) else ("fallback" if research_state in {"PARTIAL_FALLBACK", "SKIPPED_QUICK_MODE"} else "unavailable")
-    _quant_context_state = "available" if bool(_quant_backed_avail) else "unavailable"
+        _research_collection = "mixed"
+    if _qual_context_sem in {"source-backed", "fallback", "unavailable"}:
+        _qual_context_state = _qual_context_sem
+    else:
+        _qual_context_state = "source-backed" if bool(_qual_backed_avail) else ("fallback" if research_state in {"PARTIAL_FALLBACK", "SKIPPED_QUICK_MODE"} else "unavailable")
+    if _quant_context_sem in {"available", "unavailable"}:
+        _quant_context_state = _quant_context_sem
+    else:
+        _quant_context_state = "available" if bool(_quant_backed_avail) else "unavailable"
     _thesis_stage = str(pipeline_status.get("thesis", "") or "").strip().upper()
-    if _thesis_stage == "TIMEOUT":
+    if _thesis_mode_sem in {"source-backed", "deterministic archetype fallback", "timeout fallback", "generic fallback"}:
+        _thesis_mode = _thesis_mode_sem
+    elif _thesis_stage == "TIMEOUT":
         _thesis_mode = "timeout fallback"
     elif _thesis_stage == "DEGRADED_API_CAPACITY":
-        _thesis_mode = "LLM fallback"
+        _thesis_mode = "generic fallback"
     elif _thesis_stage == "FAILED":
-        _thesis_mode = "deterministic fallback"
+        _thesis_mode = "generic fallback"
     elif research_state in {"PARTIAL_FALLBACK", "SKIPPED_QUICK_MODE"}:
-        _thesis_mode = "deterministic fallback"
+        _thesis_mode = "deterministic archetype fallback"
     elif _research_collection == "source-backed":
-        _thesis_mode = "LLM source-backed"
+        _thesis_mode = "source-backed"
     else:
-        _thesis_mode = "LLM fallback"
+        _thesis_mode = "generic fallback"
     block = (
         "[bold]Pipeline status:[/bold]\n"
         f"  Market data: {market_data_state}\n"
@@ -777,7 +808,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     if research_state == "PARTIAL_FALLBACK":
         block += (
             "\n  Full research unavailable; report generated from verified market data, "
-            "deterministic peer set, and conservative fallback thesis template."
+            "deterministic peer set, and archetype-based deterministic fallback thesis."
         )
     elif research_state == "SKIPPED_QUICK_MODE":
         block += (
@@ -1005,10 +1036,19 @@ def print_result(result, debug: bool = False):
         _ms_plain = str(_pipeline_status.get("model_signal_detail", _pipeline_status.get("model_signal", "N/A")) or "N/A")
         _fr_plain = str(_pipeline_status.get("recommendation", "N/A") or "N/A")
         _conf_plain = str(_pipeline_status.get("confidence", "")).strip()
+        _cap_reason = str(_pipeline_status.get("recommendation_cap_reason", "") or "").strip()
+        _missing_corr = _pipeline_status.get("extreme_signal_missing_corroboration")
+        _missing_corr_txt = ""
+        if isinstance(_missing_corr, list) and _missing_corr:
+            _missing_corr_txt = ", ".join(str(x) for x in _missing_corr[:4])
         if _ms_plain not in {"N/A", ""} and _fr_plain not in {"N/A", ""} and _ms_plain != _fr_plain:
             _reason_txt = "confidence guardrails are applied."
             if _conf_plain.lower() == "low":
                 _reason_txt = "the raw model signal is capped due to low valuation confidence."
+            if _cap_reason:
+                _reason_txt = _cap_reason
+            if _missing_corr_txt:
+                _reason_txt += f" Missing corroboration: {_missing_corr_txt}."
             console.print(
                 f"[dim]Raw valuation signal: {_ms_plain}. Final recommendation: {_fr_plain}. "
                 f"Reason: {_reason_txt}[/dim]"
@@ -1202,6 +1242,7 @@ def print_result(result, debug: bool = False):
     _has_market_context = bool(m.key_trends) or bool(_ctx_pack)
     if _has_market_context:
         console.print("\n[bold]Market Context[/]")
+        _fallback_banner = "Fallback Market Context — sector profile only; not source-backed; not used in valuation."
         _ctx_source_backed = bool(_ctx_pack.get("source_backed")) if isinstance(_ctx_pack, dict) else False
         _ctx_fallback_used = bool(_ctx_pack.get("fallback_used")) if isinstance(_ctx_pack, dict) else False
         _ctx_source_count = 0
@@ -1230,10 +1271,16 @@ def print_result(result, debug: bool = False):
                 _ctx_header += f"; latest source date {_ctx_latest}"
             console.print(f"  [dim]{_ctx_header}.[/dim]")
         elif _ctx_fallback_used or not _ctx_source_backed:
-            console.print(
-                "  [dim]Fallback Market Context — sector profile only; not source-backed; not used in valuation.[/dim]"
-            )
-        for trend in m.key_trends[:4]:
+            console.print(f"  [dim]{_fallback_banner}[/dim]")
+        _trend_rows: list[str] = []
+        for trend in (m.key_trends or [])[:8]:
+            _txt = str(trend or "").strip()
+            if not _txt:
+                continue
+            if _txt.lower().startswith("fallback market context — sector profile only"):
+                continue
+            _trend_rows.append(_txt)
+        for trend in _trend_rows[:4]:
             if str(trend or "").strip():
                 console.print(f"  • {trend}")
         if debug and isinstance(_ctx_pack, dict) and _ctx_source_backed:

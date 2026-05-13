@@ -85,10 +85,10 @@ Qualitative market context does **not** automatically change valuation assumptio
 Valuation assumptions are only changed when explicit numeric, source-backed inputs are available.
 
 Pipeline status semantics:
-- `Research collection`: source-backed / fallback / failed / skipped_quick_mode
-- `Qualitative context`: available / fallback / unavailable
+- `Research collection`: source-backed / fallback / mixed / unavailable
+- `Qualitative context`: source-backed / fallback / unavailable
 - `Quantitative market inputs`: available / unavailable
-- `Thesis mode`: LLM source-backed / LLM fallback / deterministic fallback / timeout fallback
+- `Thesis mode`: source-backed / deterministic archetype fallback / timeout fallback / generic fallback
 - `Research used in valuation`: yes/no (qualitative-only context does not count as valuation input)
 
 ## Data Sourcing and Reliability
@@ -155,13 +155,36 @@ If normalized/mid-cycle support is weak or unavailable, output is explicitly cau
 
 `Cyclical review required — valuation may reflect current-cycle margins, not mid-cycle earnings.`
 
+For cyclical companies, large upside calls (above +50%) are capped unless mid-cycle support is corroborated.
+
 ### Mature-company extreme-signal guardrail
 
 For mature public companies, extreme signals trigger `extreme_signal_review`:
 - upside > +75%, or
 - downside < -60%.
 
-If corroboration is insufficient (for example DCF/comps direction, FCF/dividend support, cyclical normalization support), recommendation is capped to review-oriented labels (for example `WATCH / REVIEW REQUIRED`).
+Corroboration anchors include deterministic checks such as:
+- source-backed quantitative market inputs,
+- analyst forward revenue/EBITDA support,
+- peer purity (`>=75%`),
+- method dispersion (`<2.0x`),
+- clean normalization status (`OK`),
+- non-fallback market context,
+- company-specific catalyst evidence within 12 months,
+- cyclical mid-cycle normalization support (for commodity/cyclical names).
+
+If corroboration is insufficient, final recommendation is capped (typically `HOLD / LOW CONVICTION`, or `INCONCLUSIVE` if other integrity warnings are active), while raw model signal is still shown separately.
+
+## Raw Signal vs Final Recommendation
+
+Gold Roger always separates:
+- **Raw valuation signal** (model output direction), and
+- **Final recommendation** (after confidence, plausibility, and integrity guardrails).
+
+Example:
+- raw signal: positive valuation signal
+- final recommendation: `HOLD / LOW CONVICTION`
+- reason: extreme-signal plausibility cap + missing corroboration anchors
 
 ## Report Modes
 

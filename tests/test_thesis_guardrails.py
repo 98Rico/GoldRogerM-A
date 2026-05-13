@@ -92,6 +92,7 @@ def test_aapl_fallback_thesis_uses_device_platform_language():
         model_signal="Negative valuation signal",
     )
     text = (th.thesis or "").lower()
+    assert "sector profile: technology / consumer hardware & services ecosystem" in text
     assert "device upgrade cycles" in text
     assert "services attach" in text
     assert "installed base" in text

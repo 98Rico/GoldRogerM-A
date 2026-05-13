@@ -720,8 +720,56 @@ def test_mature_extreme_upside_signal_gets_review_cap(monkeypatch):
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert bool(ps.get("extreme_signal_review")) is True
     assert "extreme_signal_review" in str(ps.get("confidence_reason", ""))
+    assert str(ps.get("model_signal_detail", "")).lower().startswith("positive")
     assert str(analysis.valuation.recommendation) in {
-        "WATCH / REVIEW REQUIRED",
-        "BUY / LOW CONVICTION",
         "HOLD / LOW CONVICTION",
+        "WATCH / REVIEW REQUIRED",
+        "INCONCLUSIVE",
     }
+    assert str(ps.get("recommendation")) != str(ps.get("model_signal_detail"))
+    assert str(ps.get("recommendation_cap_reason", "")).strip()
+    assert "missing:" in str(ps.get("confidence_reason", "")).lower()
+
+
+def test_fallback_market_context_banner_not_duplicated_in_trend_rows(monkeypatch):
+    md = MarketData(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        sector="Technology",
+        current_price=200.0,
+        market_cap=4200000.0,
+        shares_outstanding=21000.0,
+        total_debt=120000.0,
+        cash_and_equivalents=60000.0,
+        net_debt=60000.0,
+        enterprise_value=4260000.0,
+        revenue_ttm=400000.0,
+        ebitda_ttm=130000.0,
+        ebitda_margin=0.325,
+        fcf_ttm=95000.0,
+        ev_ebitda_market=25.0,
+        additional_metadata={
+            "industry": "Consumer Electronics",
+            "country": "United States",
+            "exchange": "NMS",
+            "quote_currency": "USD",
+            "financial_currency": "USD",
+            "market_cap_currency": "USD",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "AAPL",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "AAPL", md)
+    analysis = run_analysis(
+        "AAPL",
+        company_type="public",
+        quick_mode=False,
+        full_report=False,
+        cli_mode=True,
+    )
+    trend_rows = [str(x) for x in (analysis.market.key_trends or [])]
+    assert all(
+        not row.lower().startswith("fallback market context — sector profile only")
+        for row in trend_rows
+    )
