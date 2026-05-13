@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from typing import Any
 
 import yfinance as yf
@@ -150,6 +151,88 @@ def _extract_news_entries(ticker: str, count: int = 10) -> list[dict[str, str]]:
     return out
 
 
+def _candidate_news_symbols(
+    *,
+    company: str,
+    ticker: str,
+    sector: str,
+    industry: str,
+    archetype: str,
+    filings_pack: FilingsPack | None,
+) -> list[str]:
+    """
+    Deterministic symbol expansion to improve source recall without widening noise too much.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(sym: str) -> None:
+        s = str(sym or "").strip().upper()
+        if not s:
+            return
+        if s in seen:
+            return
+        seen.add(s)
+        out.append(s)
+
+    tkr = str(ticker or "").strip().upper()
+    _add(tkr)
+    if "." in tkr:
+        _add(tkr.split(".", 1)[0])
+    if "-" in tkr:
+        _add(tkr.split("-", 1)[0])
+    if filings_pack and filings_pack.ticker:
+        _add(filings_pack.ticker)
+
+    name_l = str(company or "").lower()
+    arche_l = str(archetype or "").lower()
+    sec_l = f"{sector} {industry}".lower()
+    if "apple" in name_l or arche_l in {"premium_device_platform", "consumer_hardware_ecosystem"}:
+        _add("AAPL")
+    if "british american tobacco" in name_l or arche_l == "tobacco_nicotine_cash_return" or "tobacco" in sec_l:
+        _add("BATS.L")
+        _add("BTI")
+    if "norsk hydro" in name_l or arche_l == "commodity_cyclical_aluminum" or "aluminum" in sec_l or "aluminium" in sec_l:
+        _add("NHY.OL")
+        _add("NHYDY")
+
+    return out[:4]
+
+
+def _extract_news_entries_for_context(
+    *,
+    company: str,
+    ticker: str,
+    sector: str,
+    industry: str,
+    archetype: str,
+    filings_pack: FilingsPack | None,
+    per_symbol_count: int = 8,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    symbols = _candidate_news_symbols(
+        company=company,
+        ticker=ticker,
+        sector=sector,
+        industry=industry,
+        archetype=archetype,
+        filings_pack=filings_pack,
+    )
+    for sym in symbols:
+        for row in _extract_news_entries(ticker=sym, count=per_symbol_count):
+            title = _safe_str(row.get("title"))
+            url = _safe_str(row.get("url"))
+            key = (title.lower(), url.lower())
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            row_out = dict(row)
+            row_out["query_symbol"] = sym
+            rows.append(row_out)
+    return rows
+
+
 def _classify_news_item(title: str) -> str:
     txt = _safe_str(title).lower()
     risk_tokens = (
@@ -230,6 +313,30 @@ def _archetype_peer_terms(archetype: str) -> tuple[str, ...]:
     return ()
 
 
+def _filing_context_terms(archetype: str) -> tuple[str, ...]:
+    if archetype in {"premium_device_platform", "consumer_hardware_ecosystem"}:
+        return ("services", "installed base", "product cycle", "regulatory")
+    if archetype == "tobacco_nicotine_cash_return":
+        return ("pricing", "volume", "reduced-risk", "regulatory", "excise", "cash return")
+    if archetype == "commodity_cyclical_aluminum":
+        return ("aluminum pricing", "energy costs", "recycling", "low-carbon", "commodity cycle")
+    return ("demand", "margins", "guidance", "risk factors")
+
+
+def _filing_context_text(record: Any, archetype: str) -> str:
+    ftype = str(getattr(record, "filing_type", "") or "").strip().upper()
+    terms = ", ".join(_filing_context_terms(archetype)[:3])
+    if ftype in {"10-K", "20-F", "ANNUAL_REPORT"}:
+        return f"Latest annual filing context covers strategy and trend drivers (focus: {terms})."
+    if ftype in {"10-Q", "6-K", "QUARTERLY_REPORT", "RESULTS_CENTRE"}:
+        return f"Recent results update provides operating trend context (focus: {terms})."
+    if ftype in {"8-K", "PRESS_RELEASE", "PRESENTATION"}:
+        return f"Recent corporate update may inform near-term catalysts and risks (focus: {terms})."
+    if ftype in {"IR_HOME", "IR_PROFILE", "CONSENSUS_PAGE"}:
+        return f"Investor-relations source available for trend and guidance monitoring (focus: {terms})."
+    return f"Company source link available for qualitative context (focus: {terms})."
+
+
 def _relevance_score(
     *,
     title: str,
@@ -259,23 +366,32 @@ def _relevance_score(
             break
 
     if (
-        ("sec.gov" in txt or "investor" in txt or "annual report" in txt or "results centre" in txt)
+        ("sec.gov" in txt or "investor" in txt or "annual report" in txt or "results centre" in txt or "results center" in txt)
         and (direct_alias_hit or (ticker_l and ticker_l in txt))
     ):
         score += 30
         reasons.append("official_source_match")
+    if "sec.gov" in txt and any(k in txt for k in ("10-k", "10-q", "20-f", "6-k", "8-k")):
+        score += 25
+        reasons.append("official_filing_match")
 
     archetype_terms = archetype_keywords(archetype)
     archetype_hits = sum(1 for k in archetype_terms if k in txt)
     if archetype_hits:
         score += min(50, archetype_hits * 18)
         reasons.append("archetype_keyword_match")
+        if archetype_hits >= 2:
+            score += 25
+            reasons.append("archetype_density_match")
 
     peer_terms = _archetype_peer_terms(archetype)
     peer_hits = sum(1 for k in peer_terms if k in txt)
     if peer_hits:
         score += min(36, peer_hits * 14)
         reasons.append("industry_peer_keyword_match")
+        if peer_hits >= 2:
+            score += 15
+            reasons.append("peer_density_match")
 
     sector_terms = tuple(_split_terms(f"{sector} {industry}"))
     sector_hits = sum(1 for k in sector_terms if len(k) >= 4 and k in txt)
@@ -295,10 +411,31 @@ def _relevance_score(
         score -= 35
         reasons.append("off_target_entity_penalty")
 
+    _host = ""
+    try:
+        _host = urlparse(url).netloc.lower()
+    except Exception:
+        _host = ""
+    _official_domains = (
+        "sec.gov",
+        "investor.",
+        "investors.",
+        "ir.",
+        "rns",
+    )
+    if _host:
+        if "sec.gov" in _host:
+            score += 45
+            reasons.append("official_domain_match")
+        elif any(d in _host for d in ("investor.", "investors.", "ir.", "rns")):
+            score += 30
+            reasons.append("official_domain_match")
     strong_signal = bool(
         direct_alias_hit
         or ("ticker_match" in reasons)
         or ("official_source_match" in reasons)
+        or ("official_filing_match" in reasons)
+        or any(d in _host for d in _official_domains)
         or (archetype_hits >= 2)
         or (peer_hits >= 2)
     )
@@ -345,26 +482,58 @@ def build_market_context_pack(
     )
     aliases = _company_aliases(company=company, ticker=ticker)
 
-    # Filings anchor.
-    if filings_pack and filings_pack.latest and filings_pack.latest.source_url:
-        r = filings_pack.latest
-        anchor = MarketContextItem(
-            text=(
-                f"Latest {r.filing_type} filing"
-                + (f" ({r.filing_date})" if r.filing_date else "")
-                + " is available for primary-source diligence."
-            ),
-            source=r.source_name or "filings",
-            date=r.filing_date or "",
-            confidence="verified" if r.confidence == "verified" else "estimated",
-            url=r.source_url,
-        )
-        trends.append(anchor)
-        seen.add((anchor.text.lower(), anchor.url))
-        relevant_count += 1
+    # Filings anchors.
+    if filings_pack and filings_pack.records:
+        _filing_added = 0
+        for r in filings_pack.records[:4]:
+            if not getattr(r, "source_url", ""):
+                continue
+            _source_name = str(getattr(r, "source_name", "") or "filings")
+            _score, _reason = _relevance_score(
+                title=_filing_context_text(r, archetype),
+                source=_source_name,
+                url=str(getattr(r, "source_url", "") or ""),
+                company_aliases=aliases,
+                ticker=ticker,
+                archetype=archetype,
+                sector=sector,
+                industry=industry,
+            )
+            if _score < relevant_threshold:
+                continue
+            anchor = MarketContextItem(
+                text=(
+                    f"{_filing_context_text(r, archetype)} "
+                    f"[{str(getattr(r, 'filing_type', '') or 'filing')}"
+                    + (f" {str(getattr(r, 'filing_date', '') or '').strip()}]" if str(getattr(r, "filing_date", "") or "").strip() else "]")
+                ),
+                source=_source_name,
+                date=str(getattr(r, "filing_date", "") or ""),
+                confidence="verified" if str(getattr(r, "confidence", "") or "").lower() == "verified" else "estimated",
+                url=str(getattr(r, "source_url", "") or ""),
+                relevance_score=_score,
+                relevance_reason=_reason or "official_source_match",
+            )
+            key = (anchor.text.lower(), anchor.url)
+            if key in seen:
+                continue
+            seen.add(key)
+            trends.append(anchor)
+            relevant_count += 1
+            _filing_added += 1
+            if _filing_added >= 2:
+                break
 
     # yfinance news headlines with URL/date.
-    for row in _extract_news_entries(ticker=ticker, count=12):
+    for row in _extract_news_entries_for_context(
+        company=company,
+        ticker=ticker,
+        sector=sector,
+        industry=industry,
+        archetype=archetype,
+        filings_pack=filings_pack,
+        per_symbol_count=8,
+    ):
         fetched_count += 1
         title = _safe_str(row.get("title"))
         if not title:

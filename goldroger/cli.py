@@ -683,7 +683,10 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     if isinstance(_quant_backed_used, bool):
         _used_in_valuation = "yes" if _quant_backed_used else "no — qualitative context only"
     else:
-        _used_in_valuation = "no" if research_state in {"SKIPPED_QUICK_MODE", "PARTIAL_FALLBACK", "FAILED"} else "yes"
+        if _quant_context_sem == "unavailable" or isinstance(_quant_backed_avail, bool) and (not _quant_backed_avail):
+            _used_in_valuation = "no — qualitative context only"
+        else:
+            _used_in_valuation = "no" if research_state in {"SKIPPED_QUICK_MODE", "PARTIAL_FALLBACK", "FAILED"} else "yes"
     if isinstance(_qual_backed_used, bool):
         if _qual_backed_used:
             _used_in_thesis = "yes"
@@ -756,7 +759,6 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         f"\n  Research collection: {_research_collection}"
         f" | Qualitative context: {_qual_context_state}"
         f" | Quantitative market inputs: {_quant_context_state}"
-        f"\n  Thesis mode: {_thesis_mode}"
     )
     if isinstance(_qual_backed_avail, bool) or isinstance(_quant_backed_avail, bool):
         block += (
@@ -787,10 +789,18 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             + (f" | latest source date: {_ctx_date}" if _ctx_date else "")
         )
     _filings_count = pipeline_status.get("filings_source_count")
+    _filings_state = "unavailable"
+    if _filings_count is not None:
+        try:
+            _f_cnt_int = int(_filings_count)
+        except Exception:
+            _f_cnt_int = 0
+        _f_backed = bool(pipeline_status.get("filings_source_backed"))
+        if _f_cnt_int > 0:
+            _filings_state = "source-backed" if _f_backed else "fallback"
     if _filings_count is not None:
         _f_type = str(pipeline_status.get("filings_latest_type", "") or "").strip()
         _f_date = str(pipeline_status.get("filings_latest_date", "") or "").strip()
-        _f_backed = bool(pipeline_status.get("filings_source_backed"))
         _filing_desc = (
             f"{_f_type}" + (f" ({_f_date})" if _f_date else "")
             if _f_type and _f_type.lower() != "unavailable"
@@ -799,8 +809,31 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         block += (
             f"\n  Filing sources: {int(_filings_count) if str(_filings_count).isdigit() else _filings_count}"
             f" | Latest filing: {_filing_desc}"
-            + (" | source-backed" if _f_backed else " | fallback/unavailable")
+            + (" | source-backed" if _filings_state == "source-backed" else " | fallback/unavailable")
         )
+    _market_context_state = _qual_context_state
+    if _ctx_fallback:
+        _market_context_state = "fallback"
+    elif _ctx_count is not None:
+        try:
+            if int(_ctx_count) <= 0:
+                _market_context_state = "unavailable"
+            elif int(_ctx_count) > 0 and not _ctx_fallback and _market_context_state in {"fallback", "unavailable"}:
+                _market_context_state = "source-backed"
+        except Exception:
+            pass
+    _valuation_inputs_state = (
+        "market data + verified quantitative context"
+        if str(_used_in_valuation).strip().lower() == "yes"
+        else "market data only"
+    )
+    block += (
+        f"\n  Filings: {_filings_state}"
+        f"\n  Market context: {_market_context_state}"
+        f"\n  Quantitative market inputs: {_quant_context_state}"
+        f"\n  Thesis mode: {_thesis_mode}"
+        f"\n  Valuation inputs: {_valuation_inputs_state}"
+    )
     block += (
         "\n  Research used in valuation: " + _used_in_valuation
         + " | Research used in thesis: " + _used_in_thesis
@@ -943,6 +976,9 @@ def print_result(result, debug: bool = False):
     _is_inconclusive = (v.recommendation or "").upper().startswith("INCONCLUSIVE")
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow", "INCONCLUSIVE": "magenta"}.get((v.recommendation or "").split(" ")[0], "white")
     _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
+    _extreme_signal_review = bool(_pipeline_status.get("extreme_signal_review"))
+    _cap_reason = str(_pipeline_status.get("recommendation_cap_reason", "") or "").strip()
+    _extreme_capped = bool((not _is_inconclusive) and _extreme_signal_review and _cap_reason)
     _run_ccy = _run_currency(_pipeline_status, src_map)
     console.print()
     _target_display = "N/A" if _is_inconclusive else (v.target_price or v.implied_value)
@@ -995,7 +1031,26 @@ def print_result(result, debug: bool = False):
         )
     if (not _is_inconclusive) and _pipeline_status.get("confidence"):
         _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
+    if _extreme_capped:
+        if _is_low_conf and _fv_range and v.target_price:
+            _target_line = (
+                f"Diagnostic Model Range: {_fv_label} | "
+                f"Diagnostic model value: {_value_with_source('Indicative midpoint', _target_display)} | "
+                f"Model-implied upside/downside: {_value_with_source('Upside', v.upside_downside)}"
+            )
+        elif _fv_range and v.target_price:
+            _target_line = (
+                f"Diagnostic Model Range: {_fv_label} | "
+                f"Diagnostic model value: {_value_with_source('Target', _target_display)}"
+            )
+        else:
+            _target_line = f"Diagnostic model value: {_value_with_source('Target', _target_display)}{_ev_display}"
+        if (not _is_inconclusive) and _pipeline_status.get("confidence"):
+            _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
+        _target_line += " | diagnostic; final recommendation capped pending corroboration"
     _headline_tail = "" if _is_low_conf else f" | Upside: {_value_with_source('Upside', v.upside_downside)}"
+    if _extreme_capped:
+        _headline_tail = ""
     _industry = (src_map.get("Industry", {}) or {}).get("value") if src_map else None
     _sector_label = _normalize_sector_label(f.sector or "Unknown", _industry)
     _header_parts = [f"[bold]{f.company_name}[/]", _sector_label]
@@ -1189,6 +1244,14 @@ def print_result(result, debug: bool = False):
                 _interp = "not available — valuation suppressed by sanity breaker"
         if _valuation_failed or _sanity_suppressed:
             _interp = "not available — valuation suppressed by sanity breaker"
+            console.print(
+                f"[dim]Diagnostic market-cap check: Market cap {_mcap_val} | "
+                f"Diagnostic model equity value {_eq_bridge} | "
+                f"Model-implied upside/downside: {_updn_txt or 'N/A'} | "
+                f"Interpretation: {_interp}[/dim]"
+            )
+        elif _extreme_capped:
+            _interp = "diagnostic only — final recommendation capped pending corroboration"
             console.print(
                 f"[dim]Diagnostic market-cap check: Market cap {_mcap_val} | "
                 f"Diagnostic model equity value {_eq_bridge} | "

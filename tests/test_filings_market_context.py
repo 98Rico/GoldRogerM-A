@@ -229,6 +229,45 @@ def test_market_context_accepts_tobacco_relevant_items(monkeypatch):
     assert pack.relevant_source_count >= 2
 
 
+def test_market_context_accepts_aapl_company_specific_context(monkeypatch):
+    market_context_cache.clear()
+    monkeypatch.setattr(
+        "goldroger.data.market_context._extract_news_entries",
+        lambda ticker, count=10: [
+            {"title": "Apple iPhone demand and services attach remain key for FY outlook", "url": "https://news.example.com/apple-iphone-services", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "Apple outlines AI and App Store service priorities", "url": "https://news.example.com/apple-ai-services", "source": "ExampleWire", "date": "2026-05-09"},
+            {"title": "Fast food stocks gain on menu pricing", "url": "https://news.example.com/fast-food", "source": "ExampleWire", "date": "2026-05-08"},
+        ],
+    )
+    filing = FilingRecord(
+        filing_type="10-K",
+        filing_date="2026-03-01",
+        accession_number="0000320193-26-000001",
+        source_url="https://www.sec.gov/Archives/edgar/data/320193/test.htm",
+        source_name="sec_edgar_submissions",
+        confidence="verified",
+    )
+    pack = build_market_context_pack(
+        company="Apple Inc.",
+        ticker="AAPL_A",
+        sector="Technology",
+        industry="Consumer Electronics",
+        filings_pack=FilingsPack(
+            company="Apple Inc.",
+            ticker="AAPL",
+            source_backed=True,
+            source_count=1,
+            records=[filing],
+        ),
+    )
+    rendered = " ".join([x.text for x in [*pack.trends, *pack.catalysts, *pack.risks]]).lower()
+    assert "apple" in rendered
+    assert "services" in rendered or "app store" in rendered
+    assert "fast food" not in rendered
+    assert pack.source_backed is True
+    assert pack.relevant_source_count >= 2
+
+
 def test_market_context_accepts_nhy_aluminum_relevant_items(monkeypatch):
     market_context_cache.clear()
     monkeypatch.setattr(
@@ -248,6 +287,30 @@ def test_market_context_accepts_nhy_aluminum_relevant_items(monkeypatch):
     )
     rendered = " ".join([x.text for x in [*pack.trends, *pack.catalysts, *pack.risks]]).lower()
     assert any(k in rendered for k in ("aluminum", "aluminium", "lme", "recycling", "cbam"))
+    assert pack.relevant_source_count >= 2
+
+
+def test_market_context_accepts_bats_dividend_leverage_regulatory_items(monkeypatch):
+    market_context_cache.clear()
+    monkeypatch.setattr(
+        "goldroger.data.market_context._extract_news_entries",
+        lambda ticker, count=10: [
+            {"title": "British American Tobacco updates New Categories strategy and leverage priorities", "url": "https://news.example.com/bat-new-categories", "source": "ExampleWire", "date": "2026-05-10"},
+            {"title": "BAT dividend and deleveraging outlook in focus amid excise and regulatory updates", "url": "https://news.example.com/bat-dividend-leverage", "source": "ExampleWire", "date": "2026-05-09"},
+            {"title": "Alibaba reports cloud margin expansion", "url": "https://news.example.com/alibaba-cloud", "source": "ExampleWire", "date": "2026-05-08"},
+        ],
+    )
+    pack = build_market_context_pack(
+        company="British American Tobacco p.l.c.",
+        ticker="BATS.L_B",
+        sector="Consumer Staples",
+        industry="Tobacco",
+        filings_pack=None,
+    )
+    rendered = " ".join([x.text for x in [*pack.trends, *pack.catalysts, *pack.risks]]).lower()
+    assert "new categories" in rendered or "tobacco" in rendered or "nicotine" in rendered
+    assert "dividend" in rendered or "leverage" in rendered or "deleveraging" in rendered
+    assert "alibaba" not in rendered
     assert pack.relevant_source_count >= 2
 
 

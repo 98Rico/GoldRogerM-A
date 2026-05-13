@@ -43,6 +43,9 @@ def test_pipeline_status_block_is_normalized_and_compact():
     assert "Recommendation: HOLD / LOW CONVICTION" in block
     assert "Research collection: fallback | Qualitative context: fallback | Quantitative market inputs: unavailable" in block
     assert "Thesis mode: deterministic archetype fallback" in block
+    assert "Filings: unavailable" in block
+    assert "Market context: fallback" in block
+    assert "Valuation inputs: market data only" in block
     assert "Research used in valuation: no | Research used in thesis: archetype-based deterministic fallback" in block
     assert reason == "DCF/comps disagreement"
 
@@ -198,6 +201,8 @@ def test_pipeline_status_renders_market_context_and_filing_sourcing_lines():
     )
     assert "Market context sources: 3 relevant / 8 fetched" in block
     assert "Filing sources: 2 | Latest filing: 10-K (2026-02-01) | source-backed" in block
+    assert "Filings: source-backed" in block
+    assert "Market context: source-backed" in block
 
 
 def test_currency_prefixed_revenue_and_fcf_formatting():
@@ -287,4 +292,6 @@ def test_pipeline_status_source_backed_context_with_timeout_thesis_is_consistent
     )
     assert "Research collection: source-backed | Qualitative context: source-backed | Quantitative market inputs: unavailable" in block
     assert "Thesis mode: timeout fallback" in block
+    assert "Market context: source-backed" in block
+    assert "Valuation inputs: market data only" in block
     assert "Research used in valuation: no — qualitative context only | Research used in thesis: timeout fallback" in block

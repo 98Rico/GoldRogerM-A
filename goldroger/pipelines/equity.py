@@ -447,6 +447,22 @@ def _archetype_sector_display(
     return profile_label or sector or "Default fallback"
 
 
+def _archetype_market_segment(archetype: str) -> str:
+    key = str(archetype or "").strip().lower()
+    mapping = {
+        "premium_device_platform": "Consumer hardware and services ecosystem",
+        "consumer_hardware_ecosystem": "Consumer hardware and services ecosystem",
+        "tobacco_nicotine_cash_return": "Tobacco and nicotine products",
+        "commodity_cyclical_aluminum": "Aluminum, recycling, and low-carbon metals",
+        "software_platform": "Software platforms and enterprise applications",
+        "semiconductor": "Semiconductors and semiconductor value chain",
+        "financials": "Financial services and balance-sheet businesses",
+        "consumer_staples": "Consumer staples branded products",
+        "healthcare": "Healthcare products and services",
+    }
+    return mapping.get(key, "")
+
+
 def _parse_iso_date(raw: str) -> date | None:
     txt = str(raw or "").strip()
     if not txt:
@@ -2163,6 +2179,22 @@ def run_analysis(
     # The LLM remains free to produce qualitative rationales in the thesis layer.
     assumptions = ValuationAssumptions()
 
+    # Archetype-aware market-segment backfill so known business models do not
+    # fail market-segment checks purely due sparse market-analysis text.
+    _archetype_for_market = detect_company_archetype(
+        company=company,
+        ticker=(market_data.ticker if market_data else ""),
+        sector=fund.sector or "",
+        industry=_target_industry,
+    )
+    if _text_missing(mkt.market_segment):
+        _seg = _archetype_market_segment(_archetype_for_market)
+        if _seg:
+            mkt.market_segment = _seg
+            if not mkt.market_segments:
+                mkt.market_segments = [_seg]
+            mkt = _ensure_market_analysis_contract(mkt)
+
     # ── 5. VALUATION ENGINE ───────────────────────────────────────────────
     t0 = _step("Valuation Engine")
     _dq_profile = detect_sector_profile(fund.sector or "", _target_industry)
@@ -3748,7 +3780,7 @@ def run_analysis(
         )
     if company_type == "public" and _is_cyclical_profile and _cyclical_review_required:
         _confidence_reasons.append(
-            "cyclical_review_required (mid-cycle EBITDA normalization support is limited)"
+            "mid-cycle EBITDA support missing (cyclical_review_required)"
         )
     if _extreme_signal_review:
         _req = 2 if _extreme_negative_signal else 3
@@ -3788,7 +3820,7 @@ def run_analysis(
             quality.warnings.append(_cyclical_warn)
     if company_type == "public" and _is_cyclical_profile and _cyclical_review_required:
         _cy_warn = (
-            "Cyclical review required — valuation may reflect current-cycle margins, not mid-cycle earnings."
+            "Cyclical review required — mid-cycle EBITDA support missing; valuation may reflect current-cycle margins."
         )
         if _cy_warn not in quality.warnings:
             quality.warnings.append(_cy_warn)
@@ -4021,6 +4053,11 @@ def run_analysis(
                 ),
                 "cyclical_review_required": bool(_cyclical_review_required),
                 "normalized_ebitda_supported": bool(_normalized_ebitda_supported),
+                "mid_cycle_ebitda_m": (
+                    round(float(_normalized_ebitda_proxy), 2)
+                    if (_normalized_ebitda_proxy is not None and _normalized_ebitda_proxy > 0)
+                    else None
+                ),
                 "extreme_signal_review": bool(_extreme_signal_review),
                 "extreme_signal_corroboration": int(_extreme_signal_corroboration),
                 "extreme_signal_missing_corroboration": sorted(set(_extreme_signal_missing)),
@@ -4127,7 +4164,8 @@ def run_analysis(
     if market_status == "SKIPPED_QUICK_MODE":
         analysis.market.market_size = "Not available in quick mode"
         analysis.market.market_growth = "Not available in quick mode"
-        analysis.market.market_segment = "Not available in quick mode"
+        if _text_missing(analysis.market.market_segment):
+            analysis.market.market_segment = "Not available in quick mode"
         analysis.market.data_status = "SKIPPED_QUICK_MODE"
         analysis.market.key_trends = []
     elif market_status == "DEGRADED":

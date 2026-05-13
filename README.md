@@ -108,6 +108,8 @@ Source-backed market context is now filtered by deterministic relevance scoring 
 - low-relevance items are rejected (default threshold: 60),
 - direct company/ticker/legal-name/filing matches outrank broad sector mentions,
 - generic market headlines are rejected unless tied to the company or core archetype/industry.
+- query expansion is deterministic and constrained (ticker, primary/local symbol variants, archetype-aware symbol aliases).
+- official filing/IR links can qualify as relevant context when they carry strategic/trend coverage.
 
 At least **2 relevant sources** are required to keep `source_backed=true`.
 Otherwise context is downgraded to fallback:
@@ -146,6 +148,15 @@ Examples:
 
 This prevents cross-sector leakage (for example software/cloud wording in Apple hardware fallback or platform-policy wording in tobacco fallback unless explicitly source-backed).
 
+### Archetype to Market-Segment Mapping
+
+When market-segment text is missing, known archetypes map to deterministic segment labels:
+- `premium_device_platform` -> `Consumer hardware and services ecosystem`
+- `tobacco_nicotine_cash_return` -> `Tobacco and nicotine products`
+- `commodity_cyclical_aluminum` -> `Aluminum, recycling, and low-carbon metals`
+
+This prevents avoidable "missing market segment definition" penalties for known company types.
+
 ## Cyclical and Extreme-Signal Guardrails
 
 ### Cyclical guardrail
@@ -156,6 +167,7 @@ If normalized/mid-cycle support is weak or unavailable, output is explicitly cau
 `Cyclical review required — valuation may reflect current-cycle margins, not mid-cycle earnings.`
 
 For cyclical companies, large upside calls (above +50%) are capped unless mid-cycle support is corroborated.
+`mid_cycle_ebitda`/normalization proxy fields are carried as placeholders in pipeline diagnostics until richer mid-cycle datasets are integrated.
 
 ### Mature-company extreme-signal guardrail
 
@@ -185,6 +197,24 @@ Example:
 - raw signal: positive valuation signal
 - final recommendation: `HOLD / LOW CONVICTION`
 - reason: extreme-signal plausibility cap + missing corroboration anchors
+
+### How To Interpret Capped Recommendations
+
+When `extreme_signal_review` caps a call:
+- displayed model value/range is **diagnostic**, not directly actionable,
+- headline output is explicitly labeled as capped pending corroboration,
+- recommendation should be treated as a watchlist/review state until missing anchors are resolved (for example quantified market inputs or mid-cycle support).
+
+## Status Semantics (Trust Signals)
+
+Pipeline status now separates sourcing trust dimensions:
+- `Filings`: `source-backed` / `fallback` / `unavailable`
+- `Market context`: `source-backed` / `fallback` / `unavailable`
+- `Quantitative market inputs`: `available` / `unavailable`
+- `Thesis mode`: `source-backed` / `deterministic archetype fallback` / `timeout fallback` / `generic fallback`
+- `Valuation inputs`: `market data only` / `market data + verified quantitative context`
+
+This avoids overloading one aggregate research label when filings and market-context quality differ.
 
 ## Report Modes
 

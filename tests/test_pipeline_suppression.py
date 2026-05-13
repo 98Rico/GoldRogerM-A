@@ -12,6 +12,7 @@ from goldroger.finance.valuation.aggregator import ValuationResult
 from goldroger.finance.valuation.comps import CompsOutput
 from goldroger.finance.valuation.dcf import DCFOutput
 from goldroger.finance.valuation.transactions import TransactionOutput
+from goldroger.cli import print_result
 from goldroger.models import Fundamentals, InvestmentThesis
 from goldroger.pipelines.equity import run_analysis
 
@@ -773,3 +774,129 @@ def test_fallback_market_context_banner_not_duplicated_in_trend_rows(monkeypatch
         not row.lower().startswith("fallback market context — sector profile only")
         for row in trend_rows
     )
+
+
+def test_archetype_market_segment_backfill_avoids_missing_segment_warning(monkeypatch):
+    md = MarketData(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        sector="Technology",
+        current_price=200.0,
+        market_cap=4200000.0,
+        shares_outstanding=21000.0,
+        total_debt=120000.0,
+        cash_and_equivalents=60000.0,
+        net_debt=60000.0,
+        enterprise_value=4260000.0,
+        revenue_ttm=400000.0,
+        ebitda_ttm=130000.0,
+        ebitda_margin=0.325,
+        fcf_ttm=95000.0,
+        ev_ebitda_market=25.0,
+        additional_metadata={
+            "industry": "Consumer Electronics",
+            "country": "United States",
+            "exchange": "NMS",
+            "quote_currency": "USD",
+            "financial_currency": "USD",
+            "market_cap_currency": "USD",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "AAPL",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "AAPL", md)
+    analysis = run_analysis(
+        "AAPL",
+        company_type="public",
+        quick_mode=True,
+        cli_mode=True,
+    )
+    segment_txt = str((analysis.market.market_segment or "")).lower()
+    warnings = [str(w) for w in ((analysis.data_quality or {}).get("warnings") or [])]
+    assert "consumer hardware and services ecosystem" in segment_txt
+    assert all("missing market segment definition" not in w.lower() for w in warnings)
+
+
+def test_extreme_signal_capped_recommendation_renders_diagnostic_headline(monkeypatch, capsys):
+    import goldroger.pipelines.equity as eq
+
+    md = MarketData(
+        ticker="BATS.L",
+        company_name="British American Tobacco p.l.c.",
+        sector="Consumer Staples",
+        current_price=32.0,
+        market_cap=100000.0,
+        shares_outstanding=3100.0,
+        total_debt=42000.0,
+        cash_and_equivalents=9000.0,
+        net_debt=33000.0,
+        enterprise_value=133000.0,
+        revenue_ttm=26000.0,
+        ebitda_ttm=12000.0,
+        ebitda_margin=0.46,
+        fcf_ttm=3000.0,
+        ev_ebitda_market=9.5,
+        additional_metadata={
+            "industry": "Tobacco",
+            "country": "United Kingdom",
+            "exchange": "LSE",
+            "quote_currency": "GBP",
+            "financial_currency": "GBP",
+            "market_cap_currency": "GBP",
+            "quote_type": "EQUITY",
+            "underlying_symbol": "BATS.L",
+            "is_adr_hint": False,
+        },
+    )
+    _install_public_stubs(monkeypatch, "BATS.L", md)
+
+    def _stub_extreme(self, financials, assumptions, market_data=None, sector="", company_type="public"):
+        dcf = DCFOutput(
+            free_cash_flows=[1000.0, 1000.0, 1000.0],
+            discounted_cash_flows=[900.0, 820.0, 750.0],
+            terminal_value=15000.0,
+            enterprise_value=150000.0,
+            terminal_value_pct=0.70,
+        )
+        comps = CompsOutput(low=90000.0, mid=100000.0, high=110000.0)
+        tx = TransactionOutput(implied_value=0.0)
+        blended = ValuationResult(low=98000.0, mid=132000.0, high=154000.0, blended=132000.0)
+        rec = RecommendationOutput(
+            recommendation="BUY",
+            upside_pct=0.99,
+            intrinsic_price=64.0,
+            current_price=32.0,
+            market_cap=100000.0,
+            ev_blended=132000.0,
+        )
+        return FullValuationOutput(
+            dcf=dcf,
+            comps=comps,
+            transactions=tx,
+            blended=blended,
+            lbo=None,
+            recommendation=rec,
+            sensitivity=None,
+            wacc_used=0.09,
+            terminal_growth_used=0.02,
+            data_confidence="verified",
+            sector=sector or "Consumer Staples",
+            valuation_path="ev_ebitda",
+            has_revenue=True,
+            weights_used={"dcf": 0.6, "comps": 0.4, "transactions": 0.0},
+            notes=[],
+            field_sources={"DCF Status": ("normal", "valuation_engine", "inferred")},
+        )
+
+    monkeypatch.setattr(eq.ValuationService, "run_full_valuation", _stub_extreme)
+    analysis = run_analysis(
+        "British American Tobacco",
+        company_type="public",
+        quick_mode=True,
+        cli_mode=True,
+    )
+    print_result(analysis)
+    out = capsys.readouterr().out.lower()
+    assert "diagnostic model value" in out
+    assert "capped pending corroboration" in out
