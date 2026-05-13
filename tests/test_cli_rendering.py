@@ -325,7 +325,10 @@ def test_pipeline_status_block_uses_private_status_semantics():
             "private_identity_status": "WEAK",
             "private_financials_quality": "ESTIMATED",
             "private_peers_state": "FAILED",
+            "private_provider_state": "PARTIAL",
             "private_valuation_mode": "SCREEN_ONLY",
+            "private_used_providers": ["infogreffe"],
+            "private_skipped_providers": ["pappers"],
             "private_screen_only_reasons": ["identity gate not satisfied", "revenue gate not satisfied"],
         }
     )
@@ -333,5 +336,8 @@ def test_pipeline_status_block_uses_private_status_semantics():
     assert "Identity: WEAK" in block
     assert "Revenue: LOW_CONFIDENCE_ESTIMATE" in block
     assert "Financials: ESTIMATED" in block
+    assert "Private providers: PARTIAL" in block
+    assert "Used providers: infogreffe" in block
+    assert "Skipped providers: pappers" in block
     assert "Private valuation mode: SCREEN_ONLY" in block
     assert "Screen-only reasons: identity gate not satisfied, revenue gate not satisfied" in block

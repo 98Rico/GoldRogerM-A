@@ -24,6 +24,15 @@ def test_provider_table_no_country_returns_all():
     assert "sec_edgar" in names
 
 
+def test_provider_table_private_country_hint_includes_capability_flags():
+    rows = provider_table(country_hint="FR", company_type="private")
+    by_name = {r["name"]: r for r in rows}
+    assert "infogreffe" in by_name
+    assert "supports_identity" in by_name["infogreffe"]
+    assert "supports_revenue" in by_name["infogreffe"]
+    assert "supports_filings" in by_name["infogreffe"]
+
+
 def test_resolve_auto_skips_missing_credentials(monkeypatch):
     monkeypatch.delenv("PAPPERS_API_KEY", raising=False)
     monkeypatch.delenv("CRUNCHBASE_API_KEY", raising=False)

@@ -16,6 +16,8 @@ from typing import Optional
 from rich.console import Console
 from rich.table import Table
 
+from goldroger.data.registry import DEFAULT_REGISTRY
+
 
 @dataclass
 class _ProviderDef:
@@ -93,13 +95,47 @@ def provider_names() -> list[str]:
     return [p.name for p in _ALL_PROVIDERS]
 
 
-def provider_table(country_hint: str = "") -> list[dict]:
+def provider_table(country_hint: str = "", company_type: str = "") -> list[dict]:
     """Structured provider status for CLI/UI display."""
     country_iso = _normalise_country(country_hint) if country_hint else None
     providers = _relevant_providers(country_iso)
+    ctype = (company_type or "").strip().lower()
+    _caps_map = {c.name: c for c in DEFAULT_REGISTRY.list_providers()}
     rows: list[dict] = []
     for p in providers:
+        caps = _caps_map.get(p.name)
+        if ctype and caps and ctype not in {x.lower() for x in (caps.company_types or [])}:
+            continue
         status, _ = _key_status(p)
+        data_fields = {str(x).strip().lower() for x in ((caps.data_fields if caps else []) or [])}
+        support_identity = bool(
+            data_fields.intersection({"sector", "employees", "company_number", "siren", "registration_number"})
+            or p.name in {"infogreffe", "pappers", "companies_house", "handelsregister", "kvk", "registro_mercantil"}
+        )
+        support_revenue = bool(
+            data_fields.intersection({"revenue", "net_income"})
+            or p.name in {"pappers", "companies_house", "handelsregister", "sec_edgar", "crunchbase", "yfinance"}
+        )
+        support_filings = bool(
+            ("filing" in " ".join((caps.data_fields if caps else [])).lower())
+            or p.name in {"companies_house", "sec_edgar", "pappers", "handelsregister"}
+        )
+        limitations = list(caps.limitations or []) if caps else []
+        if not limitations:
+            if p.name == "infogreffe":
+                limitations = ["Identity/sector only; no revenue in free endpoint"]
+            elif p.name == "companies_house":
+                limitations = ["Revenue extraction is best-effort from filing docs/XBRL"]
+            elif p.name == "handelsregister":
+                limitations = ["Best-effort HTML parsing; coverage can be sparse"]
+            elif p.name == "sec_edgar":
+                limitations = ["US filer coverage only"]
+            elif p.name == "kvk":
+                limitations = ["Sector-focused; no financial statement revenue"]
+            elif p.name == "registro_mercantil":
+                limitations = ["Existence/registry context only"]
+            elif p.name == "crunchbase":
+                limitations = ["Estimated ranges, not filing-verified financials"]
         rows.append(
             {
                 "name": p.name,
@@ -108,6 +144,10 @@ def provider_table(country_hint: str = "") -> list[dict]:
                 "status": status,
                 "requires_key": not p.free,
                 "env_var": p.env_var,
+                "supports_identity": support_identity,
+                "supports_revenue": support_revenue,
+                "supports_filings": support_filings,
+                "limitations": "; ".join(limitations[:2]) if limitations else "",
             }
         )
     return rows

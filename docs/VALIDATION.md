@@ -106,6 +106,19 @@ uv run python -m goldroger.cli --company "Revolut" --type private --quick
 uv run python -m goldroger.cli --company "Personio" --type private --quick
 ```
 
+Manual override smoke (prototype valuation-ready path):
+
+```bash
+uv run python -m goldroger.cli \
+  --company "Personio" \
+  --type private \
+  --country-hint DE \
+  --manual-revenue 300 \
+  --manual-revenue-currency EUR \
+  --manual-revenue-year 2025 \
+  --manual-revenue-source-note "prototype user estimate"
+```
+
 ### Private invariants
 
 - No verified/high-confidence revenue:
@@ -115,6 +128,10 @@ uv run python -m goldroger.cli --company "Personio" --type private --quick
 - Triangulated revenue:
   - must be provenance-tagged (`triangulation`)
   - must be treated as `LOW_CONFIDENCE_ESTIMATE` (non-valuation-grade).
+- Manual private revenue:
+  - must be marked `manual user-provided, unverified`
+  - can unlock `VALUATION_GRADE` only when identity is resolved or explicitly user-confirmed
+  - must be confidence-capped (not high conviction).
 - Private recommendation labels:
   - must use private taxonomy (`ATTRACTIVE ENTRY`, `CONDITIONAL GO`, `SELECTIVE BUY`, `FULL PRICE`, `INCONCLUSIVE`)
   - must not fall back to public BUY/HOLD/SELL labels.

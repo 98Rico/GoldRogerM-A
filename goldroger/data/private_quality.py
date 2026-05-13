@@ -32,7 +32,8 @@ class PrivateMergeResult:
 
 
 _SOURCE_WEIGHT: dict[str, float] = {
-    "manual (user input)": 1.30,
+    "manual_user_input": 1.30,
+    "manual (user input)": 1.30,  # backward compatibility with older source tag
     "pappers": 1.00,
     "sec_edgar": 0.95,
     "companies_house": 0.92,
@@ -188,7 +189,7 @@ def merge_private_market_data(
         )
 
     # Explicit user override is always authoritative.
-    manual = [c for c in candidates if c.source == "manual (user input)"]
+    manual = [c for c in candidates if c.source in {"manual_user_input", "manual (user input)"}]
     if manual:
         selected = manual[0]
         source_record = next(
@@ -202,8 +203,8 @@ def merge_private_market_data(
         )
         merged = source_record
         merged.revenue_ttm = round(selected.revenue_m, 1)
-        merged.data_source = "manual (user input)"
-        merged.confidence = "verified"
+        merged.data_source = "manual_user_input"
+        merged.confidence = "manual"
         notes.append("Manual revenue override applied.")
         return PrivateMergeResult(
             market_data=merged,

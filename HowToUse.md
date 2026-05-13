@@ -72,6 +72,31 @@ uv run python -m goldroger.cli \
   --sources "infogreffe,pappers,sec_edgar"
 ```
 
+### Manual revenue override (prototype)
+
+```bash
+uv run python -m goldroger.cli \
+  --company "Personio" \
+  --type private \
+  --country-hint DE \
+  --manual-revenue 300 \
+  --manual-revenue-currency EUR \
+  --manual-revenue-year 2025 \
+  --manual-revenue-source-note "prototype user estimate"
+```
+
+If legal identity is unresolved and you still want a prototype valuation path:
+
+```bash
+uv run python -m goldroger.cli \
+  --company "Personio" \
+  --type private \
+  --country-hint DE \
+  --manual-revenue 300 \
+  --manual-revenue-currency EUR \
+  --manual-identity-confirmed
+```
+
 ## 5) Export Commands
 
 ### Excel + PowerPoint output
@@ -138,5 +163,6 @@ If data sources are limited:
 
 ```bash
 uv run python -m goldroger.cli --list-sources
+uv run python -m goldroger.cli --list-sources --type private --country-hint FR
+uv run python -m goldroger.cli --list-sources --type private --country-hint GB
 ```
-

@@ -102,6 +102,16 @@ class InfogreffeProvider(DataProvider):
 
         naf = best_result.get("siege", {}).get("activite_principale", "")
         sector = _NAF_SECTOR.get(naf[:2], "") if naf else ""
+        _siege = best_result.get("siege", {}) or {}
+        _meta = {
+            "registry": "recherche_entreprises",
+            "siren": str(best_result.get("siren") or "").strip(),
+            "siret": str(_siege.get("siret") or "").strip(),
+            "naf_code": str(naf or "").strip(),
+            "activity_label": str(_siege.get("libelle_activite_principale") or "").strip(),
+            "company_category": str(best_result.get("categorie_entreprise") or "").strip(),
+            "employee_range": str(best_result.get("tranche_effectif_salarie") or "").strip(),
+        }
 
         return MarketData(
             ticker=company_name.upper()[:6],
@@ -110,6 +120,7 @@ class InfogreffeProvider(DataProvider):
             revenue_ttm=None,
             confidence="inferred",
             data_source="infogreffe",
+            additional_metadata=_meta,
         )
 
     def fetch_by_siren(self, siren: str, company_name: str = "") -> Optional[MarketData]:
@@ -129,6 +140,16 @@ class InfogreffeProvider(DataProvider):
             r = results[0]
             naf = r.get("siege", {}).get("activite_principale", "")
             sector = _NAF_SECTOR.get(naf[:2], "") if naf else ""
+            _siege = r.get("siege", {}) or {}
+            _meta = {
+                "registry": "recherche_entreprises",
+                "siren": str(r.get("siren") or "").strip() or str(siren).strip(),
+                "siret": str(_siege.get("siret") or "").strip(),
+                "naf_code": str(naf or "").strip(),
+                "activity_label": str(_siege.get("libelle_activite_principale") or "").strip(),
+                "company_category": str(r.get("categorie_entreprise") or "").strip(),
+                "employee_range": str(r.get("tranche_effectif_salarie") or "").strip(),
+            }
             return MarketData(
                 ticker=(company_name or siren).upper()[:6],
                 company_name=r.get("nom_complet", company_name or siren),
@@ -136,6 +157,7 @@ class InfogreffeProvider(DataProvider):
                 revenue_ttm=None,
                 confidence="inferred",
                 data_source="infogreffe",
+                additional_metadata=_meta,
             )
         except Exception:
             return None

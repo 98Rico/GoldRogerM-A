@@ -766,10 +766,18 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _private_identity_status = str(pipeline_status.get("private_identity_status", "") or "").strip().upper() or (
             "RESOLVED" if bool(pipeline_status.get("private_identity_resolved")) else "UNRESOLVED"
         )
+        _private_identity_source_state = str(
+            pipeline_status.get("private_identity_source_state", "") or ""
+        ).strip().lower()
         _private_rev_quality = str(pipeline_status.get("private_revenue_quality", "") or "").strip().upper()
         _private_fin_q = str(pipeline_status.get("private_financials_quality", "") or "").strip().upper()
         _private_peers = str(pipeline_status.get("private_peers_state", "") or "").strip().upper()
         _private_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
+        _private_state = str(pipeline_status.get("private_state", "") or "").strip().upper()
+        _private_provider_state = str(pipeline_status.get("private_provider_state", "") or "").strip().upper()
+        _private_manual = bool(pipeline_status.get("private_manual_revenue_used"))
+        _private_used = pipeline_status.get("private_used_providers") or []
+        _private_skipped = pipeline_status.get("private_skipped_providers") or []
         _private_tri = bool(pipeline_status.get("private_triangulation_used"))
         _private_id_ok = bool(pipeline_status.get("private_identity_resolved"))
         _private_screen_reasons = pipeline_status.get("private_screen_only_reasons") or []
@@ -783,13 +791,32 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         )
         block += (
             f"\n  Identity: {_private_identity_status}"
+            f"\n  Identity sources: {_private_identity_source_state or 'unavailable'}"
             f"\n  Revenue: {_private_rev_quality or _private_rev_status.upper()}"
             f"\n  Financials: {_private_fin_q or 'UNAVAILABLE'}"
             f"\n  Private peers: {_private_peers or 'FAILED'}"
+            f"\n  Private providers: {_private_provider_state or 'FAILED'}"
+            f"\n  Private state: {_private_state or 'SCREEN_ONLY'}"
             f"\n  Private valuation mode: {_private_val_mode or 'SCREEN_ONLY'}"
         )
+        if isinstance(_private_used, list) and _private_used:
+            block += "\n  Used providers: " + ", ".join(str(x) for x in _private_used if str(x).strip())
+        if isinstance(_private_skipped, list) and _private_skipped:
+            block += "\n  Skipped providers: " + ", ".join(str(x) for x in _private_skipped if str(x).strip())
+        if _private_manual:
+            block += "\n  Manual revenue override: yes (user-provided, unverified)"
         if _private_screen_txt:
             block += f"\n  Screen-only reasons: {_private_screen_txt}"
+            _unlock: list[str] = []
+            if "verified revenue unavailable" in _private_screen_txt.lower():
+                _unlock.append("provide verified revenue source (for example Pappers/Companies House accounts) or pass --manual-revenue")
+            if "legal identity unresolved" in _private_screen_txt.lower():
+                _unlock.append("provide legal identifier (for example SIREN/company number) or pass --manual-identity-confirmed with manual revenue")
+            if not _unlock:
+                _unlock.append("improve private identity and revenue source quality")
+            block += "\n  What would unlock valuation:"
+            for _u in _unlock[:3]:
+                block += f"\n    - {_u}"
     block += (
         f"\n  Research collection: {_research_collection}"
         f" | Qualitative context: {_qual_context_state}"
@@ -860,7 +887,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _valuation_inputs_state = (
         "market data + verified quantitative context"
         if str(_used_in_valuation).strip().lower() == "yes"
-        else "market data only"
+        else ("private provider financials only" if _is_private else "market data only")
     )
     block += (
         f"\n  Filings: {_filings_state}"
@@ -903,7 +930,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         except Exception:
             pass
     _norm_status = str(pipeline_status.get("normalization_status", "") or "").strip()
-    if _norm_status:
+    if (not _is_private) and _norm_status:
         _q_ccy = str(pipeline_status.get("quote_currency", "") or "unknown")
         _f_ccy = str(pipeline_status.get("financial_statement_currency", "") or "unknown")
         _m_ccy = str(pipeline_status.get("market_cap_currency", "") or "unknown")
@@ -1176,15 +1203,27 @@ def print_result(result, debug: bool = False):
     _peer_q = _pipeline_status.get("peer_quality_score") if _pipeline_status else None
     _fin_q = _pipeline_status.get("financial_data_quality_score") if _pipeline_status else None
     _norm_q = _pipeline_status.get("normalization_status") if _pipeline_status else None
+    _is_private_run = str(getattr(result, "company_type", "")).lower() == "private"
     if (_core_q is not None) or (_r_q is not None):
-        console.print(
-            "[bold]Quality Split:[/bold]\n"
-            f"  Raw financial data availability: {(_fin_q if _fin_q is not None else _core_q if _core_q is not None else 'N/A')}/100\n"
-            f"  Normalization quality: {_norm_q or 'N/A'}\n"
-            f"  Peer quality: {(_peer_q if _peer_q is not None else 'N/A')}/100\n"
-            f"  Research enrichment quality: {(_r_q if _r_q is not None else _r_lbl or 'N/A')}\n"
-            f"  Valuation confidence: {_pipeline_status.get('confidence', 'N/A') if _pipeline_status else 'N/A'}"
-        )
+        if _is_private_run and _pipeline_status:
+            console.print(
+                "[bold]Private Data Quality:[/bold]\n"
+                f"  Identity: {_pipeline_status.get('private_identity_status', 'UNRESOLVED')}\n"
+                f"  Revenue: {_pipeline_status.get('private_revenue_quality', 'UNAVAILABLE')}\n"
+                f"  Financials: {_pipeline_status.get('private_financials_quality', 'UNAVAILABLE')}\n"
+                f"  Peers: {_pipeline_status.get('private_peers_state', 'FAILED')}\n"
+                f"  Valuation mode: {_pipeline_status.get('private_valuation_mode', 'SCREEN_ONLY')}\n"
+                f"  Valuation confidence: {_pipeline_status.get('confidence', 'N/A')}"
+            )
+        else:
+            console.print(
+                "[bold]Quality Split:[/bold]\n"
+                f"  Raw financial data availability: {(_fin_q if _fin_q is not None else _core_q if _core_q is not None else 'N/A')}/100\n"
+                f"  Normalization quality: {_norm_q or 'N/A'}\n"
+                f"  Peer quality: {(_peer_q if _peer_q is not None else 'N/A')}/100\n"
+                f"  Research enrichment quality: {(_r_q if _r_q is not None else _r_lbl or 'N/A')}\n"
+                f"  Valuation confidence: {_pipeline_status.get('confidence', 'N/A') if _pipeline_status else 'N/A'}"
+            )
     _timings = (getattr(result, "data_quality", {}) or {}).get("timings_s", {})
     if _timings:
         _known = 0.0
@@ -1322,8 +1361,15 @@ def print_result(result, debug: bool = False):
     _private_val_mode = str((_pipeline_status or {}).get("private_valuation_mode", "") or "").strip().upper()
     _private_screen_only_mode = (_private_val_mode == "SCREEN_ONLY")
     if str(getattr(result, "company_type", "")).lower() == "private" and _private_screen_only_mode:
+        _private_rev_quality = str((_pipeline_status or {}).get("private_revenue_quality", "") or "").strip().upper()
+        _rev_screen = _source_value("Revenue TTM") or "N/A"
+        _rev_screen_l = str(_rev_screen).strip().lower()
+        if _rev_screen_l.startswith("unknown ") or _rev_screen_l in {"unknown", "n/a", ""}:
+            _rev_screen = "N/A"
+        if _private_rev_quality not in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE", "MANUAL"}:
+            _rev_screen = "N/A"
         _private_rows = [
-            ("Revenue", _source_value("Revenue TTM") or _source_value("Revenue") or "N/A"),
+            ("Revenue", _rev_screen),
             ("Revenue Growth", "N/A [screen-only: non-valuation-grade]"),
             ("Modeled Revenue Growth", "N/A [screen-only: non-valuation-grade]"),
             ("Gross Margin", "N/A [screen-only: non-valuation-grade]"),
@@ -1351,6 +1397,17 @@ def print_result(result, debug: bool = False):
         ]:
             kpi_table.add_row(row[0], _value_with_source(row[0], row[1]))
     console.print(kpi_table)
+    if str(getattr(result, "company_type", "")).lower() == "private" and _private_screen_only_mode:
+        _private_rev_quality = str((_pipeline_status or {}).get("private_revenue_quality", "") or "").strip().upper()
+        if _private_rev_quality in {"LOW_CONFIDENCE_ESTIMATE", "UNAVAILABLE"}:
+            _rev_hint = _source_value("Revenue TTM")
+            if _rev_hint and str(_rev_hint).strip().upper() not in {"", "N/A", "UNKNOWN"}:
+                console.print("\n[bold]Triangulation / Unverified Clues[/]")
+                console.print(
+                    "  "
+                    + _format_metric_value("Revenue", str(_rev_hint))
+                    + " [excluded from valuation]"
+                )
     _sector_ind = f"{f.sector or ''} {(_source_value('Industry') or '')}".lower()
     if any(tok in _sector_ind for tok in ("tobacco", "nicotine")):
         cash_table = Table(title="Cash Return & Leverage Metrics", show_header=True, header_style="bold magenta")
@@ -1606,21 +1663,61 @@ def main():
     )
     parser.add_argument("--llm", default=None, help="LLM provider: mistral (default), anthropic, openai")
     parser.add_argument("--country-hint", default="", help="Optional ISO-2 country hint for private company resolution (FR/GB/DE/NL/ES/US)")
+    parser.add_argument(
+        "--manual-revenue",
+        type=float,
+        default=None,
+        help="Manual private-company revenue override in millions (for prototype valuation unlock).",
+    )
+    parser.add_argument(
+        "--manual-revenue-currency",
+        default="USD",
+        help="Currency code for --manual-revenue (default: USD).",
+    )
+    parser.add_argument(
+        "--manual-revenue-year",
+        type=int,
+        default=None,
+        help="Fiscal year for --manual-revenue (for provenance only).",
+    )
+    parser.add_argument(
+        "--manual-revenue-source-note",
+        default="",
+        help="Short provenance note for manual revenue input.",
+    )
+    parser.add_argument(
+        "--manual-identity-confirmed",
+        action="store_true",
+        help="Allow private manual-revenue valuation when legal identity remains unresolved (prototype guardrail).",
+    )
     parser.add_argument("--debug", action="store_true", help="Show verbose diagnostics (JSON parse/raw search details, full notes)")
     args = parser.parse_args()
     if args.quick and args.full_report:
         parser.error("--quick and --full-report cannot be used together")
 
     if args.list_sources:
-        rows = provider_table()
+        rows = provider_table(country_hint=args.country_hint or "", company_type=args.type or "")
         t = Table(title="Data Sources", show_header=True, header_style="bold magenta")
         t.add_column("Name")
         t.add_column("Display")
         t.add_column("Coverage")
         t.add_column("Status")
+        t.add_column("Identity")
+        t.add_column("Revenue")
+        t.add_column("Filings")
+        t.add_column("Limitations")
         for r in rows:
             cov = ", ".join(r["coverage"])
-            t.add_row(r["name"], r["display"], cov, r["status"])
+            t.add_row(
+                r["name"],
+                r["display"],
+                cov,
+                r["status"],
+                "yes" if r.get("supports_identity") else "no",
+                "yes" if r.get("supports_revenue") else "no",
+                "yes" if r.get("supports_filings") else "no",
+                str(r.get("limitations") or "—"),
+            )
         console.print(t)
         return
 
@@ -1677,6 +1774,11 @@ def main():
             result = run_analysis(confirmed_company, args.type, llm=args.llm, siren=args.siren,
                                    interactive=args.interactive, data_sources=selected_sources,
                                    country_hint=country_hint, company_identifier=company_identifier,
+                                   manual_revenue=args.manual_revenue,
+                                   manual_revenue_currency=args.manual_revenue_currency,
+                                   manual_revenue_year=args.manual_revenue_year,
+                                   manual_revenue_source_note=args.manual_revenue_source_note,
+                                   manual_identity_confirmed=bool(args.manual_identity_confirmed),
                                    quick_mode=args.quick, full_report=args.full_report,
                                    debug=args.debug, cli_mode=True)
             print_result(result, debug=args.debug)

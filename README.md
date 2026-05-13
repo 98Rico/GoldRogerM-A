@@ -256,7 +256,7 @@ uv run python -m goldroger.cli --company "AAPL" --type public --full-report
 uv run python -m goldroger.cli --company "Doctolib" --type private
 ```
 
-## Private Company Valuation — Current Mechanism
+## Private Company Valuation Pipeline — Current Behavior
 
 This mechanism already exists in the current codebase and is used by `--type private`.
 
@@ -314,6 +314,13 @@ Private runs use private-specific trust labels in `Pipeline status`:
 - `Financials`: `VERIFIED` / `ESTIMATED` / `UNAVAILABLE`
 - `Private peers`: `OK` / `WEAK` / `FAILED`
 - `Private valuation mode`: `VALUATION_GRADE` / `SCREEN_ONLY` / `FAILED`
+
+Private state-machine states:
+- `IDENTITY_UNRESOLVED`
+- `IDENTITY_RESOLVED_NO_REVENUE`
+- `SCREEN_ONLY`
+- `VALUATION_READY`
+- `VALUATION_FAILED`
 
 When `SCREEN_ONLY` is active:
 - recommendation is forced to `INCONCLUSIVE`,
@@ -378,6 +385,35 @@ uv run python -m goldroger.cli --company "Personio" --type private --quick
 
 ```bash
 uv run python -m goldroger.cli --list-sources
+uv run python -m goldroger.cli --list-sources --type private --country-hint FR
+uv run python -m goldroger.cli --list-sources --type private --country-hint GB
+```
+
+### Manual revenue override (private prototype unlock)
+
+Use this only when you have a defensible internal estimate and want an indicative valuation:
+
+```bash
+uv run python -m goldroger.cli \
+  --company "Personio" \
+  --type private \
+  --country-hint DE \
+  --manual-revenue 300 \
+  --manual-revenue-currency EUR \
+  --manual-revenue-year 2025 \
+  --manual-revenue-source-note "prototype user estimate"
+```
+
+If legal identity remains unresolved, you can explicitly force a prototype run:
+
+```bash
+uv run python -m goldroger.cli \
+  --company "Personio" \
+  --type private \
+  --country-hint DE \
+  --manual-revenue 300 \
+  --manual-revenue-currency EUR \
+  --manual-identity-confirmed
 ```
 
 ### Export artifacts
@@ -441,6 +477,19 @@ For validation benchmarks and expected invariants, see [docs/VALIDATION.md](docs
 - FR: without `PAPPERS_API_KEY`, verified revenue is commonly unavailable for SAS entities; runs may remain `SCREEN_ONLY`.
 - GB: Companies House provides strong identity/filing metadata but revenue extraction is best-effort and can remain unavailable.
 - DE: Handelsregister identity/revenue coverage can be sparse; unresolved identity should be treated as `SCREEN_ONLY` until a legal identifier or verified revenue is provided.
+
+### Private Troubleshooting
+
+- Why is recommendation `INCONCLUSIVE`?
+  - Check `Private valuation mode` and `Screen-only reasons` in pipeline status.
+  - Most common causes: unresolved legal identity or unavailable verified revenue.
+- Why is revenue `N/A`?
+  - Provider coverage can be identity-only for many private entities/countries.
+  - Add a stronger provider (`PAPPERS_API_KEY`, Companies House accounts extraction, etc.) or use manual override for prototype-only runs.
+- Why are peers shown but valuation skipped?
+  - Peer tables can still be shown for directional context, but valuation remains blocked until identity/revenue gates pass.
+- How do I unlock valuation in private mode?
+  - Provide a legal identifier (SIREN/company number) and verified/high-confidence revenue, or use manual revenue flags for prototype runs with explicit confidence caps.
 
 ## Public Validation Examples
 

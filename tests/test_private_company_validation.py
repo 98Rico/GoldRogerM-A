@@ -86,6 +86,12 @@ def _run_private_case(
     triangulation_result: TriangulationResult | None = None,
     country_hint: str = "",
     skipped_missing_credentials: list[str] | None = None,
+    manual_revenue: float | None = None,
+    manual_revenue_currency: str = "USD",
+    manual_revenue_year: int | None = None,
+    manual_revenue_source_note: str = "",
+    manual_identity_confirmed: bool = False,
+    company_identifier: str = "",
 ):
     import goldroger.data.private_triangulation as tri_mod
     import goldroger.data.source_selector as selector_mod
@@ -128,7 +134,13 @@ def _run_private_case(
         quick_mode=True,
         cli_mode=True,
         country_hint=country_hint,
+        company_identifier=company_identifier,
         data_sources=selected if selected else ["auto"],
+        manual_revenue=manual_revenue,
+        manual_revenue_currency=manual_revenue_currency,
+        manual_revenue_year=manual_revenue_year,
+        manual_revenue_source_note=manual_revenue_source_note,
+        manual_identity_confirmed=manual_identity_confirmed,
     )
 
 
@@ -312,6 +324,73 @@ def test_private_missing_pappers_key_is_logged_as_limitation(monkeypatch):
     md_text = analysis.sources_md or ""
     assert "Private Revenue Limitation" in md_text
     assert "Pappers key is not configured" in md_text
+
+
+def test_private_manual_revenue_enables_valuation_with_resolved_identity(monkeypatch):
+    md = _md(company="Revolut Ltd", source="companies_house", revenue_m=None, confidence="inferred", sector="Financials")
+    md.additional_metadata = {"company_number": "08804411", "financial_currency": "GBP"}
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Revolut Ltd",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="GB",
+        company_identifier="08804411",
+        manual_revenue=300.0,
+        manual_revenue_currency="EUR",
+        manual_revenue_year=2025,
+        manual_revenue_source_note="prototype user estimate",
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("private_revenue_quality")) == "MANUAL"
+    assert str(ps.get("private_valuation_mode")) == "VALUATION_GRADE"
+    assert str(ps.get("private_state")) == "VALUATION_READY"
+    assert bool(ps.get("private_manual_revenue_used")) is True
+    assert not str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
+    assert str(ps.get("confidence")).lower() in {"low", "medium"}
+    assert "manual user-provided" in (analysis.sources_md or "").lower()
+
+
+def test_private_manual_revenue_can_unlock_with_manual_identity_confirmation(monkeypatch):
+    weak_md = _md(company="Personio", source="crunchbase", revenue_m=None, confidence="inferred", sector="Technology")
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Personio",
+        registry_md=weak_md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="DE",
+        manual_revenue=300.0,
+        manual_revenue_currency="EUR",
+        manual_identity_confirmed=True,
+        manual_revenue_source_note="prototype user estimate",
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("private_revenue_quality")) == "MANUAL"
+    assert bool(ps.get("private_manual_revenue_used")) is True
+    assert str(ps.get("private_valuation_mode")) == "VALUATION_GRADE"
+    assert str(ps.get("private_state")) == "VALUATION_READY"
+    assert str(ps.get("confidence")).lower() in {"low", "medium"}
+
+
+def test_private_manual_revenue_without_identity_confirmation_stays_screen_only(monkeypatch):
+    weak_md = _md(company="Personio", source="crunchbase", revenue_m=None, confidence="inferred", sector="Technology")
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Personio",
+        registry_md=weak_md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="DE",
+        manual_revenue=300.0,
+        manual_revenue_currency="EUR",
+        manual_identity_confirmed=False,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("private_revenue_quality")) == "MANUAL"
+    assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
+    assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
 
 
 @pytest.mark.parametrize(

@@ -59,7 +59,8 @@ def test_manual_source_wins_when_present():
     merged = merge_private_market_data(base, extra)
 
     assert merged.market_data is not None
-    assert merged.market_data.data_source == "manual (user input)"
+    assert merged.market_data.data_source == "manual_user_input"
+    assert merged.market_data.confidence == "manual"
     assert float(merged.market_data.revenue_ttm or 0) == 300.0
 
 
