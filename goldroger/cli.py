@@ -245,6 +245,19 @@ def _fetch_company_suggestions(query: str, company_type: str, country_hint: str 
         try:
             md = DEFAULT_REGISTRY.fetch_by_name(q, country_hint=country_hint or "")
             if md:
+                _md_meta = md.additional_metadata if isinstance(md.additional_metadata, dict) else {}
+                _identifier = (
+                    str(
+                        _md_meta.get("company_number")
+                        or _md_meta.get("siren")
+                        or _md_meta.get("siret")
+                        or _md_meta.get("cik")
+                        or _md_meta.get("lei")
+                        or ""
+                    ).strip()
+                )
+                if _identifier.lower() in {"n/a", "na", "none", "unknown", "-", "—"}:
+                    _identifier = ""
                 out.insert(0, {
                     "display_name": md.company_name or q,
                     "symbol": "",
@@ -253,7 +266,7 @@ def _fetch_company_suggestions(query: str, company_type: str, country_hint: str 
                     "region": country_hint or "",
                     "source": md.data_source or "registry",
                     "country_hint": country_hint or "",
-                    "identifier": "",
+                    "identifier": _identifier,
                 })
         except Exception:
             pass
@@ -416,6 +429,16 @@ def _infer_source_note(metric: str, value: str, src_map: dict[str, dict[str, str
                 note += f" — {entry['url']}"
             return note
     txt = (value or "").lower()
+    if any(
+        tok in txt
+        for tok in (
+            "screen-only: non-valuation-grade",
+            "not available",
+            "excluded from valuation",
+            "valuation excluded",
+        )
+    ):
+        return f"{metric}: not available — excluded from valuation"
     if "[sector avg]" in txt or "[sector benchmark]" in txt:
         return f"{metric}: sector benchmarks (inferred)"
     if "[estimated]" in txt:
@@ -424,7 +447,7 @@ def _infer_source_note(metric: str, value: str, src_map: dict[str, dict[str, str
         return f"{metric}: no verified primary source available"
     if value in {"N/A", "—", ""}:
         return f"{metric}: not available"
-    return f"{metric}: analysis output (source not logged)"
+    return f"{metric}: not available"
 
 
 class _Footnotes:
@@ -660,7 +683,7 @@ def _normalize_valuation_status(raw_status: str, confidence: str) -> str:
 def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _company_type = str(pipeline_status.get("company_type", "") or "").strip().lower()
     _is_private = _company_type == "private" or bool(pipeline_status.get("private_revenue_status"))
-    market_data_state = "N/A (private providers)" if _is_private else "OK"
+    market_data_state = "N/A (private)" if _is_private else "OK"
     research_state = _normalize_research_status(str(pipeline_status.get("research_enrichment", "OK")))
     peers_state = str(pipeline_status.get("peers", "N/A")).upper()
     if peers_state == "DEGRADED_API_CAPACITY":
@@ -675,7 +698,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     )
     if _is_private:
         _p_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
-        if _p_val_mode in {"VALUATION_GRADE", "SCREEN_ONLY", "FAILED"}:
+        if _p_val_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL_REVENUE", "SCREEN_ONLY", "FAILED"}:
             valuation_state = _p_val_mode
     rec_state = str(pipeline_status.get("recommendation", "N/A"))
     _qual_backed_avail = pipeline_status.get("source_backed_market_context_available")
@@ -761,14 +784,25 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _report_mode = str(pipeline_status.get("report_mode", "") or "").strip().upper()
     if _report_mode:
         block += f"\n  Report mode: {_report_mode}"
+    _private_val_mode = ""
+    _private_rev_quality = ""
     _private_rev_status = str(pipeline_status.get("private_revenue_status", "") or "").strip()
     if _private_rev_status:
         _private_identity_status = str(pipeline_status.get("private_identity_status", "") or "").strip().upper() or (
-            "RESOLVED" if bool(pipeline_status.get("private_identity_resolved")) else "UNRESOLVED"
+            "RESOLVED_STRONG" if bool(pipeline_status.get("private_identity_strong_resolved")) else (
+                "RESOLVED_WEAK" if bool(pipeline_status.get("private_identity_resolved")) else "UNRESOLVED"
+            )
         )
         _private_identity_source_state = str(
             pipeline_status.get("private_identity_source_state", "") or ""
         ).strip().lower()
+        if not _private_identity_source_state:
+            if _private_identity_status == "RESOLVED_STRONG":
+                _private_identity_source_state = "source-backed"
+            elif _private_identity_status == "RESOLVED_WEAK":
+                _private_identity_source_state = "weak source-backed"
+            else:
+                _private_identity_source_state = "unavailable"
         _private_rev_quality = str(pipeline_status.get("private_revenue_quality", "") or "").strip().upper()
         _private_fin_q = str(pipeline_status.get("private_financials_quality", "") or "").strip().upper()
         _private_peers = str(pipeline_status.get("private_peers_state", "") or "").strip().upper()
@@ -780,6 +814,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _private_skipped = pipeline_status.get("private_skipped_providers") or []
         _private_tri = bool(pipeline_status.get("private_triangulation_used"))
         _private_id_ok = bool(pipeline_status.get("private_identity_resolved"))
+        _private_id_strong = bool(pipeline_status.get("private_identity_strong_resolved"))
         _private_screen_reasons = pipeline_status.get("private_screen_only_reasons") or []
         _private_screen_txt = ""
         if isinstance(_private_screen_reasons, list) and _private_screen_reasons:
@@ -787,7 +822,11 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         block += (
             f"\n  Private revenue status: {_private_rev_status}"
             + (" | triangulation used" if _private_tri else "")
-            + (" | identity resolved" if _private_id_ok else " | identity unresolved")
+            + (
+                " | identity strongly resolved"
+                if _private_id_strong
+                else (" | identity weakly resolved" if _private_id_ok else " | identity unresolved")
+            )
         )
         block += (
             f"\n  Identity: {_private_identity_status}"
@@ -799,6 +838,8 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             f"\n  Private state: {_private_state or 'SCREEN_ONLY'}"
             f"\n  Private valuation mode: {_private_val_mode or 'SCREEN_ONLY'}"
         )
+        if _private_val_mode == "INDICATIVE_MANUAL_REVENUE":
+            block += "\n  Revenue confidence: manual_user_provided"
         if isinstance(_private_used, list) and _private_used:
             block += "\n  Used providers: " + ", ".join(str(x) for x in _private_used if str(x).strip())
         if isinstance(_private_skipped, list) and _private_skipped:
@@ -812,6 +853,8 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
                 _unlock.append("provide verified revenue source (for example Pappers/Companies House accounts) or pass --manual-revenue")
             if "legal identity unresolved" in _private_screen_txt.lower():
                 _unlock.append("provide legal identifier (for example SIREN/company number) or pass --manual-identity-confirmed with manual revenue")
+            if "weakly resolved" in _private_screen_txt.lower():
+                _unlock.append("provide a strong registry identifier (for example SIREN/SIRET or company number) to move from weak to strong identity resolution")
             if not _unlock:
                 _unlock.append("improve private identity and revenue source quality")
             block += "\n  What would unlock valuation:"
@@ -884,11 +927,21 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
                 _market_context_state = "source-backed"
         except Exception:
             pass
-    _valuation_inputs_state = (
-        "market data + verified quantitative context"
-        if str(_used_in_valuation).strip().lower() == "yes"
-        else ("private provider financials only" if _is_private else "market data only")
-    )
+    if _is_private:
+        if _private_val_mode == "INDICATIVE_MANUAL_REVENUE":
+            _valuation_inputs_state = "private market data + manual revenue input (unverified)"
+        elif _private_val_mode == "VALUATION_GRADE" and _private_rev_quality in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}:
+            _valuation_inputs_state = "private market data + verified quantitative context"
+        elif _private_val_mode == "VALUATION_GRADE":
+            _valuation_inputs_state = "private provider financials only"
+        else:
+            _valuation_inputs_state = "market data only"
+    else:
+        _valuation_inputs_state = (
+            "market data + verified quantitative context"
+            if str(_used_in_valuation).strip().lower() == "yes"
+            else "market data only"
+        )
     block += (
         f"\n  Filings: {_filings_state}"
         f"\n  Market context: {_market_context_state}"
@@ -1052,12 +1105,15 @@ def print_result(result, debug: bool = False):
     _is_inconclusive = (v.recommendation or "").upper().startswith("INCONCLUSIVE")
     rec_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow", "INCONCLUSIVE": "magenta"}.get((v.recommendation or "").split(" ")[0], "white")
     _pipeline_status = (getattr(result, "data_quality", {}) or {}).get("pipeline_status", {})
+    _is_private_run = str(getattr(result, "company_type", "")).lower() == "private"
+    _private_val_mode_header = str((_pipeline_status or {}).get("private_valuation_mode", "") or "").strip().upper()
+    _private_screen_only_mode = bool(_is_private_run and _private_val_mode_header in {"SCREEN_ONLY", "FAILED"})
     _extreme_signal_review = bool(_pipeline_status.get("extreme_signal_review"))
     _cap_reason = str(_pipeline_status.get("recommendation_cap_reason", "") or "").strip()
     _extreme_capped = bool((not _is_inconclusive) and _extreme_signal_review and _cap_reason)
     _run_ccy = _run_currency(_pipeline_status, src_map)
     console.print()
-    _target_display = "N/A" if _is_inconclusive else (v.target_price or v.implied_value)
+    _target_display = "N/A" if (_is_inconclusive or _private_screen_only_mode) else (v.target_price or v.implied_value)
     _confidence = str(_pipeline_status.get("confidence", "")).lower()
     if (not _is_inconclusive) and _confidence == "low" and isinstance(_target_display, str):
         _pt = _extract_first_number(_target_display)
@@ -1081,7 +1137,9 @@ def print_result(result, debug: bool = False):
         _fv_label = f"{_fv_label} (wide; low confidence)"
     _pt_label = "Indicative Value" if ((not _is_inconclusive) and _confidence == "low") else "Point Estimate"
     _is_low_conf = ((not _is_inconclusive) and _confidence == "low")
-    if _is_low_conf and _fv_range and v.target_price:
+    if _private_screen_only_mode:
+        _target_line = "Target: N/A | Private screen-only profile (identity/revenue gates not satisfied)"
+    elif _is_low_conf and _fv_range and v.target_price:
         _range_label = "Midpoint reference"
         try:
             _rng = _extract_two_numbers(str(_fv_range))
@@ -1105,7 +1163,7 @@ def print_result(result, debug: bool = False):
             if _fv_range and v.target_price and not _is_inconclusive
             else f"Target: {_value_with_source('Target', _target_display)}{_ev_display}"
         )
-    if (not _is_inconclusive) and _pipeline_status.get("confidence"):
+    if (not _is_inconclusive) and (not _private_screen_only_mode) and _pipeline_status.get("confidence"):
         _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
     if _extreme_capped:
         if _is_low_conf and _fv_range and v.target_price:
@@ -1124,7 +1182,7 @@ def print_result(result, debug: bool = False):
         if (not _is_inconclusive) and _pipeline_status.get("confidence"):
             _target_line += f" | Valuation reliability: {_pipeline_status.get('confidence')}"
         _target_line += " | diagnostic; final recommendation capped pending corroboration"
-    _headline_tail = "" if _is_low_conf else f" | Upside: {_value_with_source('Upside', v.upside_downside)}"
+    _headline_tail = "" if (_is_low_conf or _private_screen_only_mode) else f" | Upside: {_value_with_source('Upside', v.upside_downside)}"
     if _extreme_capped:
         _headline_tail = ""
     _industry = (src_map.get("Industry", {}) or {}).get("value") if src_map else None
@@ -1203,7 +1261,6 @@ def print_result(result, debug: bool = False):
     _peer_q = _pipeline_status.get("peer_quality_score") if _pipeline_status else None
     _fin_q = _pipeline_status.get("financial_data_quality_score") if _pipeline_status else None
     _norm_q = _pipeline_status.get("normalization_status") if _pipeline_status else None
-    _is_private_run = str(getattr(result, "company_type", "")).lower() == "private"
     if (_core_q is not None) or (_r_q is not None):
         if _is_private_run and _pipeline_status:
             console.print(
@@ -1280,7 +1337,7 @@ def print_result(result, debug: bool = False):
     _nd_bridge_val = src_map.get("Net Debt (valuation currency)", {}).get("value")
     _sh_bridge = src_map.get("Shares Outstanding", {}).get("value")
     _tp_bridge = src_map.get("Implied Target Price", {}).get("value")
-    if (not _is_inconclusive) and _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge:
+    if (not _is_inconclusive) and (not _private_screen_only_mode) and _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge:
         _tag_ev = footnotes.tag(_infer_source_note("Enterprise Value (blended)", _ev_bridge, src_map))
         _tag_eq = footnotes.tag(_infer_source_note("Equity Value", _eq_bridge, src_map))
         _tag_sh = footnotes.tag(_infer_source_note("Shares Outstanding", _sh_bridge, src_map))
@@ -1316,7 +1373,7 @@ def print_result(result, debug: bool = False):
     _mcap_val = src_map.get("Market Cap", {}).get("value")
     _valuation_failed = str(_pipeline_status.get("valuation", "")).upper() == "FAILED"
     _sanity_suppressed = bool(_pipeline_status.get("sanity_breaker_triggered"))
-    if _mcap_val and _eq_bridge:
+    if (not _private_screen_only_mode) and _mcap_val and _eq_bridge:
         _interp = "not available — insufficient upside/downside signal"
         _updn_txt = str(v.upside_downside or "N/A")
         try:
@@ -1358,8 +1415,6 @@ def print_result(result, debug: bool = False):
     kpi_table = Table(title="Key Financials", show_header=True, header_style="bold magenta")
     kpi_table.add_column("Metric")
     kpi_table.add_column("Value")
-    _private_val_mode = str((_pipeline_status or {}).get("private_valuation_mode", "") or "").strip().upper()
-    _private_screen_only_mode = (_private_val_mode == "SCREEN_ONLY")
     if str(getattr(result, "company_type", "")).lower() == "private" and _private_screen_only_mode:
         _private_rev_quality = str((_pipeline_status or {}).get("private_revenue_quality", "") or "").strip().upper()
         _rev_screen = _source_value("Revenue TTM") or "N/A"

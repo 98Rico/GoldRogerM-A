@@ -1,4 +1,5 @@
-from goldroger.data.fetcher import resolve_ticker_with_context
+from goldroger.data.fetcher import fetch_market_data, resolve_ticker_with_context
+from goldroger.utils.cache import market_data_cache
 
 
 class _FakeResp:
@@ -126,3 +127,17 @@ def test_resolver_preserves_explicit_adr_symbol_when_user_inputs_it(monkeypatch)
     assert ctx is not None
     assert ctx["selected_symbol"] == "NHYDY"
     assert ctx["primary_listing_symbol"] == "NHY.OL"
+
+
+def test_fetch_market_data_does_not_print_raw_http_errors(monkeypatch, capsys):
+    class _BoomTicker:
+        @property
+        def info(self):
+            raise RuntimeError("HTTP Error 404: Quote not found for symbol: DAY")
+
+    market_data_cache.clear()
+    monkeypatch.setattr("goldroger.data.fetcher.yf.Ticker", lambda _symbol: _BoomTicker())
+    result = fetch_market_data("DAY")
+    captured = capsys.readouterr()
+    assert result is None
+    assert "HTTP Error 404" not in captured.out

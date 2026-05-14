@@ -92,6 +92,7 @@ def _run_private_case(
     manual_revenue_source_note: str = "",
     manual_identity_confirmed: bool = False,
     company_identifier: str = "",
+    peer_multiples_override: PeerMultiples | None = None,
 ):
     import goldroger.data.private_triangulation as tri_mod
     import goldroger.data.source_selector as selector_mod
@@ -103,7 +104,7 @@ def _run_private_case(
     monkeypatch.setattr(eq, "_client", lambda llm=None: object())
     monkeypatch.setattr(eq, "_parse_with_retry", _stub_parse_with_retry)
     monkeypatch.setattr(eq, "find_peers_deterministic_quick", lambda **kwargs: ["ADBE", "ORCL", "SAP", "INTU"])
-    monkeypatch.setattr(eq, "build_peer_multiples", lambda *args, **kwargs: _peer_stub())
+    monkeypatch.setattr(eq, "build_peer_multiples", lambda *args, **kwargs: (peer_multiples_override or _peer_stub()))
     monkeypatch.setattr(eq.DEFAULT_REGISTRY, "fetch_by_name", lambda _company, country_hint="": copy.deepcopy(registry_md))
     monkeypatch.setattr(
         selector_mod,
@@ -303,7 +304,7 @@ def test_private_unresolved_identity_is_not_high_conviction(monkeypatch):
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     rec = str(analysis.valuation.recommendation or "")
     assert bool(ps.get("private_identity_resolved")) is False
-    assert str(ps.get("private_identity_status")) in {"WEAK", "UNRESOLVED"}
+    assert str(ps.get("private_identity_status")) == "UNRESOLVED"
     assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
     assert analysis.football_field is None
     assert analysis.valuation.target_price in {None, "N/A"}
@@ -344,8 +345,9 @@ def test_private_manual_revenue_enables_valuation_with_resolved_identity(monkeyp
     )
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_revenue_quality")) == "MANUAL"
-    assert str(ps.get("private_valuation_mode")) == "VALUATION_GRADE"
-    assert str(ps.get("private_state")) == "VALUATION_READY"
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
+    assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
+    assert str(ps.get("private_identity_status")) == "RESOLVED_STRONG"
     assert bool(ps.get("private_manual_revenue_used")) is True
     assert not str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
@@ -369,12 +371,14 @@ def test_private_manual_revenue_can_unlock_with_manual_identity_confirmation(mon
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_revenue_quality")) == "MANUAL"
     assert bool(ps.get("private_manual_revenue_used")) is True
-    assert str(ps.get("private_valuation_mode")) == "VALUATION_GRADE"
-    assert str(ps.get("private_state")) == "VALUATION_READY"
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
+    assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
+    assert str(ps.get("private_identity_status")) == "UNRESOLVED"
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
+    assert "manual_user_input" in (analysis.sources_md or "").lower()
 
 
-def test_private_manual_revenue_without_identity_confirmation_stays_screen_only(monkeypatch):
+def test_private_manual_revenue_without_identity_confirmation_is_indicative_with_identity_warning(monkeypatch):
     weak_md = _md(company="Personio", source="crunchbase", revenue_m=None, confidence="inferred", sector="Technology")
     analysis = _run_private_case(
         monkeypatch,
@@ -389,8 +393,114 @@ def test_private_manual_revenue_without_identity_confirmation_stays_screen_only(
     )
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_revenue_quality")) == "MANUAL"
+    assert str(ps.get("private_identity_status")) == "UNRESOLVED"
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
+    assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
+    assert str(ps.get("confidence")).lower() in {"low", "medium"}
+
+
+def test_private_manual_revenue_with_weak_identity_is_indicative_only(monkeypatch):
+    weak_md = _md(company="Doctolib", source="infogreffe", revenue_m=None, confidence="inferred", sector="Healthcare")
+    weak_md.additional_metadata = {"country": "France"}
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Doctolib",
+        registry_md=weak_md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+        manual_revenue=280.0,
+        manual_revenue_currency="EUR",
+        manual_revenue_year=2025,
+        manual_revenue_source_note="prototype user estimate",
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("private_identity_status")) == "RESOLVED_WEAK"
+    assert str(ps.get("private_revenue_quality")) == "MANUAL"
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
+    assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
+    assert str(ps.get("confidence")).lower() in {"low", "medium"}
+    assert "LOW CONVICTION" in str(analysis.valuation.recommendation or "").upper()
+
+
+def test_private_screen_only_still_surfaces_qualitative_peers(monkeypatch):
+    md = _md(company="Doctolib", source="infogreffe", revenue_m=None, confidence="inferred", sector="Healthcare")
+    qualitative = PeerMultiples(
+        peers=[
+            PeerData(name="Teladoc", ticker="TDOC", ev_ebitda=None, market_cap=4_500.0, bucket="healthcare_medtech", role="qualitative peer only", weight=0.0),
+            PeerData(name="Doximity", ticker="DOCS", ev_ebitda=None, market_cap=9_000.0, bucket="software_services_platform", role="qualitative peer only", weight=0.0),
+            PeerData(name="Veeva", ticker="VEEV", ev_ebitda=None, market_cap=28_000.0, bucket="software_services_platform", role="qualitative peer only", weight=0.0),
+        ],
+        n_peers=3,
+        n_valuation_peers=0,
+        n_qualitative_peers=3,
+        effective_peer_count=0.0,
+        pure_peer_weight_share=0.0,
+        adjacent_peer_weight_share=0.0,
+        peer_set_type="adjacent_reference_set",
+        source="yfinance_peers_low_confidence",
+    )
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Doctolib",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+        peer_multiples_override=qualitative,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
-    assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
+    assert analysis.peer_comps is not None
+    assert len(analysis.peer_comps.peers) >= 1
+    assert all((p.role or "").lower() == "qualitative peer only" for p in analysis.peer_comps.peers)
+
+
+def test_private_identity_status_semantics_strong_weak_unresolved(monkeypatch):
+    strong = _md(company="Revolut Ltd", source="companies_house", revenue_m=None, confidence="inferred", sector="Financials")
+    strong.additional_metadata = {"company_number": "08804411"}
+    strong_case = _run_private_case(
+        monkeypatch,
+        company="Revolut Ltd",
+        registry_md=strong,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="GB",
+        company_identifier="08804411",
+    )
+    strong_ps = (strong_case.data_quality or {}).get("pipeline_status", {})
+    assert str(strong_ps.get("private_identity_status")) == "RESOLVED_STRONG"
+    assert str(strong_ps.get("private_identity_source_state")) == "source-backed"
+    assert str(strong_ps.get("private_state")) == "IDENTITY_RESOLVED_STRONG_NO_REVENUE"
+
+    weak = _md(company="Doctolib", source="infogreffe", revenue_m=None, confidence="inferred", sector="Healthcare")
+    weak.additional_metadata = {"country": "France"}
+    weak_case = _run_private_case(
+        monkeypatch,
+        company="Doctolib",
+        registry_md=weak,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+    )
+    weak_ps = (weak_case.data_quality or {}).get("pipeline_status", {})
+    assert str(weak_ps.get("private_identity_status")) == "RESOLVED_WEAK"
+    assert str(weak_ps.get("private_identity_source_state")) == "weak source-backed"
+    assert str(weak_ps.get("private_state")) == "IDENTITY_RESOLVED_WEAK_NO_REVENUE"
+
+    unresolved = _md(company="Personio", source="crunchbase", revenue_m=None, confidence="inferred", sector="Technology")
+    unresolved.additional_metadata = {}
+    unresolved_case = _run_private_case(
+        monkeypatch,
+        company="Personio",
+        registry_md=unresolved,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="DE",
+    )
+    unresolved_ps = (unresolved_case.data_quality or {}).get("pipeline_status", {})
+    assert str(unresolved_ps.get("private_identity_status")) == "UNRESOLVED"
+    assert str(unresolved_ps.get("private_state")) == "IDENTITY_UNRESOLVED"
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import logging
 from dataclasses import dataclass, field
 from math import log10
 from typing import Optional
@@ -30,6 +31,12 @@ import yfinance as yf
 from goldroger.data.fetcher import fetch_market_data, resolve_ticker, MarketData
 from goldroger.data.sector_profiles import detect_sector_profile
 from goldroger.utils.cache import peer_universe_cache
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+try:
+    yf.utils.get_yf_logger().setLevel(logging.CRITICAL)
+except Exception:
+    pass
 
 MIN_VALID_PEERS = 3
 _HTTP = httpx.Client(
@@ -430,6 +437,29 @@ def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
         return "healthcare_pharma"
     if any(k in s for k in ("medtech", "medical device", "healthcare equipment")):
         return "healthcare_medtech"
+    if any(k in s for k in ("neobank", "digital bank", "challenger bank", "nubank", "revolut", "monzo")):
+        return "fintech_digital_bank"
+    if any(
+        k in s
+        for k in (
+            "payments",
+            "payment processing",
+            "merchant acquiring",
+            "cross-border payment",
+            "paypal",
+            "adyen",
+            "wise",
+        )
+    ):
+        return "fintech_payments"
+    if any(k in s for k in ("brokerage", "trading platform", "online broker", "robinhood")):
+        return "fintech_brokerage"
+    if any(k in s for k in ("crypto", "cryptocurrency", "digital asset exchange", "coinbase")):
+        return "fintech_crypto_platform"
+    if any(k in s for k in ("consumer lending", "digital lending", "loan platform", "sofi")):
+        return "fintech_consumer_lending"
+    if any(k in s for k in ("fintech infrastructure", "banking-as-a-service", "issuer processing", "payments infrastructure")):
+        return "fintech_infrastructure"
     if any(k in s for k in ("bank", "banking", "financial services", "consumer finance")):
         return "financials_banks"
     if "insurance" in s:
@@ -461,10 +491,26 @@ def _normalize_bucket_for_profile(profile: str, bucket: str) -> str:
         return "software_services_platform"
     if profile == "materials_chemicals_mining" and b == "materials_general":
         return "metals_mining"
+    if profile == "fintech_digital_bank_payments" and b == "other_adjacent_tech":
+        return "fintech_payments"
     return b
 
 
 def _target_profile(target_sector: str, target_industry: str) -> str:
+    _txt = f"{target_sector or ''} {target_industry or ''}".lower()
+    if any(
+        tok in _txt
+        for tok in (
+            "fintech",
+            "digital bank",
+            "neobank",
+            "payments",
+            "payment",
+            "cross-border",
+            "consumer finance",
+        )
+    ):
+        return "fintech_digital_bank_payments"
     _profile_key = detect_sector_profile(target_sector, target_industry)
     if _profile_key == "technology_semiconductors":
         return "semiconductors"
@@ -538,6 +584,17 @@ def _bucket_weight_for_profile(profile: str, bucket: str) -> float:
             "retail_adjacent": 0.60,
             "tobacco_nicotine": 0.55,
         }.get(bucket, 0.35)
+    if profile == "fintech_digital_bank_payments":
+        return {
+            "fintech_digital_bank": 1.00,
+            "fintech_payments": 0.92,
+            "fintech_infrastructure": 0.82,
+            "fintech_consumer_lending": 0.75,
+            "fintech_brokerage": 0.62,
+            "financials_banks": 0.65,
+            "software_services_platform": 0.58,
+            "fintech_crypto_platform": 0.35,
+        }.get(bucket, 0.40)
     if profile == "materials_chemicals_mining":
         return {
             "aluminum_metals": 1.00,
@@ -619,6 +676,17 @@ def _bucket_similarity_factor(profile: str, bucket: str) -> float:
             "retail_adjacent": 0.62,
             "tobacco_nicotine": 0.58,
         }.get(bucket, 0.30)
+    if profile == "fintech_digital_bank_payments":
+        return {
+            "fintech_digital_bank": 1.00,
+            "fintech_payments": 0.90,
+            "fintech_infrastructure": 0.80,
+            "fintech_consumer_lending": 0.72,
+            "fintech_brokerage": 0.60,
+            "financials_banks": 0.60,
+            "software_services_platform": 0.55,
+            "fintech_crypto_platform": 0.30,
+        }.get(bucket, 0.38)
     if profile == "materials_chemicals_mining":
         return {
             "aluminum_metals": 1.00,
@@ -699,6 +767,17 @@ def _bucket_budgets(profile: str) -> dict[str, float]:
             "household_products_adjacent": 0.20,
             "retail_adjacent": 0.08,
             "tobacco_nicotine": 0.02,
+        }
+    if profile == "fintech_digital_bank_payments":
+        return {
+            "fintech_digital_bank": 0.35,
+            "fintech_payments": 0.30,
+            "fintech_infrastructure": 0.12,
+            "fintech_consumer_lending": 0.08,
+            "fintech_brokerage": 0.06,
+            "financials_banks": 0.05,
+            "software_services_platform": 0.03,
+            "fintech_crypto_platform": 0.01,
         }
     if profile == "materials_chemicals_mining":
         return {
@@ -1167,11 +1246,17 @@ def find_peers_deterministic_quick(
         candidates.extend(_search_yahoo_tickers("nicotine products companies equities", limit=12))
         candidates.extend(_search_yahoo_tickers("consumer staples tobacco peers", limit=12))
         candidates.extend(_search_yahoo_tickers("defensive consumer staples large cap equities", limit=12))
+    elif _profile == "fintech_digital_bank_payments":
+        candidates.extend(_search_yahoo_tickers("global fintech digital banking equities", limit=16))
+        candidates.extend(_search_yahoo_tickers("digital payments platforms equities", limit=14))
+        candidates.extend(_search_yahoo_tickers("neobank listed peers equities", limit=12))
+        candidates.extend(_search_yahoo_tickers("cross-border payments equities", limit=10))
 
     profile_reserve: dict[str, list[str]] = {
         "premium_device_platform": ["MSFT", "ORCL", "CSCO", "NVDA", "AVGO", "MU"],
         "consumer_staples_tobacco": ["PM", "MO", "BTI", "IMBBY", "JAPAY"],
         "materials_chemicals_mining": ["AA", "CENX", "RIO", "BHP", "FCX", "NUE"],
+        "fintech_digital_bank_payments": ["WIZEY", "PYPL", "ADYEY", "NU", "SOFI", "HOOD", "COIN"],
     }
 
     # Deduplicate, remove self ticker, and cap.
@@ -1240,6 +1325,14 @@ def _peer_role(profile: str, bucket: str, ev_ebitda: float | None) -> str:
             return "core valuation peer"
         if bucket in {"retail_adjacent", "tobacco_nicotine"}:
             return "adjacent valuation peer"
+        return "qualitative peer only"
+    if profile == "fintech_digital_bank_payments":
+        if bucket in {"fintech_digital_bank"}:
+            return "core valuation peer"
+        if bucket in {"fintech_payments", "fintech_infrastructure", "fintech_consumer_lending", "financials_banks"}:
+            return "adjacent valuation peer"
+        if bucket in {"fintech_brokerage", "fintech_crypto_platform", "software_services_platform"}:
+            return "qualitative peer only"
         return "qualitative peer only"
     if profile == "materials_chemicals_mining":
         if bucket in {"aluminum_metals", "metals_mining"}:
@@ -1314,6 +1407,16 @@ def _relaxation_stage(profile: str, bucket: str) -> int:
         if bucket == "tobacco_nicotine":
             return 3
         return 4
+    if profile == "fintech_digital_bank_payments":
+        if bucket in {"fintech_digital_bank", "fintech_payments"}:
+            return 1
+        if bucket in {"fintech_infrastructure", "fintech_consumer_lending", "financials_banks"}:
+            return 2
+        if bucket in {"fintech_brokerage", "software_services_platform"}:
+            return 3
+        if bucket in {"fintech_crypto_platform"}:
+            return 4
+        return 5
     if profile == "materials_chemicals_mining":
         if bucket == "aluminum_metals":
             return 1
@@ -1626,27 +1729,38 @@ def build_peer_multiples(
 
     # Controlled relaxation to avoid over-filtering:
     # 1) same archetype, 2) software/platform, 3) consumer hardware, 4) adjacent tech, 5) semis.
-    _valuation_peers = [p for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
+    def _is_valuation_peer(_p: PeerData) -> bool:
+        return bool(
+            _p.ev_ebitda is not None
+            and (_p.weight or 0.0) > 0.0
+            and str(_p.role or "").strip().lower() != "qualitative peer only"
+        )
+
+    _valuation_peers = [p for p in peers if _is_valuation_peer(p)]
     if len(_valuation_peers) < max(1, min_valuation_peers):
         for _, cand, why in sorted(relaxation_pool, key=lambda x: (x[0], -(x[1].similarity or 0.0))):
             if any(p.ticker == cand.ticker for p in peers):
                 continue
             peers.append(cand)
             excluded.append(f"{cand.ticker}: re-included by {why}")
-            _valuation_peers = [p for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0]
+            _valuation_peers = [p for p in peers if _is_valuation_peer(p)]
             if len(_valuation_peers) >= max(1, min_valuation_peers):
                 break
 
     peers = _normalize_bucket_weights(peers, profile)
-    # Peers without EV/EBITDA are qualitative only (zero valuation weight).
+    # Qualitative peers and peers without EV/EBITDA must be zero-weight for valuation math.
     for p in peers:
-        if p.ev_ebitda is None or (p.weight or 0.0) <= 0.0:
+        if (
+            str(p.role or "").strip().lower() == "qualitative peer only"
+            or p.ev_ebitda is None
+            or (p.weight or 0.0) <= 0.0
+        ):
             p.weight = 0.0
             p.role = "qualitative peer only"
-    _valuation_weight_sum = sum((p.weight or 0.0) for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0)
+    _valuation_weight_sum = sum((p.weight or 0.0) for p in peers if _is_valuation_peer(p))
     if _valuation_weight_sum > 0:
         for p in peers:
-            if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0:
+            if _is_valuation_peer(p):
                 p.weight = float(p.weight or 0.0) / _valuation_weight_sum
     peers = _apply_peer_weight_caps(peers, profile)
     peers = sorted(peers, key=lambda p: (p.weight or 0.0), reverse=True)
@@ -1656,13 +1770,17 @@ def build_peer_multiples(
         excluded.extend([f"{p.ticker}: trimmed to top-{max_return_peers} peer target" for p in dropped])
         peers = _normalize_bucket_weights(peers, profile)
         for p in peers:
-            if p.ev_ebitda is None or (p.weight or 0.0) <= 0.0:
+            if (
+                str(p.role or "").strip().lower() == "qualitative peer only"
+                or p.ev_ebitda is None
+                or (p.weight or 0.0) <= 0.0
+            ):
                 p.weight = 0.0
                 p.role = "qualitative peer only"
-        _valuation_weight_sum = sum((p.weight or 0.0) for p in peers if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0)
+        _valuation_weight_sum = sum((p.weight or 0.0) for p in peers if _is_valuation_peer(p))
         if _valuation_weight_sum > 0:
             for p in peers:
-                if p.ev_ebitda is not None and (p.weight or 0.0) > 0.0:
+                if _is_valuation_peer(p):
                     p.weight = float(p.weight or 0.0) / _valuation_weight_sum
         peers = _apply_peer_weight_caps(peers, profile)
         peers = sorted(peers, key=lambda p: (p.weight or 0.0), reverse=True)

@@ -304,22 +304,24 @@ This mechanism already exists in the current codebase and is used by `--type pri
   - no revenue or low-confidence inferred/triangulated revenue -> `SCREEN_ONLY` + `INCONCLUSIVE`
   - weak identity resolution -> `SCREEN_ONLY` + `INCONCLUSIVE`
   - only verified/high-confidence revenue with resolved identity can be `VALUATION_GRADE`
-  - weak identity resolution -> low-conviction warning and cap behavior
+  - manual revenue can unlock only `INDICATIVE_MANUAL_REVENUE` with explicit confidence caps
 
 ### 5b) Private status semantics
 
 Private runs use private-specific trust labels in `Pipeline status`:
-- `Identity`: `RESOLVED` / `WEAK` / `UNRESOLVED`
+- `Identity`: `RESOLVED_STRONG` / `RESOLVED_WEAK` / `UNRESOLVED`
 - `Revenue`: `VERIFIED` / `HIGH_CONFIDENCE_ESTIMATE` / `LOW_CONFIDENCE_ESTIMATE` / `UNAVAILABLE`
 - `Financials`: `VERIFIED` / `ESTIMATED` / `UNAVAILABLE`
 - `Private peers`: `OK` / `WEAK` / `FAILED`
-- `Private valuation mode`: `VALUATION_GRADE` / `SCREEN_ONLY` / `FAILED`
+- `Private valuation mode`: `VALUATION_GRADE` / `INDICATIVE_MANUAL_REVENUE` / `SCREEN_ONLY` / `FAILED`
 
 Private state-machine states:
 - `IDENTITY_UNRESOLVED`
-- `IDENTITY_RESOLVED_NO_REVENUE`
+- `IDENTITY_RESOLVED_STRONG_NO_REVENUE`
+- `IDENTITY_RESOLVED_WEAK_NO_REVENUE`
 - `SCREEN_ONLY`
-- `VALUATION_READY`
+- `VALUATION_READY_VERIFIED_REVENUE`
+- `VALUATION_READY_MANUAL_REVENUE`
 - `VALUATION_FAILED`
 
 When `SCREEN_ONLY` is active:
@@ -327,7 +329,15 @@ When `SCREEN_ONLY` is active:
 - target/upside stay `N/A`,
 - football-field scenarios are suppressed,
 - LBO feasibility is treated as diagnostic and not rendered as investable output,
-- key financial lines are shown as non-valuation-grade when necessary.
+- qualitative peers can still be shown for context (`qualitative peer only`, 0% weight),
+- key financial lines are shown as non-valuation-grade when necessary,
+- Value Sources mark unavailable lines as `not available — excluded from valuation` (not model output).
+
+Identity-gate policy:
+- `RESOLVED_STRONG` + verified/high-confidence/manual revenue can unlock valuation.
+- `RESOLVED_WEAK` + verified/manual revenue can unlock only low-conviction valuation.
+- `UNRESOLVED` + manual revenue can unlock `INDICATIVE_MANUAL_REVENUE` only (not valuation-grade), with explicit legal-identity warning and capped confidence.
+- `UNRESOLVED` without manual revenue remains `SCREEN_ONLY`.
 
 ### 6) Valuation path and labels
 - Valuation math remains deterministic (same engine, private weights are sector/type-aware).
@@ -415,6 +425,22 @@ uv run python -m goldroger.cli \
   --manual-revenue-currency EUR \
   --manual-identity-confirmed
 ```
+
+Manual-input behavior:
+- Revenue is tagged `manual user-provided, unverified`.
+- Pipeline status shows `Private valuation mode: INDICATIVE_MANUAL_REVENUE`.
+- Confidence is capped; output remains indicative and non-client-ready.
+
+### Typical outcomes (private prototype)
+
+- **Doctolib (FR) without Pappers/manual revenue**
+  - typically `RESOLVED_WEAK` + revenue unavailable -> `SCREEN_ONLY`, `INCONCLUSIVE`.
+- **Revolut (GB) with Companies House identity but no revenue extraction**
+  - typically `RESOLVED_STRONG` + revenue unavailable -> `SCREEN_ONLY`, `INCONCLUSIVE`.
+- **Personio (DE) without legal identifier/revenue**
+  - typically `UNRESOLVED` + revenue unavailable -> `SCREEN_ONLY`, `INCONCLUSIVE`.
+- **Personio (DE) with manual revenue**
+  - can unlock `INDICATIVE_MANUAL_REVENUE` with explicit identity/revenue caveats and capped confidence.
 
 ### Export artifacts
 

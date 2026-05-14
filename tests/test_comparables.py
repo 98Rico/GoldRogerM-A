@@ -8,6 +8,7 @@ from goldroger.data.comparables import (
     _sectors_compatible,
     _sector_group,
     _classify_peer_bucket,
+    _target_profile,
     MIN_VALID_PEERS,
 )
 from goldroger.data.fetcher import MarketData
@@ -221,6 +222,41 @@ def test_materials_profile_uses_aluminum_bucket_for_alcoa_like_names():
         name="Alcoa Corporation",
     )
     assert bucket == "aluminum_metals"
+
+
+def test_fintech_bucket_classification_for_revolut_style_peers():
+    assert _classify_peer_bucket("Financial Services", "Digital Banking", "Nu Holdings") == "fintech_digital_bank"
+    assert _classify_peer_bucket("Financial Services", "Payments", "PayPal") == "fintech_payments"
+    assert _classify_peer_bucket("Financial Services", "Brokerage", "Robinhood") == "fintech_brokerage"
+    assert _classify_peer_bucket("Financial Services", "Crypto", "Coinbase") == "fintech_crypto_platform"
+
+
+def test_fintech_target_profile_detection():
+    profile = _target_profile("Financials / Fintech & Digital Payments", "Digital banking, payments, and financial services")
+    assert profile == "fintech_digital_bank_payments"
+
+
+def test_fintech_role_labels_are_core_and_adjacent_not_all_core():
+    peers = [
+        _md("NU", "Financial Services", ev_ebitda=14.0, market_cap=65_000.0, industry="Digital Banking"),
+        _md("PYPL", "Financial Services", ev_ebitda=12.0, market_cap=85_000.0, industry="Payments"),
+        _md("SOFI", "Financial Services", ev_ebitda=10.0, market_cap=15_000.0, industry="Consumer Lending"),
+        _md("COIN", "Financial Services", ev_ebitda=18.0, market_cap=45_000.0, industry="Crypto"),
+    ]
+    with patch("goldroger.data.comparables.fetch_market_data", side_effect=peers):
+        result = build_peer_multiples(
+            ["NU", "PYPL", "SOFI", "COIN"],
+            target_sector="Financials / Fintech & Digital Payments",
+            target_industry="Digital banking, payments, and financial services",
+            target_market_cap=90_000.0,
+            min_valuation_peers=2,
+        )
+    by_ticker = {p.ticker: p for p in result.peers}
+    assert by_ticker["NU"].bucket == "fintech_digital_bank"
+    assert by_ticker["PYPL"].bucket == "fintech_payments"
+    assert by_ticker["PYPL"].role == "adjacent valuation peer"
+    assert by_ticker["COIN"].bucket == "fintech_crypto_platform"
+    assert by_ticker["COIN"].role in {"qualitative peer only", "adjacent valuation peer"}
 
 
 def test_low_ev_ebitda_peer_is_filtered_by_sanity_floor():

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
+import logging
 
 import httpx
 import yfinance as yf
@@ -27,6 +28,12 @@ _HTTP = httpx.Client(
     headers={"User-Agent": "Mozilla/5.0"},
     follow_redirects=True,
 )
+_LOG = logging.getLogger(__name__)
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+try:
+    yf.utils.get_yf_logger().setLevel(logging.CRITICAL)
+except Exception:
+    pass
 
 
 @dataclass
@@ -485,7 +492,7 @@ def _fetch_raw(ticker: str) -> Optional[MarketData]:
         )
         return md
     except Exception as exc:
-        print(f"[fetcher] Error fetching {ticker}: {exc}")
+        _LOG.debug("Error fetching %s: %s", ticker, exc)
         return None
 
 

@@ -895,18 +895,30 @@ def run_analysis(
                     confidence="manual",
                     additional_metadata={
                         "financial_currency": _manual_revenue_ccy,
+                        "financial_currency_normalized": _manual_revenue_ccy,
+                        "quote_currency": _manual_revenue_ccy,
+                        "quote_currency_normalized": _manual_revenue_ccy,
+                        "market_cap_currency": _manual_revenue_ccy,
                         "manual_revenue_user_provided": True,
                         "manual_revenue_year": _manual_revenue_year,
                         "manual_revenue_source_note": _manual_revenue_note,
+                        "identity_source": "manual_user_input",
                     },
                 )
             else:
+                _prior_source = str(market_data.data_source or "").strip().lower()
                 market_data.revenue_ttm = _manual_revenue_m
                 market_data.data_source = "manual_user_input"
                 market_data.confidence = "manual"
                 if not isinstance(market_data.additional_metadata, dict):
                     market_data.additional_metadata = {}
+                if _prior_source and _prior_source != "manual_user_input":
+                    market_data.additional_metadata.setdefault("identity_source", _prior_source)
                 market_data.additional_metadata["financial_currency"] = _manual_revenue_ccy
+                market_data.additional_metadata["financial_currency_normalized"] = _manual_revenue_ccy
+                market_data.additional_metadata.setdefault("quote_currency", _manual_revenue_ccy)
+                market_data.additional_metadata.setdefault("quote_currency_normalized", _manual_revenue_ccy)
+                market_data.additional_metadata.setdefault("market_cap_currency", _manual_revenue_ccy)
                 market_data.additional_metadata["manual_revenue_user_provided"] = True
                 market_data.additional_metadata["manual_revenue_year"] = _manual_revenue_year
                 market_data.additional_metadata["manual_revenue_source_note"] = _manual_revenue_note
@@ -928,6 +940,12 @@ def run_analysis(
             sources.add_once(
                 "Manual Revenue Input",
                 "yes",
+                "manual_user_input",
+                "manual",
+            )
+            sources.add_once(
+                "Private Revenue Confidence",
+                "manual_user_provided",
                 "manual_user_input",
                 "manual",
             )
@@ -1048,8 +1066,7 @@ def run_analysis(
                 "private_pipeline",
                 "unavailable",
             )
-        _private_strong_identity_sources = {
-            "manual_user_input",
+        _private_identity_source_backed_sources = {
             "pappers",
             "infogreffe",
             "companies_house",
@@ -1072,39 +1089,57 @@ def run_analysis(
             )
             _id_source = str(market_data.data_source or "").strip().lower()
             _md_meta = market_data.additional_metadata if isinstance(market_data.additional_metadata, dict) else {}
+            _id_source_hint = str(_md_meta.get("identity_source") or "").strip().lower()
+            _identity_source_for_state = _id_source
+            if _id_source in {"manual_user_input", "triangulation"} and _id_source_hint:
+                _identity_source_for_state = _id_source_hint
+            def _clean_identifier(_v: object) -> str:
+                _s = str(_v or "").strip()
+                if _s.lower() in {"", "n/a", "na", "none", "unknown", "-", "—"}:
+                    return ""
+                return _s
+
+            _company_identifier = _clean_identifier(company_identifier)
+            _company_number = _clean_identifier(_md_meta.get("company_number"))
+            _siren = _clean_identifier(_md_meta.get("siren"))
+            _siret = _clean_identifier(_md_meta.get("siret"))
+            _cik = _clean_identifier(_md_meta.get("cik"))
+            _lei = _clean_identifier(_md_meta.get("lei"))
+
             _has_strong_id = bool(
-                company_identifier
-                or str(_md_meta.get("company_number") or "").strip()
-                or str(_md_meta.get("siren") or "").strip()
-                or str(_md_meta.get("siret") or "").strip()
-                or str(_md_meta.get("registration_number") or "").strip()
-                or str(_md_meta.get("cik") or "").strip()
-                or str(_md_meta.get("lei") or "").strip()
-            )
-            _private_identity_resolved = bool(
-                _has_strong_id
+                (_company_number and _re.match(r"^[A-Z0-9]{6,12}$", _company_number))
+                or (_siren and _re.match(r"^\d{9}$", _siren))
+                or (_siret and _re.match(r"^\d{14}$", _siret))
+                or (_cik and _re.match(r"^\d{4,12}$", _cik))
+                or (_lei and _re.match(r"^[A-Z0-9]{18,20}$", _lei))
                 or (
-                    _id_source == "triangulation"
-                    and isinstance(market_data.additional_metadata, dict)
-                    and str(market_data.additional_metadata.get("identity_source") or "").strip().lower()
-                    in _private_strong_identity_sources
+                    _company_identifier
+                    and (
+                        _re.match(r"^[A-Z0-9]{6,12}$", _company_identifier)
+                        or _re.match(r"^\d{9}$", _company_identifier)
+                        or _re.match(r"^\d{14}$", _company_identifier)
+                    )
                 )
             )
-            if (
-                _private_manual_revenue_used
-                and not _private_identity_resolved
-                and manual_identity_confirmed
-            ):
+            _has_source_backed_identity = bool(
+                _identity_source_for_state in _private_identity_source_backed_sources
+            )
+            _has_weak_identity = bool(_has_source_backed_identity and str(market_data.company_name or "").strip())
+            _private_identity_resolved = bool(_has_strong_id or _has_weak_identity)
+            if _private_manual_revenue_used and not _private_identity_resolved:
+                # Private-mode policy: manual revenue can unlock an indicative
+                # valuation path even when legal identity is unresolved, but
+                # confidence and recommendation are capped and warnings remain explicit.
                 _private_manual_identity_override = True
             _private_identity_status = (
-                "RESOLVED"
-                if _private_identity_resolved
-                else ("WEAK" if str(market_data.company_name or "").strip() else "UNRESOLVED")
+                "RESOLVED_STRONG"
+                if _has_strong_id
+                else ("RESOLVED_WEAK" if _has_weak_identity else "UNRESOLVED")
             )
             _private_identity_source_state = (
                 "source-backed"
-                if _private_identity_resolved
-                else ("fallback" if _private_identity_status == "WEAK" else "unavailable")
+                if _private_identity_status == "RESOLVED_STRONG"
+                else ("weak source-backed" if _private_identity_status == "RESOLVED_WEAK" else "unavailable")
             )
             _rev_source = str(market_data.data_source or "").strip().lower()
             if _private_revenue_status == "verified":
@@ -1120,14 +1155,26 @@ def run_analysis(
                 _private_revenue_quality = "LOW_CONFIDENCE_ESTIMATE"
             else:
                 _private_revenue_quality = "UNAVAILABLE"
-            _private_valuation_grade_ready = bool(
-                (_private_identity_status == "RESOLVED" or _private_manual_identity_override)
-                and _private_revenue_quality in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE", "MANUAL"}
-            )
+            _private_valuation_grade_ready = False
+            if _private_identity_status == "RESOLVED_STRONG":
+                _private_valuation_grade_ready = _private_revenue_quality in {
+                    "VERIFIED",
+                    "HIGH_CONFIDENCE_ESTIMATE",
+                    "MANUAL",
+                }
+            elif _private_identity_status == "RESOLVED_WEAK":
+                _private_valuation_grade_ready = _private_revenue_quality in {
+                    "VERIFIED",
+                    "MANUAL",
+                }
+            elif _private_manual_identity_override:
+                _private_valuation_grade_ready = _private_revenue_quality == "MANUAL"
             _private_screen_only = not _private_valuation_grade_ready
             if _private_screen_only:
-                if _private_identity_status != "RESOLVED" and not _private_manual_identity_override:
+                if _private_identity_status == "UNRESOLVED" and not _private_manual_identity_override:
                     _private_screen_only_reasons.append("legal identity unresolved")
+                if _private_identity_status == "RESOLVED_WEAK":
+                    _private_screen_only_reasons.append("legal identity weakly resolved (no strong legal identifier)")
                 if _private_revenue_quality in {"UNAVAILABLE", "LOW_CONFIDENCE_ESTIMATE"}:
                     _private_screen_only_reasons.append("verified revenue unavailable")
             _rev_ccy = "USD"
@@ -1175,7 +1222,11 @@ def run_analysis(
             )
             sources.add_once(
                 "Private Identity Resolution",
-                "resolved" if _private_identity_resolved else "unresolved",
+                (
+                    "resolved_strong"
+                    if _private_identity_status == "RESOLVED_STRONG"
+                    else ("resolved_weak" if _private_identity_status == "RESOLVED_WEAK" else "unresolved")
+                ),
                 "private_identity_guard",
                 "inferred",
             )
@@ -1214,12 +1265,18 @@ def run_analysis(
                 )
             if _private_identity_status == "UNRESOLVED":
                 _private_state = "IDENTITY_UNRESOLVED"
-            elif _private_identity_status == "RESOLVED" and _private_revenue_quality == "UNAVAILABLE":
-                _private_state = "IDENTITY_RESOLVED_NO_REVENUE"
+            elif _private_identity_status == "RESOLVED_STRONG" and _private_revenue_quality == "UNAVAILABLE":
+                _private_state = "IDENTITY_RESOLVED_STRONG_NO_REVENUE"
+            elif _private_identity_status == "RESOLVED_WEAK" and _private_revenue_quality == "UNAVAILABLE":
+                _private_state = "IDENTITY_RESOLVED_WEAK_NO_REVENUE"
             elif _private_screen_only:
                 _private_state = "SCREEN_ONLY"
             else:
-                _private_state = "VALUATION_READY"
+                _private_state = (
+                    "VALUATION_READY_MANUAL_REVENUE"
+                    if _private_revenue_quality == "MANUAL"
+                    else "VALUATION_READY_VERIFIED_REVENUE"
+                )
         else:
             _private_identity_status = "UNRESOLVED"
             _private_revenue_quality = "UNAVAILABLE"
@@ -1718,6 +1775,10 @@ def run_analysis(
 
     def _do_market():
         _t = _step("Market Analysis")
+        if company_type == "private" and _private_screen_only:
+            console.print("  [dim]Private screen-only mode: skipping deep market-context retrieval.[/dim]")
+            _finish_step("Market Analysis", _t, _cancel_market, "market_analysis")
+            return MarketAnalysis(), "skipped_private_screen_only"
         if quick_mode:
             console.print("  [dim]Quick mode: skipping deep market analysis.[/dim]")
             _finish_step("Market Analysis", _t, _cancel_market, "market_analysis")
@@ -1896,7 +1957,7 @@ def run_analysis(
 
     def _do_tx_comps():
         _t = _step("Transaction Comps")
-        if quick_mode:
+        if quick_mode or (company_type == "private" and _private_screen_only):
             _finish_step("Transaction Comps", _t, _cancel_tx, "tx_comps")
             return (None, None)
         try:
@@ -1930,7 +1991,8 @@ def run_analysis(
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
-        _fut_tx = None if (_skip_tx_comps or quick_mode) else _pool.submit(_do_tx_comps)
+        _skip_tx_for_private_screen_only = bool(company_type == "private" and _private_screen_only)
+        _fut_tx = None if (_skip_tx_comps or quick_mode or _skip_tx_for_private_screen_only) else _pool.submit(_do_tx_comps)
         try:
             mkt, _mkt_status = _fut_mkt.result(timeout=_MARKET_ANALYSIS_TIMEOUT)
             if _mkt_status == "failed":
@@ -1938,6 +2000,8 @@ def run_analysis(
                 market_status = "FAILED"
             elif _mkt_status == "degraded_api_capacity":
                 market_status = "DEGRADED_API_CAPACITY"
+            elif _mkt_status == "skipped_private_screen_only":
+                market_status = "SKIPPED_PRIVATE_SCREEN_ONLY"
             elif _mkt_status == "skipped_quick_mode":
                 market_status = "SKIPPED_QUICK_MODE"
             else:
@@ -2000,6 +2064,10 @@ def run_analysis(
             console.rule("[bold cyan]Transaction Comps")
             if quick_mode:
                 console.print("  [dim]Skipped in quick mode (tx comps disabled).[/dim]")
+            elif _skip_tx_for_private_screen_only:
+                console.print(
+                    "  [dim]Skipped in private screen-only mode (no verified/high-confidence revenue).[/dim]"
+                )
             else:
                 console.print("  [dim]Skipped for mega-cap public company (tx weight forced to 0%).[/dim]")
             log.step_times["tx_comps"] = 0.0
@@ -2061,10 +2129,15 @@ def run_analysis(
             _private_financials_quality = "ESTIMATED"
         else:
             _private_financials_quality = "UNAVAILABLE"
-        if (country_hint or "").upper() == "DE" and _private_identity_status != "RESOLVED":
+        if (country_hint or "").upper() == "DE" and _private_identity_status != "RESOLVED_STRONG":
+            _de_identity_msg = (
+                "or provide verified revenue manually. Run remains screen-only."
+                if _private_screen_only
+                else "or provide manual revenue; manual revenue can unlock indicative valuation, but legal identity remains unresolved."
+            )
             console.print(
                 "  [yellow]German registry identity unresolved; use a legal-entity identifier "
-                "or provide verified revenue manually. Run remains screen-only.[/yellow]"
+                f"{_de_identity_msg}[/yellow]"
             )
             sources.add_once(
                 "Private Identity Limitation",
@@ -2172,6 +2245,9 @@ def run_analysis(
     if market_status == "SKIPPED_QUICK_MODE":
         _research_source = "skipped"
         _research_depth = "none"
+    elif market_status == "SKIPPED_PRIVATE_SCREEN_ONLY":
+        _research_source = "fallback"
+        _research_depth = "limited"
     else:
         _research_source = "source_backed" if _market_source_backed else "fallback"
         _research_depth = "full" if _research_source == "source_backed" else "limited"
@@ -2185,7 +2261,7 @@ def run_analysis(
             return None
         return f"{_v:.2f}s"
 
-    if (not quick_mode) and _research_source == "fallback":
+    if (not quick_mode) and _research_source == "fallback" and market_status != "SKIPPED_PRIVATE_SCREEN_ONLY":
         _ma_t = log.step_times.get("market_analysis")
         _ma_txt = _fmt_elapsed_for_status(_ma_t)
         if _ma_txt:
@@ -2568,6 +2644,67 @@ def run_analysis(
                         f"  [yellow]Peer comps: no usable valuation peers{drop_note} "
                         f"— confidence reduced[/yellow]"
                     )
+                    if company_type == "private" and (peer_multiples.n_peers or 0) > 0:
+                        peers_status = "DEGRADED"
+                        console.print(
+                            "  [dim]Private screen/reference peers retained as qualitative context only "
+                            "(0% valuation weight).[/dim]"
+                        )
+                        _peer_quote_ccy = str(
+                            normalization_audit.get("quote_currency")
+                            or getattr(market_data_valuation, "quote_currency", None)
+                            or getattr(market_data_valuation, "currency", None)
+                            or getattr(market_data, "quote_currency", None)
+                            or getattr(market_data, "currency", None)
+                            or "USD"
+                        ).upper()
+                        if not _re.match(r"^[A-Z]{3}$", _peer_quote_ccy):
+                            _peer_quote_ccy = "USD"
+                        peer_comps_table = PeerCompsTable(
+                            peers=[
+                                PeerComp(
+                                    name=p.name,
+                                    ticker=p.ticker,
+                                    bucket=p.bucket,
+                                    role=(p.role or "qualitative peer only"),
+                                    market_cap=(
+                                        _fmt_money_millions(
+                                            float(p.market_cap),
+                                            (
+                                                p.quote_currency
+                                                if getattr(p, "quote_currency", None)
+                                                else _peer_quote_ccy
+                                            ),
+                                        )
+                                        if p.market_cap
+                                        else None
+                                    ),
+                                    ev_ebitda=f"{p.ev_ebitda:.1f}x" if p.ev_ebitda else None,
+                                    ev_revenue=f"{p.ev_revenue:.1f}x" if p.ev_revenue else None,
+                                    ebitda_margin=f"{p.ebitda_margin:.1%}" if p.ebitda_margin else None,
+                                    revenue_growth=f"{p.revenue_growth:+.1%}" if p.revenue_growth else None,
+                                    similarity=f"{(p.similarity or 0):.2f}",
+                                    business_similarity=f"{(p.business_similarity or 0):.2f}",
+                                    scale_similarity=f"{(p.scale_similarity or 0):.2f}",
+                                    weight=f"{(p.weight or 0):.2f}",
+                                    include_reason=p.include_reason,
+                                )
+                                for p in peer_multiples.peers
+                            ],
+                            median_ev_ebitda=(
+                                f"{peer_multiples.ev_ebitda_median:.1f}x"
+                                if peer_multiples.ev_ebitda_median else None
+                            ),
+                            median_ev_revenue=(
+                                f"{peer_multiples.ev_revenue_median:.1f}x"
+                                if peer_multiples.ev_revenue_median else None
+                            ),
+                            median_ebitda_margin=(
+                                f"{peer_multiples.ebitda_margin_median:.1%}"
+                                if peer_multiples.ebitda_margin_median else None
+                            ),
+                            n_peers=peer_multiples.n_peers,
+                        )
                     if _is_mega_tech and peer_multiples and peer_multiples.n_valuation_peers < 5:
                         console.print(
                             f"  [yellow]Insufficient comps for mega-cap policy: "
@@ -2788,8 +2925,30 @@ def run_analysis(
     assumptions_dict["normalization_blocked"] = bool(normalization_blocked)
     assumptions_dict["normalization_status"] = str(normalization_audit.get("status") or "UNKNOWN")
     assumptions_dict["normalization_reason"] = str(normalization_audit.get("reason") or "")
-    assumptions_dict["normalization_quote_currency"] = str(normalization_audit.get("quote_currency") or "unknown")
-    assumptions_dict["normalization_financial_currency"] = str(normalization_audit.get("financial_statement_currency") or "unknown")
+    _norm_quote_ccy = str(normalization_audit.get("quote_currency") or "").strip().upper()
+    _norm_fin_ccy = str(normalization_audit.get("financial_statement_currency") or "").strip().upper()
+    if (_norm_quote_ccy in {"", "UNKNOWN", "N/A", "NA"}) and market_data and isinstance(market_data.additional_metadata, dict):
+        _norm_quote_ccy = str(
+            market_data.additional_metadata.get("quote_currency_normalized")
+            or market_data.additional_metadata.get("quote_currency")
+            or market_data.additional_metadata.get("financial_currency_normalized")
+            or market_data.additional_metadata.get("financial_currency")
+            or ""
+        ).strip().upper()
+    if (_norm_fin_ccy in {"", "UNKNOWN", "N/A", "NA"}) and market_data and isinstance(market_data.additional_metadata, dict):
+        _norm_fin_ccy = str(
+            market_data.additional_metadata.get("financial_currency_normalized")
+            or market_data.additional_metadata.get("financial_currency")
+            or market_data.additional_metadata.get("quote_currency_normalized")
+            or market_data.additional_metadata.get("quote_currency")
+            or ""
+        ).strip().upper()
+    if not _re.match(r"^[A-Z]{3}$", _norm_quote_ccy):
+        _norm_quote_ccy = "unknown"
+    if not _re.match(r"^[A-Z]{3}$", _norm_fin_ccy):
+        _norm_fin_ccy = "unknown"
+    assumptions_dict["normalization_quote_currency"] = _norm_quote_ccy
+    assumptions_dict["normalization_financial_currency"] = _norm_fin_ccy
     assumptions_dict["normalization_adr_detected"] = bool(normalization_audit.get("adr_detected"))
     assumptions_dict["normalization_adr_ratio"] = normalization_audit.get("adr_ratio")
     _is_mega_cap = bool(
@@ -3398,7 +3557,7 @@ def run_analysis(
     if company_type == "private":
         _private_conf_raw = str((market_data.confidence if market_data else "") or "").strip().lower()
         _private_revenue_unverified = _private_revenue_quality not in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE", "MANUAL"}
-        if _private_identity_status != "RESOLVED" and not _private_manual_identity_override:
+        if _private_identity_status != "RESOLVED_STRONG" and not _private_manual_identity_override:
             _low_conviction = True
             if not _private_cap_reason:
                 _private_cap_reason = "private identity not fully resolved from strong registry sources"
@@ -3438,8 +3597,8 @@ def run_analysis(
             if "Private revenue is manual/estimated; valuation is indicative only." not in quality.warnings:
                 quality.warnings.append("Private revenue is manual/estimated; valuation is indicative only.")
         if _private_revenue_quality == "MANUAL":
-            if quality.score > (72 if _private_identity_status == "RESOLVED" else 68):
-                quality.score = 72 if _private_identity_status == "RESOLVED" else 68
+            if quality.score > (72 if _private_identity_status == "RESOLVED_STRONG" else 68):
+                quality.score = 72 if _private_identity_status == "RESOLVED_STRONG" else 68
             quality.tier = _quality_tier(quality.score)
             _low_conviction = True
             if not _private_cap_reason:
@@ -3468,13 +3627,22 @@ def run_analysis(
             _private_valuation_mode = "SCREEN_ONLY"
         elif valuation_status == "FAILED":
             _private_valuation_mode = "FAILED"
+        elif _private_revenue_quality == "MANUAL":
+            _private_valuation_mode = "INDICATIVE_MANUAL_REVENUE"
         else:
             _private_valuation_mode = "VALUATION_GRADE"
         if _private_valuation_mode == "FAILED":
             _private_state = "VALUATION_FAILED"
-        elif _private_valuation_mode == "VALUATION_GRADE":
-            _private_state = "VALUATION_READY"
-        elif _private_state not in {"IDENTITY_UNRESOLVED", "IDENTITY_RESOLVED_NO_REVENUE"}:
+        elif _private_valuation_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL_REVENUE"}:
+            if _private_revenue_quality == "MANUAL":
+                _private_state = "VALUATION_READY_MANUAL_REVENUE"
+            else:
+                _private_state = "VALUATION_READY_VERIFIED_REVENUE"
+        elif _private_state not in {
+            "IDENTITY_UNRESOLVED",
+            "IDENTITY_RESOLVED_STRONG_NO_REVENUE",
+            "IDENTITY_RESOLVED_WEAK_NO_REVENUE",
+        }:
             _private_state = "SCREEN_ONLY"
         sources.add_once(
             "Private Valuation Mode",
@@ -3958,16 +4126,22 @@ def run_analysis(
             )
         log.end_step("thesis", t0)
         _done("Investment Thesis", t0)
-    elif cli_mode and _research_source != "source_backed":
+    elif cli_mode and (_research_source != "source_backed" or (company_type == "private" and _private_screen_only)):
         thesis_status = "DEGRADED"
+        _thesis_fallback_reason = (
+            "private screen-only mode"
+            if (company_type == "private" and _private_screen_only)
+            else "research fallback mode (source-backed market context unavailable)"
+        )
         console.print(
-            "  [yellow]Research is fallback/partial; using archetype-based deterministic fallback thesis (no unsourced specifics).[/yellow]"
+            "  [yellow]Using archetype-based deterministic fallback thesis "
+            f"({_thesis_fallback_reason}; no unsourced specifics).[/yellow]"
         )
         thesis = _build_fallback_thesis(
             company=company,
             sector=fund.sector or "",
             recommendation=val.recommendation or "HOLD",
-            reason="research fallback mode (source-backed market context unavailable)",
+            reason=_thesis_fallback_reason,
             model_signal=_model_signal_for_text,
             industry=_target_industry if "_target_industry" in locals() else "",
             ticker=(market_data.ticker if market_data else ""),
@@ -4108,7 +4282,7 @@ def run_analysis(
         thesis.bull_case = _sanitize_thesis_language(thesis.bull_case or "")
         thesis.base_case = _sanitize_thesis_language(thesis.base_case or "")
         thesis.bear_case = _sanitize_thesis_language(thesis.bear_case or "")
-        if market_status in {"DEGRADED", "DEGRADED_API_CAPACITY", "FAILED", "TIMEOUT"}:
+        if market_status in {"DEGRADED", "DEGRADED_API_CAPACITY", "FAILED", "TIMEOUT", "SKIPPED_PRIVATE_SCREEN_ONLY"}:
             thesis.thesis = _soften_unsourced_scenario_specificity(thesis.thesis or "")
             thesis.bull_case = _soften_unsourced_scenario_specificity(thesis.bull_case or "")
             thesis.base_case = _soften_unsourced_scenario_specificity(thesis.base_case or "")
@@ -4216,9 +4390,13 @@ def run_analysis(
     console.rule("[DONE EQUITY]")
     log.flush()
 
-    if market_status == "SKIPPED_QUICK_MODE":
+    if market_status in {"SKIPPED_QUICK_MODE", "SKIPPED_PRIVATE_SCREEN_ONLY"}:
         _research_quality_score = None
-        _research_quality_label = "skipped_quick_mode"
+        _research_quality_label = (
+            "skipped_quick_mode"
+            if market_status == "SKIPPED_QUICK_MODE"
+            else "private_screen_only"
+        )
     else:
         _research_quality_score = 100
         _market_sources = [str(s) for s in (mkt.sources or []) if str(s).strip()]
@@ -4391,7 +4569,7 @@ def run_analysis(
         _confidence_reasons.append("foreign issuer USD listing has unverified share basis")
     if _method_dispersion_ratio >= 2.0:
         _confidence_reasons.append(f"high method dispersion ({_method_dispersion_ratio:.1f}x)")
-    if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}:
+    if market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY", "SKIPPED_PRIVATE_SCREEN_ONLY"}:
         _confidence_reasons.append("limited market context")
     if thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
         _confidence_reasons.append("thesis generation degraded")
@@ -4404,7 +4582,7 @@ def run_analysis(
             _confidence_reasons.append("manual user-provided revenue input (unverified)")
         if _private_triangulation_used:
             _confidence_reasons.append("triangulated private revenue input")
-        if not _private_identity_resolved:
+        if _private_identity_status != "RESOLVED_STRONG":
             _confidence_reasons.append("private legal identity not strongly resolved")
     if _hard_suppression_reasons:
         _confidence_reasons.append("sanity breaker triggered (recommendation suppressed)")
@@ -4432,7 +4610,7 @@ def run_analysis(
     _confidence_is_low = bool(
         valuation_status in {"FAILED", "DEGRADED"}
         or _peers_is_low_conf
-        or market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY"}
+        or market_status in {"FAILED", "TIMEOUT", "DEGRADED", "DEGRADED_API_CAPACITY", "SKIPPED_PRIVATE_SCREEN_ONLY"}
         or thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}
     )
     _confidence_is_medium = bool(
@@ -4445,7 +4623,7 @@ def run_analysis(
     )
     _confidence_level = "Low" if _confidence_is_low else ("Medium" if _confidence_is_medium else "High")
     if company_type == "private" and _private_revenue_quality == "MANUAL":
-        if _private_identity_status == "RESOLVED":
+        if _private_identity_status == "RESOLVED_STRONG":
             if _confidence_level == "High":
                 _confidence_level = "Medium"
         else:
@@ -4472,6 +4650,8 @@ def run_analysis(
         _confidence_level = "Low"
     if market_status == "SKIPPED_QUICK_MODE":
         _research_status_enum = "RESEARCH_SKIPPED_QUICK_MODE"
+    elif market_status == "SKIPPED_PRIVATE_SCREEN_ONLY":
+        _research_status_enum = "RESEARCH_PARTIAL_FALLBACK"
     elif market_status in {"FAILED", "TIMEOUT"} and thesis_status in {"FAILED", "TIMEOUT"}:
         _research_status_enum = "RESEARCH_FAILED"
     elif _research_source == "source_backed" and market_status == "OK" and thesis_status not in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
@@ -4592,6 +4772,8 @@ def run_analysis(
     _quant_market_inputs_used_in_valuation = False
     if market_status == "SKIPPED_QUICK_MODE":
         _research_depth = "none"
+    elif market_status == "SKIPPED_PRIVATE_SCREEN_ONLY":
+        _research_depth = "limited"
     elif _research_source != "source_backed":
         _research_depth = "limited"
     elif thesis_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
@@ -4608,6 +4790,8 @@ def run_analysis(
             quality.tier = _quality_tier(quality.score)
     if market_status == "SKIPPED_QUICK_MODE":
         _research_collection_semantic = "unavailable"
+    elif market_status == "SKIPPED_PRIVATE_SCREEN_ONLY":
+        _research_collection_semantic = "fallback"
     elif _market_source_backed and market_context_pack is not None and bool(market_context_pack.fallback_used):
         _research_collection_semantic = "mixed"
     elif _market_source_backed:
@@ -4620,7 +4804,7 @@ def run_analysis(
         _research_collection_semantic = "mixed"
     if _qual_context_backed_available:
         _qual_context_semantic = "source-backed"
-    elif market_status == "SKIPPED_QUICK_MODE":
+    elif market_status in {"SKIPPED_QUICK_MODE", "SKIPPED_PRIVATE_SCREEN_ONLY"}:
         _qual_context_semantic = "fallback"
     elif _research_source == "fallback":
         _qual_context_semantic = "fallback"
@@ -4751,9 +4935,57 @@ def run_analysis(
                 ),
                 "normalization_status": str(normalization_audit.get("status") or "UNKNOWN"),
                 "normalization_reason": str(normalization_audit.get("reason") or ""),
-                "quote_currency": str(normalization_audit.get("quote_currency") or "unknown"),
-                "financial_statement_currency": str(normalization_audit.get("financial_statement_currency") or "unknown"),
-                "market_cap_currency": str(normalization_audit.get("market_cap_currency") or "unknown"),
+                "quote_currency": str(
+                    (
+                        normalization_audit.get("quote_currency")
+                        if str(normalization_audit.get("quote_currency") or "").strip().lower()
+                        not in {"", "unknown", "n/a", "na"}
+                        else ""
+                    )
+                    or (
+                        (market_data.additional_metadata.get("quote_currency_normalized")
+                         or market_data.additional_metadata.get("quote_currency")
+                         or market_data.additional_metadata.get("financial_currency_normalized")
+                         or market_data.additional_metadata.get("financial_currency"))
+                        if (company_type == "private" and market_data and isinstance(market_data.additional_metadata, dict))
+                        else ""
+                    )
+                    or "unknown"
+                ),
+                "financial_statement_currency": str(
+                    (
+                        normalization_audit.get("financial_statement_currency")
+                        if str(normalization_audit.get("financial_statement_currency") or "").strip().lower()
+                        not in {"", "unknown", "n/a", "na"}
+                        else ""
+                    )
+                    or (
+                        (market_data.additional_metadata.get("financial_currency_normalized")
+                         or market_data.additional_metadata.get("financial_currency")
+                         or market_data.additional_metadata.get("quote_currency_normalized")
+                         or market_data.additional_metadata.get("quote_currency"))
+                        if (company_type == "private" and market_data and isinstance(market_data.additional_metadata, dict))
+                        else ""
+                    )
+                    or "unknown"
+                ),
+                "market_cap_currency": str(
+                    (
+                        normalization_audit.get("market_cap_currency")
+                        if str(normalization_audit.get("market_cap_currency") or "").strip().lower()
+                        not in {"", "unknown", "n/a", "na"}
+                        else ""
+                    )
+                    or (
+                        (market_data.additional_metadata.get("quote_currency_normalized")
+                         or market_data.additional_metadata.get("quote_currency")
+                         or market_data.additional_metadata.get("financial_currency_normalized")
+                         or market_data.additional_metadata.get("financial_currency"))
+                        if (company_type == "private" and market_data and isinstance(market_data.additional_metadata, dict))
+                        else ""
+                    )
+                    or "unknown"
+                ),
                 "listing_type": str(normalization_audit.get("listing_type") or "unknown"),
                 "selected_listing": str(normalization_audit.get("selected_listing") or "unknown"),
                 "primary_listing": str(normalization_audit.get("primary_listing") or "unknown"),
@@ -4775,6 +5007,8 @@ def run_analysis(
                 "private_revenue_quality": _private_revenue_quality if company_type == "private" else "",
                 "private_triangulation_used": bool(_private_triangulation_used) if company_type == "private" else False,
                 "private_identity_resolved": bool(_private_identity_resolved) if company_type == "private" else True,
+                "private_identity_strong_resolved": bool(_private_identity_status == "RESOLVED_STRONG") if company_type == "private" else True,
+                "private_identity_weak_resolved": bool(_private_identity_status == "RESOLVED_WEAK") if company_type == "private" else False,
                 "private_identity_status": _private_identity_status if company_type == "private" else "",
                 "private_identity_source_state": _private_identity_source_state if company_type == "private" else "",
                 "private_financials_quality": _private_financials_quality if company_type == "private" else "",
@@ -4823,6 +5057,13 @@ def run_analysis(
         if _text_missing(analysis.market.market_segment):
             analysis.market.market_segment = "Not available in quick mode"
         analysis.market.data_status = "SKIPPED_QUICK_MODE"
+        analysis.market.key_trends = []
+    elif market_status == "SKIPPED_PRIVATE_SCREEN_ONLY":
+        analysis.market.market_size = "Not available — private screen-only mode"
+        analysis.market.market_growth = "Not available — private screen-only mode"
+        if _text_missing(analysis.market.market_segment):
+            analysis.market.market_segment = "Not available — private screen-only mode"
+        analysis.market.data_status = "SCREEN_ONLY"
         analysis.market.key_trends = []
     elif market_status == "DEGRADED":
         analysis.market = _ensure_market_analysis_contract(analysis.market)
@@ -4874,7 +5115,7 @@ def run_analysis(
         analysis.market.market_segment = "Not available"
         analysis.market.data_status = "FAILED"
         analysis.market.key_trends = []
-    if market_status != "SKIPPED_QUICK_MODE":
+    if market_status not in {"SKIPPED_QUICK_MODE", "SKIPPED_PRIVATE_SCREEN_ONLY"}:
         analysis.market = _ensure_market_analysis_contract(analysis.market)
         _src_backed_market = _has_source_backed_market_data(analysis.market)
         if (not _src_backed_market) and str(analysis.market.data_status or "").upper() != "COMPLETE":
@@ -4885,6 +5126,9 @@ def run_analysis(
     if market_status == "SKIPPED_QUICK_MODE":
         sources.add_once("TAM", _tam_v, "skipped_quick_mode", "skipped")
         sources.add_once("Market Growth", _mg_v, "skipped_quick_mode", "skipped")
+    elif market_status == "SKIPPED_PRIVATE_SCREEN_ONLY":
+        sources.add_once("TAM", _tam_v, "private_screen_only_mode", "unavailable")
+        sources.add_once("Market Growth", _mg_v, "private_screen_only_mode", "unavailable")
     else:
         _tam_unavail = "not available" in str(_tam_v).lower()
         _mg_unavail = "not available" in str(_mg_v).lower()

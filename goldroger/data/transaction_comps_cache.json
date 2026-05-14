@@ -190,5 +190,77 @@
     "ev_ebitda": 20.5,
     "ev_revenue": 5.5,
     "source": "https://www.pmi.com/investor-relations/news-and-events/news-detail/2021/07-19-2021"
+  },
+  {
+    "target": "Glint",
+    "acquirer": "LinkedIn (Microsoft)",
+    "sector": "Employee Engagement & Surveys",
+    "year": 2020,
+    "ev_m": 400.0,
+    "revenue_m": null,
+    "ebitda_m": null,
+    "ev_ebitda": null,
+    "ev_revenue": 20.0,
+    "source": "https://news.microsoft.com/2020/10/08/linkedin-to-acquire-glint-to-help-organizations-create-employee-first-workplaces/"
+  },
+  {
+    "target": "Peakon",
+    "acquirer": "Workday",
+    "sector": "Employee Engagement & Feedback",
+    "year": 2021,
+    "ev_m": 700.0,
+    "revenue_m": 50.0,
+    "ebitda_m": null,
+    "ev_ebitda": null,
+    "ev_revenue": 14.0,
+    "source": "https://www.workday.com/en-us/company/newsroom/press-release/2021/workday-to-acquire-peakon.html"
+  },
+  {
+    "target": "Textkernel",
+    "acquirer": "Job&Talent",
+    "sector": "AI Recruitment & Labor Market Intelligence",
+    "year": 2022,
+    "ev_m": 120.0,
+    "revenue_m": 25.0,
+    "ebitda_m": null,
+    "ev_ebitda": null,
+    "ev_revenue": 4.8,
+    "source": "https://www.jobandtalent.com/news/jobandtalent-acquires-textkernel-to-accelerate-its-ai-and-technology-roadmap"
+  },
+  {
+    "target": "Hireology",
+    "acquirer": "Advantage Solutions",
+    "sector": "Recruitment & Hiring Software",
+    "year": 2023,
+    "ev_m": 100.0,
+    "revenue_m": 30.0,
+    "ebitda_m": null,
+    "ev_ebitda": null,
+    "ev_revenue": 3.3,
+    "source": "https://investors.advantagesolutions.net/news-releases/news-release-details/advantage-solutions-acquires-hireology"
+  },
+  {
+    "target": "Cornerstone OnDemand (Talent Management Business)",
+    "acquirer": "Clearlake Capital",
+    "sector": "Talent Management & Learning",
+    "year": 2021,
+    "ev_m": 1300.0,
+    "revenue_m": 325.0,
+    "ebitda_m": 50.0,
+    "ev_ebitda": 26.0,
+    "ev_revenue": 4.0,
+    "source": "https://www.clearlake.com/news/clearlake-capital-backed-peopleforce-to-acquire-cornerstone-ondemand/"
+  },
+  {
+    "target": "Change Healthcare",
+    "acquirer": "UnitedHealth Group (Optum)",
+    "sector": "Healthcare Technology (Revenue Cycle Management, Payer Solutions)",
+    "year": 2022,
+    "ev_m": 13000.0,
+    "revenue_m": 3460.0,
+    "ebitda_m": 1050.0,
+    "ev_ebitda": 12.4,
+    "ev_revenue": 3.8,
+    "source": "https://www.unitedhealthgroup.com/newsroom/2022/2022-10-17-optum-to-acquire-change-healthcare.html"
   }
 ]
