@@ -503,6 +503,23 @@ def test_private_identity_status_semantics_strong_weak_unresolved(monkeypatch):
     assert str(unresolved_ps.get("private_state")) == "IDENTITY_UNRESOLVED"
 
 
+def test_private_fr_siren_is_treated_as_strong_identity(monkeypatch):
+    fr = _md(company="Doctolib", source="infogreffe", revenue_m=None, confidence="inferred", sector="Healthcare")
+    fr.additional_metadata = {"siren": "794598813", "country": "France"}
+    fr_case = _run_private_case(
+        monkeypatch,
+        company="Doctolib",
+        registry_md=fr,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+        company_identifier="794598813",
+    )
+    fr_ps = (fr_case.data_quality or {}).get("pipeline_status", {})
+    assert str(fr_ps.get("private_identity_status")) == "RESOLVED_STRONG"
+    assert str(fr_ps.get("private_identity_source_state")) == "source-backed"
+
+
 @pytest.mark.parametrize(
     ("company", "country", "scenario"),
     [

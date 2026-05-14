@@ -383,6 +383,45 @@ def _econ_similarity(
 
 def _classify_peer_bucket(sector: str, industry: str, name: str = "") -> str:
     s = f"{sector or ''} {industry or ''} {name or ''}".lower()
+    # Private-oriented healthcare/healthtech buckets.
+    if any(
+        k in s
+        for k in (
+            "digital health",
+            "telemedicine",
+            "virtual care",
+            "care navigation",
+            "patient engagement",
+            "patient access",
+        )
+    ):
+        return "digital_health"
+    if any(
+        k in s
+        for k in (
+            "healthcare software",
+            "clinical software",
+            "ehr",
+            "electronic health record",
+            "medical software",
+            "health it",
+            "healthcare technology",
+            "doximity",
+            "veeva",
+        )
+    ):
+        return "healthcare_software"
+    if any(k in s for k in ("healthtech platform", "healthtech", "doctolib", "teladoc")):
+        return "healthtech_platform"
+    if any(k in s for k in ("healthcare services", "provider services", "hospital services", "managed care")):
+        return "healthcare_services_adjacent"
+
+    # Private-oriented HR tech buckets.
+    if any(k in s for k in ("hcm", "human capital management", "payroll", "workforce management", "adp", "paychex")):
+        return "hcm_payroll"
+    if any(k in s for k in ("hr tech", "hr software", "human resources software", "personio", "workday", "paycom")):
+        return "hrtech_saas"
+
     # Technology buckets first to avoid false "materials_general" classification
     # for semiconductor-equipment names/industries (e.g., "Semiconductor Equipment & Materials").
     if any(k in s for k in (

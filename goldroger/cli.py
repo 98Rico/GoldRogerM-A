@@ -935,7 +935,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         elif _private_val_mode == "VALUATION_GRADE":
             _valuation_inputs_state = "private provider financials only"
         else:
-            _valuation_inputs_state = "market data only"
+            _valuation_inputs_state = "none — valuation gated"
     else:
         _valuation_inputs_state = (
             "market data + verified quantitative context"

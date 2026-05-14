@@ -2440,7 +2440,8 @@ def run_analysis(
                     drops.append(f"{peer_multiples.n_dropped_same_issuer} alternate listings dropped")
                 drop_note = f"  [dim](dropped: {', '.join(drops)})[/dim]" if drops else ""
 
-                if peer_multiples.n_valuation_peers > 0:
+                _private_peer_reference_only = bool(company_type == "private" and _private_screen_only)
+                if peer_multiples.n_valuation_peers > 0 and not _private_peer_reference_only:
                     _eff_req = 3.0 if quick_mode else 5.0
                     if peers_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
                         peers_status = "DEGRADED"
@@ -2666,7 +2667,7 @@ def run_analysis(
                                     name=p.name,
                                     ticker=p.ticker,
                                     bucket=p.bucket,
-                                    role=(p.role or "qualitative peer only"),
+                                    role="qualitative peer only",
                                     market_cap=(
                                         _fmt_money_millions(
                                             float(p.market_cap),
@@ -2686,7 +2687,7 @@ def run_analysis(
                                     similarity=f"{(p.similarity or 0):.2f}",
                                     business_similarity=f"{(p.business_similarity or 0):.2f}",
                                     scale_similarity=f"{(p.scale_similarity or 0):.2f}",
-                                    weight=f"{(p.weight or 0):.2f}",
+                                    weight="0.00",
                                     include_reason=p.include_reason,
                                 )
                                 for p in peer_multiples.peers
@@ -2909,7 +2910,15 @@ def run_analysis(
         + (" [yellow]limited-confidence mode[/yellow]" if quality.is_blocked else "")
     )
     for _warn in quality.warnings[:3]:
-        console.print(f"  [yellow]• {_warn}[/yellow]")
+        _warn_txt = str(_warn)
+        if (
+            company_type == "private"
+            and _private_screen_only
+            and "fallback will be used" in _warn_txt.lower()
+            and "missing ebitda margin" in _warn_txt.lower()
+        ):
+            _warn_txt = "Missing EBITDA margin (valuation gated in private screen-only mode)."
+        console.print(f"  [yellow]• {_warn_txt}[/yellow]")
     if quality.blockers:
         for _blk in quality.blockers:
             console.print(f"  [red]• {_blk}[/red]")

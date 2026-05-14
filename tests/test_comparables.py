@@ -224,6 +224,25 @@ def test_materials_profile_uses_aluminum_bucket_for_alcoa_like_names():
     assert bucket == "aluminum_metals"
 
 
+def test_private_healthtech_bucket_classification_is_specific():
+    assert _classify_peer_bucket("Healthcare", "HealthTech Platform", "Doctolib") == "healthtech_platform"
+    assert _classify_peer_bucket("Healthcare", "Healthcare Software", "Doximity") == "healthcare_software"
+    assert _classify_peer_bucket("Healthcare", "Digital Health", "Teladoc") == "digital_health"
+
+
+def test_private_fintech_bucket_classification_is_specific():
+    assert _classify_peer_bucket("Financials", "Payments", "PayPal") == "fintech_payments"
+    assert _classify_peer_bucket("Financials", "Digital Bank", "Nubank") == "fintech_digital_bank"
+    assert _classify_peer_bucket("Financials", "Consumer Lending", "SoFi") == "fintech_consumer_lending"
+    assert _classify_peer_bucket("Financials", "Brokerage", "Robinhood") == "fintech_brokerage"
+    assert _classify_peer_bucket("Financials", "Crypto Exchange", "Coinbase") == "fintech_crypto_platform"
+
+
+def test_private_hrtech_bucket_classification_is_specific():
+    assert _classify_peer_bucket("Technology", "HR Tech SaaS", "Personio") == "hrtech_saas"
+    assert _classify_peer_bucket("Technology", "Payroll / HCM", "ADP") == "hcm_payroll"
+
+
 def test_fintech_bucket_classification_for_revolut_style_peers():
     assert _classify_peer_bucket("Financial Services", "Digital Banking", "Nu Holdings") == "fintech_digital_bank"
     assert _classify_peer_bucket("Financial Services", "Payments", "PayPal") == "fintech_payments"

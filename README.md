@@ -212,7 +212,7 @@ Pipeline status now separates sourcing trust dimensions:
 - `Market context`: `source-backed` / `fallback` / `unavailable`
 - `Quantitative market inputs`: `available` / `unavailable`
 - `Thesis mode`: `source-backed` / `deterministic archetype fallback` / `timeout fallback` / `generic fallback`
-- `Valuation inputs`: `market data only` / `market data + verified quantitative context`
+- `Valuation inputs`: `none — valuation gated` / `market data only` / `market data + verified quantitative context`
 
 This avoids overloading one aggregate research label when filings and market-context quality differ.
 
@@ -329,7 +329,7 @@ When `SCREEN_ONLY` is active:
 - target/upside stay `N/A`,
 - football-field scenarios are suppressed,
 - LBO feasibility is treated as diagnostic and not rendered as investable output,
-- qualitative peers can still be shown for context (`qualitative peer only`, 0% weight),
+- qualitative peers can still be shown for context (`qualitative peer only`, 0% weight; reference-only, not used in valuation math),
 - key financial lines are shown as non-valuation-grade when necessary,
 - Value Sources mark unavailable lines as `not available — excluded from valuation` (not model output).
 
@@ -338,6 +338,11 @@ Identity-gate policy:
 - `RESOLVED_WEAK` + verified/manual revenue can unlock only low-conviction valuation.
 - `UNRESOLVED` + manual revenue can unlock `INDICATIVE_MANUAL_REVENUE` only (not valuation-grade), with explicit legal-identity warning and capped confidence.
 - `UNRESOLVED` without manual revenue remains `SCREEN_ONLY`.
+
+Private qualitative peer buckets now prefer context-specific taxonomy when available, for example:
+- healthtech: `healthtech_platform`, `healthcare_software`, `digital_health`, `healthcare_services_adjacent`
+- HR tech: `hrtech_saas`, `hcm_payroll`
+- fintech: `fintech_digital_bank`, `fintech_payments`, `fintech_consumer_lending`, `fintech_brokerage`, `fintech_crypto_platform`, `fintech_infrastructure`
 
 ### 6) Valuation path and labels
 - Valuation math remains deterministic (same engine, private weights are sector/type-aware).
