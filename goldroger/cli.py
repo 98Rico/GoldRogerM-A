@@ -478,6 +478,8 @@ def _to_float(s: str) -> Optional[float]:
     t = str(s or "").strip().replace(",", "")
     if not t:
         return None
+    if t.upper().startswith("UNKNOWN "):
+        t = t.split(" ", 1)[1].strip()
     _parsed = _parse_money_millions(t)
     if _parsed is not None:
         return _parsed
@@ -1617,7 +1619,8 @@ def print_result(result, debug: bool = False):
         )
 
     # Valuation methods
-    if v.methods and not _is_inconclusive:
+    _scenario_suppressed = bool(_pipeline_status.get("scenario_suppressed")) if _pipeline_status else False
+    if v.methods and not _is_inconclusive and not _scenario_suppressed:
         val_table = Table(title="Valuation Football Field", show_header=True, header_style="bold yellow")
         val_table.add_column("Method")
         val_table.add_column("Low")
@@ -1645,6 +1648,10 @@ def print_result(result, debug: bool = False):
                 (f"{method.weight}%{method_note}" if method.weight is not None else "—"),
             )
         console.print(val_table)
+    elif _scenario_suppressed and not _is_inconclusive:
+        _why = str(_pipeline_status.get("scenario_suppressed_reason", "") or "").strip() if _pipeline_status else ""
+        _why_txt = f" ({_why})" if _why else ""
+        console.print(f"[dim]Valuation football field suppressed due to scenario integrity checks{_why_txt}.[/dim]")
 
     if footnotes.items():
         console.print("\n[bold]Value Sources[/]")

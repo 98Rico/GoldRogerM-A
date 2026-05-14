@@ -3785,6 +3785,7 @@ def run_analysis(
 
     # ── 5b. BEAR / BASE / BULL SCENARIOS ─────────────────────────────────
     football_field: FootballField | None = None
+    _scenario_suppressed_reason: str = ""
     ic_summary: ICScoreSummary | None = None
     try:
         if company_type == "private" and _private_screen_only:
@@ -4000,6 +4001,7 @@ def run_analysis(
             )
     except Exception as e:
         _scenario_err = str(e)
+        _scenario_suppressed_reason = _scenario_err or "scenario generation suppressed"
         if "sanity breaker triggered" in _scenario_err.lower():
             console.print(
                 "  [yellow]Scenarios suppressed:[/yellow] valuation recommendation is INCONCLUSIVE "
@@ -5029,6 +5031,8 @@ def run_analysis(
                 "private_manual_revenue_used": bool(_private_manual_revenue_used) if company_type == "private" else False,
                 "private_used_providers": list(_private_used_providers) if company_type == "private" else [],
                 "private_skipped_providers": list(_private_skipped_providers) if company_type == "private" else [],
+                "scenario_suppressed": bool(_scenario_suppressed_reason),
+                "scenario_suppressed_reason": _scenario_suppressed_reason,
             },
             "timings_s": {
                 "market_data": log.step_times.get("market_data"),
