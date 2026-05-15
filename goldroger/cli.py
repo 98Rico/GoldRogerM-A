@@ -1165,10 +1165,15 @@ def print_result(result, debug: bool = False):
     if _private_screen_only_mode:
         _target_line = "Target: N/A | Private screen-only profile (identity/revenue gates not satisfied)"
     elif _private_indicative_manual_mode:
-        _target_line = (
-            f"Indicative Manual EV: {_value_with_source('Target', _target_display)}"
-            f" | Revenue source: manual user input (unverified)"
-        )
+        _ev_range = _value_with_source("Fair Value Range", _fv_range or "N/A")
+        _ev_base = _value_with_source("Enterprise Value (blended)", _target_display)
+        if _is_inconclusive or str(_target_display).strip().upper() in {"", "N/A"}:
+            _target_line = "Indicative Manual EV: N/A | Manual revenue input — valuation integrity failed"
+        else:
+            _target_line = (
+                f"Indicative Manual EV Range: {_ev_range} | "
+                f"Base EV: {_ev_base} | Revenue source: manual user input (unverified)"
+            )
     elif _is_low_conf and _fv_range and v.target_price:
         _range_label = "Midpoint reference"
         try:
@@ -1367,7 +1372,12 @@ def print_result(result, debug: bool = False):
     _nd_bridge_val = src_map.get("Net Debt (valuation currency)", {}).get("value")
     _sh_bridge = src_map.get("Shares Outstanding", {}).get("value")
     _tp_bridge = src_map.get("Implied Target Price", {}).get("value")
-    if (not _is_inconclusive) and (not _private_screen_only_mode) and _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge:
+    if (
+        (not _is_private_run)
+        and (not _is_inconclusive)
+        and (not _private_screen_only_mode)
+        and _ev_bridge and _eq_bridge and _sh_bridge and _tp_bridge
+    ):
         _tag_ev = footnotes.tag(_infer_source_note("Enterprise Value (blended)", _ev_bridge, src_map))
         _tag_eq = footnotes.tag(_infer_source_note("Equity Value", _eq_bridge, src_map))
         _tag_sh = footnotes.tag(_infer_source_note("Shares Outstanding", _sh_bridge, src_map))
@@ -1399,6 +1409,18 @@ def print_result(result, debug: bool = False):
         console.print(
             f"[dim]Bridge:[/] EV {_ev_bridge}{_tag_ev}{_nd_txt} = Equity {_eq_bridge}{_tag_eq} "
             f"→ / Shares {_sh_bridge}{_tag_sh} = {_tp_bridge_label} {_tp_bridge_show}{_tag_tp}"
+        )
+    elif (
+        _is_private_run
+        and (not _is_inconclusive)
+        and (not _private_screen_only_mode)
+        and _ev_bridge
+    ):
+        _tag_ev = footnotes.tag(_infer_source_note("Enterprise Value (blended)", _ev_bridge, src_map))
+        _ev_range = src_map.get("Fair Value Range", {}).get("value") or "N/A"
+        _tag_rng = footnotes.tag(_infer_source_note("Fair Value Range", _ev_range, src_map))
+        console.print(
+            f"[dim]Private indicative EV:[/] Base EV {_ev_bridge}{_tag_ev} | EV Range {_ev_range}{_tag_rng}"
         )
     _mcap_val = src_map.get("Market Cap", {}).get("value")
     _valuation_failed = str(_pipeline_status.get("valuation", "")).upper() == "FAILED"

@@ -255,18 +255,31 @@ class ValuationService:
         terminal_growth = self._resolve_terminal_growth(assumptions, sector_m, wacc, notes)
 
         # ── Populate field_sources ────────────────────────────────────────
-        _rev_src = market_data.data_source if market_data else "llm"
+        _md_meta = market_data.additional_metadata if (market_data and isinstance(market_data.additional_metadata, dict)) else {}
+        _manual_revenue_used = bool(_md_meta.get("manual_revenue_used"))
+        _manual_growth_used = _md_meta.get("manual_growth") is not None
+        _manual_ebitda_used = _md_meta.get("manual_ebitda_margin") is not None
+        _manual_net_debt_used = _md_meta.get("manual_net_debt") is not None
+        _rev_src = "manual_user_input" if _manual_revenue_used else (market_data.data_source if market_data else "llm")
         _rev_val = market_data.revenue_ttm if market_data and market_data.revenue_ttm else revenue_current
-        field_sources["Revenue TTM"] = (format_money_millions(_rev_val, report_ccy), _rev_src, rev_confidence)
-        field_sources["EBITDA Margin"] = (f"{ebitda_margin:.1%}", _rev_src, ebitda_confidence)
+        field_sources["Revenue TTM"] = (format_money_millions(_rev_val, report_ccy), _rev_src, ("manual" if _manual_revenue_used else rev_confidence))
+        field_sources["EBITDA Margin"] = (
+            f"{ebitda_margin:.1%}",
+            (
+                "manual_user_input"
+                if _manual_ebitda_used
+                else ("sector_default" if _manual_revenue_used else _rev_src)
+            ),
+            ("manual" if _manual_ebitda_used else ebitda_confidence),
+        )
         field_sources["WACC"] = (f"{wacc:.2%}", "capm_model", wacc_confidence)
         field_sources["Terminal Growth"] = (f"{terminal_growth:.2%}", "sector_default", "inferred")
         if base_revenue_y0 and base_revenue_y0 > 0 and revenue_series:
             _modeled_g = (revenue_series[0] / base_revenue_y0) - 1.0
             field_sources["Modeled Revenue Growth"] = (
                 f"{_modeled_g:+.1%}",
-                "valuation_model",
-                "inferred",
+                ("manual_user_input" if _manual_growth_used else "valuation_model"),
+                ("manual" if _manual_growth_used else "inferred"),
             )
         if market_data and market_data.beta:
             field_sources["Beta (β)"] = (f"{market_data.beta:.3f}", _rev_src, "verified")
@@ -287,7 +300,11 @@ class ValuationService:
                 f"{market_data.ev_ebitda_market:.1f}x", _rev_src, "verified"
             )
         if market_data and market_data.net_debt is not None:
-            field_sources["Net Debt"] = (format_money_millions(market_data.net_debt, report_ccy), _rev_src, "verified")
+            field_sources["Net Debt"] = (
+                format_money_millions(market_data.net_debt, report_ccy),
+                ("manual_user_input" if _manual_net_debt_used else ("assumed_zero" if (_manual_revenue_used and not _manual_net_debt_used and float(market_data.net_debt or 0.0) == 0.0) else _rev_src)),
+                ("manual" if _manual_net_debt_used else ("inferred" if (_manual_revenue_used and not _manual_net_debt_used and float(market_data.net_debt or 0.0) == 0.0) else "verified")),
+            )
 
         # ── 3. DCF ───────────────────────────────────────────────────────
         dcf_input = DCFInput(

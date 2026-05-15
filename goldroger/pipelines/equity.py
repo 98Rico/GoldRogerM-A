@@ -3232,6 +3232,23 @@ def run_analysis(
     _w_dcf  = round(_w.get("dcf", 0.5) * 100)
     _w_comp = round(_w.get("comps", 0.3) * 100)
     _w_tx   = round(_w.get("transactions", 0.2) * 100)
+    # Private manual/screen-only integrity: do not allow reference-only methods to
+    # leak into blended valuation display.
+    if company_type == "private":
+        _has_valuation_peers = bool(peer_multiples and getattr(peer_multiples, "n_valuation_peers", 0) > 0)
+        _tx_valuation_ready = bool(_tx_medians and int(_tx_medians.get("n_deals", 0) or 0) > 0)
+        if _private_screen_only:
+            _w_comp = 0
+            _w_tx = 0
+        else:
+            if not _has_valuation_peers:
+                _w_comp = 0
+            if not _tx_valuation_ready:
+                _w_tx = 0
+        if _w_dcf <= 0 and (_w_comp > 0 or _w_tx > 0):
+            _w_dcf = 100 - (_w_comp + _w_tx)
+        if _w_dcf <= 0 and _w_comp <= 0 and _w_tx <= 0 and result.dcf:
+            _w_dcf = 100
 
     _methods: list = []
     if result.has_revenue and result.dcf and _w_dcf > 0:
@@ -3263,6 +3280,16 @@ def run_analysis(
 
     # ── 5a. SOTP (conglomerates / multi-segment) ──────────────────────────
     _quote_ccy = str(normalization_audit.get("quote_currency") or "USD")
+    if company_type == "private" and market_data and isinstance(market_data.additional_metadata, dict):
+        _quote_ccy = str(
+            market_data.additional_metadata.get("manual_revenue_currency")
+            or market_data.additional_metadata.get("financial_currency_normalized")
+            or market_data.additional_metadata.get("financial_currency")
+            or _quote_ccy
+            or "USD"
+        ).upper()
+    if not _re.match(r"^[A-Z]{3}$", _quote_ccy):
+        _quote_ccy = "USD"
     _CONGLOMERATE_KEYWORDS = {"segment", "division", "business unit", "portfolio", "subsidiaries"}
     _desc_lower = (fund.description + " " + fund.business_model).lower()
     if any(kw in _desc_lower for kw in _CONGLOMERATE_KEYWORDS) and result.has_revenue and fin.revenue_current:
@@ -4141,10 +4168,16 @@ def run_analysis(
             rationale=ic_result.rationale,
             next_steps=ic_result.next_steps,
         )
-        console.print(
-            f"  IC Review Status: [bold]{ic_result.ic_score:.0f}/100[/bold] → {ic_result.recommendation} "
-            f"[dim](WATCH = signal requires review before reliance)[/dim]"
-        )
+        if company_type == "private" and _private_revenue_quality == "MANUAL":
+            console.print(
+                f"  Raw IC signal: [bold]{ic_result.ic_score:.0f}/100[/bold] → {ic_result.recommendation} "
+                f"[dim]| Final private/manual recommendation cap applies: {_rec}[/dim]"
+            )
+        else:
+            console.print(
+                f"  IC Review Status: [bold]{ic_result.ic_score:.0f}/100[/bold] → {ic_result.recommendation} "
+                f"[dim](WATCH = signal requires review before reliance)[/dim]"
+            )
     except Exception as e:
         console.print(f"  [yellow]IC scoring skipped: {e}[/yellow]")
 
