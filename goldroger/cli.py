@@ -1132,6 +1132,7 @@ def print_result(result, debug: bool = False):
     _is_private_run = str(getattr(result, "company_type", "")).lower() == "private"
     _private_val_mode_header = str((_pipeline_status or {}).get("private_valuation_mode", "") or "").strip().upper()
     _private_screen_only_mode = bool(_is_private_run and _private_val_mode_header in {"SCREEN_ONLY", "FAILED"})
+    _private_indicative_manual_mode = bool(_is_private_run and _private_val_mode_header in {"INDICATIVE_MANUAL", "INDICATIVE_MANUAL_REVENUE"})
     _extreme_signal_review = bool(_pipeline_status.get("extreme_signal_review"))
     _cap_reason = str(_pipeline_status.get("recommendation_cap_reason", "") or "").strip()
     _extreme_capped = bool((not _is_inconclusive) and _extreme_signal_review and _cap_reason)
@@ -1163,6 +1164,11 @@ def print_result(result, debug: bool = False):
     _is_low_conf = ((not _is_inconclusive) and _confidence == "low")
     if _private_screen_only_mode:
         _target_line = "Target: N/A | Private screen-only profile (identity/revenue gates not satisfied)"
+    elif _private_indicative_manual_mode:
+        _target_line = (
+            f"Indicative Manual EV: {_value_with_source('Target', _target_display)}"
+            f" | Revenue source: manual user input (unverified)"
+        )
     elif _is_low_conf and _fv_range and v.target_price:
         _range_label = "Midpoint reference"
         try:

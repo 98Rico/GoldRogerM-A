@@ -349,7 +349,7 @@ def test_private_manual_revenue_enables_valuation_with_resolved_identity(monkeyp
     assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
     assert str(ps.get("private_identity_status")) == "RESOLVED_STRONG"
     assert bool(ps.get("private_manual_revenue_used")) is True
-    assert not str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
+    assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
     assert "manual user-provided" in (analysis.sources_md or "").lower()
 

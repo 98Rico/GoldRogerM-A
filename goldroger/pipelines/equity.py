@@ -728,6 +728,7 @@ def run_analysis(
     _private_valuation_mode = "FAILED"
     _private_peers_state = "FAILED"
     _private_screen_only = False
+    _private_indicative_manual_mode = False
     _private_screen_only_reasons: list[str] = []
     _private_missing_pappers_key = False
     _private_missing_companies_house_key = False
@@ -950,6 +951,7 @@ def run_analysis(
                 market_data.additional_metadata["manual_growth"] = _manual_growth
                 market_data.additional_metadata["manual_net_debt"] = _manual_net_debt
             _private_manual_revenue_used = True
+            _private_indicative_manual_mode = True
             if manual_identity_confirmed:
                 _private_manual_identity_override = True
             console.print(
@@ -1989,7 +1991,7 @@ def run_analysis(
 
     def _do_tx_comps():
         _t = _step("Transaction Comps")
-        if quick_mode or (company_type == "private" and _private_screen_only):
+        if quick_mode or (company_type == "private" and (_private_screen_only or _private_indicative_manual_mode)):
             _finish_step("Transaction Comps", _t, _cancel_tx, "tx_comps")
             return (None, None)
         try:
@@ -2023,7 +2025,7 @@ def run_analysis(
         _fut_mkt = _pool.submit(_do_market)
         _fut_peers = _pool.submit(_do_peers)
         _fut_fin = _pool.submit(_do_financials)
-        _skip_tx_for_private_screen_only = bool(company_type == "private" and _private_screen_only)
+        _skip_tx_for_private_screen_only = bool(company_type == "private" and (_private_screen_only or _private_indicative_manual_mode))
         _fut_tx = None if (_skip_tx_comps or quick_mode or _skip_tx_for_private_screen_only) else _pool.submit(_do_tx_comps)
         try:
             mkt, _mkt_status = _fut_mkt.result(timeout=_MARKET_ANALYSIS_TIMEOUT)
@@ -3604,6 +3606,7 @@ def run_analysis(
         quality.warnings.append("Sanity breaker triggered; valuation recommendation suppressed.")
         for _sr in _hard_suppression_reasons:
             quality.warnings.append(f"Sanity breaker: {_sr}")
+    _scenario_integrity_failed = False
     _suppressed_no_rating = bool(_hard_suppression_reasons)
     _low_conviction = any("dispersion" in str(n).lower() or "high uncertainty" in str(n).lower() for n in (result.notes or []))
     if _suppressed_no_rating:
@@ -3686,6 +3689,8 @@ def run_analysis(
                 _private_cap_reason = "valuation confidence capped due to manual user-provided revenue input"
             if "Valuation confidence capped due to manual user-provided revenue input." not in quality.warnings:
                 quality.warnings.append("Valuation confidence capped due to manual user-provided revenue input.")
+        if _private_revenue_quality == "MANUAL" and _rec not in {"INCONCLUSIVE"}:
+            _rec = "INDICATIVE / LOW CONVICTION"
     if _suppressed_no_rating:
         _rec = "INCONCLUSIVE"
         _target_price = None
@@ -3858,6 +3863,7 @@ def run_analysis(
     # ── 5b. BEAR / BASE / BULL SCENARIOS ─────────────────────────────────
     football_field: FootballField | None = None
     _scenario_suppressed_reason: str = ""
+    _scenario_integrity_failed = False
     ic_summary: ICScoreSummary | None = None
     try:
         if company_type == "private" and _private_screen_only:
@@ -4085,6 +4091,7 @@ def run_analysis(
                 "quality gates are satisfied."
             )
         if "scenario ordering failed" in _scenario_err.lower():
+            _scenario_integrity_failed = True
             quality.warnings.append("Scenario ordering failed; football field suppressed.")
             if valuation_status == "OK":
                 valuation_status = "DEGRADED"
@@ -4098,6 +4105,15 @@ def run_analysis(
             )
         elif "sanity breaker triggered" not in _scenario_err.lower():
             console.print(f"  [yellow]Scenarios skipped:[/yellow] {_scenario_err}")
+    if company_type == "private" and _private_revenue_quality == "MANUAL":
+        if "scenario ordering failed" in str(_scenario_suppressed_reason).lower():
+            _rec = "INCONCLUSIVE"
+            _target_price = None
+            _ev_str = "N/A"
+            rec.upside_pct = None
+            rec.intrinsic_price = None
+            valuation_status = "FAILED"
+            _private_cap_reason = "valuation integrity failed (scenario ordering); manual-indicative output suppressed"
 
     # ── 5c. IC SCORING ────────────────────────────────────────────────────
     try:
