@@ -684,6 +684,9 @@ def run_analysis(
     manual_revenue_currency: str = "USD",
     manual_revenue_year: int | None = None,
     manual_revenue_source_note: str = "",
+    manual_ebitda_margin: float | None = None,
+    manual_growth: float | None = None,
+    manual_net_debt: float | None = None,
     manual_identity_confirmed: bool = False,
     quick_mode: bool = False,
     full_report: bool = False,
@@ -875,6 +878,24 @@ def run_analysis(
             _manual_revenue_ccy = "USD"
         _manual_revenue_note = str(manual_revenue_source_note or "").strip()
         _manual_revenue_year = manual_revenue_year
+        _manual_ebitda_margin = None
+        _manual_growth = None
+        _manual_net_debt = None
+        try:
+            if manual_ebitda_margin is not None:
+                _manual_ebitda_margin = float(manual_ebitda_margin) / 100.0
+        except Exception:
+            _manual_ebitda_margin = None
+        try:
+            if manual_growth is not None:
+                _manual_growth = float(manual_growth) / 100.0
+        except Exception:
+            _manual_growth = None
+        try:
+            if manual_net_debt is not None:
+                _manual_net_debt = float(manual_net_debt)
+        except Exception:
+            _manual_net_debt = None
         if manual_revenue is not None:
             try:
                 _manual_revenue_m = float(manual_revenue)
@@ -902,6 +923,9 @@ def run_analysis(
                         "manual_revenue_user_provided": True,
                         "manual_revenue_year": _manual_revenue_year,
                         "manual_revenue_source_note": _manual_revenue_note,
+                        "manual_ebitda_margin": _manual_ebitda_margin,
+                        "manual_growth": _manual_growth,
+                        "manual_net_debt": _manual_net_debt,
                         "identity_source": "manual_user_input",
                     },
                 )
@@ -922,6 +946,9 @@ def run_analysis(
                 market_data.additional_metadata["manual_revenue_user_provided"] = True
                 market_data.additional_metadata["manual_revenue_year"] = _manual_revenue_year
                 market_data.additional_metadata["manual_revenue_source_note"] = _manual_revenue_note
+                market_data.additional_metadata["manual_ebitda_margin"] = _manual_ebitda_margin
+                market_data.additional_metadata["manual_growth"] = _manual_growth
+                market_data.additional_metadata["manual_net_debt"] = _manual_net_debt
             _private_manual_revenue_used = True
             if manual_identity_confirmed:
                 _private_manual_identity_override = True
@@ -962,6 +989,12 @@ def run_analysis(
                     "manual_user_input",
                     "manual",
                 )
+            if _manual_ebitda_margin is not None:
+                sources.add_once("Manual EBITDA Margin", f"{_manual_ebitda_margin:.1%}", "manual_user_input", "manual")
+            if _manual_growth is not None:
+                sources.add_once("Manual Revenue Growth", f"{_manual_growth:+.1%}", "manual_user_input", "manual")
+            if _manual_net_debt is not None:
+                sources.add_once("Manual Net Debt", f"{_manual_revenue_ccy} {_manual_net_debt:.0f}M", "manual_user_input", "manual")
             if manual_identity_confirmed:
                 sources.add_once(
                     "Manual Identity Confirmation",
@@ -1126,11 +1159,10 @@ def run_analysis(
             )
             _has_weak_identity = bool(_has_source_backed_identity and str(market_data.company_name or "").strip())
             _private_identity_resolved = bool(_has_strong_id or _has_weak_identity)
-            if _private_manual_revenue_used and not _private_identity_resolved:
-                # Private-mode policy: manual revenue can unlock an indicative
-                # valuation path even when legal identity is unresolved, but
-                # confidence and recommendation are capped and warnings remain explicit.
-                _private_manual_identity_override = True
+            if _private_manual_revenue_used and not _private_identity_resolved and not manual_identity_confirmed:
+                _private_screen_only_reasons.append(
+                    "manual revenue provided, but legal identity unresolved; pass --manual-identity-confirmed to unlock indicative valuation"
+                )
             _private_identity_status = (
                 "RESOLVED_STRONG"
                 if _has_strong_id
@@ -2113,6 +2145,41 @@ def run_analysis(
         fin.ebitda_margin = "Not available [screen-only: non-valuation-grade]"
         fin.free_cash_flow = "Not available [screen-only: non-valuation-grade]"
         fin.net_margin = "Not available [screen-only: non-valuation-grade]"
+    # Manual private inputs (indicative mode only): allow user-provided
+    # overrides to drive deterministic valuation while keeping low confidence.
+    if company_type == "private" and market_data and not _private_screen_only:
+        _md_meta = market_data.additional_metadata if isinstance(market_data.additional_metadata, dict) else {}
+        try:
+            _m_ebitda = _md_meta.get("manual_ebitda_margin")
+            if _m_ebitda is not None:
+                fin.ebitda_margin = f"{float(_m_ebitda):.1%}"
+                market_data.ebitda_margin = float(_m_ebitda)
+                sources.add_once("EBITDA Margin", f"{float(_m_ebitda):.1%}", "manual_user_input", "manual")
+        except Exception:
+            pass
+        try:
+            _m_growth = _md_meta.get("manual_growth")
+            if _m_growth is not None:
+                fin.revenue_growth = f"{float(_m_growth):+.1%}"
+                market_data.forward_revenue_growth = float(_m_growth)
+                sources.add_once("Revenue Growth", f"{float(_m_growth):+.1%}", "manual_user_input", "manual")
+        except Exception:
+            pass
+        try:
+            _m_nd = _md_meta.get("manual_net_debt")
+            if _m_nd is not None:
+                market_data.net_debt = float(_m_nd)
+                _ccy = str(_md_meta.get("financial_currency_normalized") or _md_meta.get("financial_currency") or "USD")
+                sources.add_once("Net Debt", f"{_ccy} {float(_m_nd):.0f}M", "manual_user_input", "manual")
+            elif _private_manual_revenue_used and market_data.net_debt is None:
+                market_data.net_debt = 0.0
+                _ccy = str(_md_meta.get("financial_currency_normalized") or _md_meta.get("financial_currency") or "USD")
+                sources.add_once("Net Debt", f"{_ccy} 0M (assumed)", "assumed_zero", "inferred")
+                quality_warning = "Net debt assumed 0; verify capital structure."
+                # quality may not exist yet here; keep as note source only.
+                sources.add_once("Manual Net Debt Assumption", quality_warning, "assumed_zero", "inferred")
+        except Exception:
+            pass
     if company_type == "private":
         _has_provider_payload = bool(market_data and str(market_data.data_source or "").strip())
         if _has_provider_payload and _private_revenue_quality in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}:
@@ -3642,12 +3709,12 @@ def run_analysis(
         elif valuation_status == "FAILED":
             _private_valuation_mode = "FAILED"
         elif _private_revenue_quality == "MANUAL":
-            _private_valuation_mode = "INDICATIVE_MANUAL_REVENUE"
+            _private_valuation_mode = "INDICATIVE_MANUAL"
         else:
             _private_valuation_mode = "VALUATION_GRADE"
         if _private_valuation_mode == "FAILED":
             _private_state = "VALUATION_FAILED"
-        elif _private_valuation_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL_REVENUE"}:
+        elif _private_valuation_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL"}:
             if _private_revenue_quality == "MANUAL":
                 _private_state = "VALUATION_READY_MANUAL_REVENUE"
             else:

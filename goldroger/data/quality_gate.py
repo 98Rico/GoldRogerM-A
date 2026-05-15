@@ -198,6 +198,11 @@ def _score_private(market_data, checks, warnings, score: int, has_estimated_inpu
         return score, has_estimated_inputs
     if conf == "verified":
         checks["confidence"] = "verified"
+    elif conf == "manual":
+        score -= 10
+        checks["confidence"] = "manual"
+        warnings.append("Private revenue source: manual user input")
+        has_estimated_inputs = True
     elif conf == "estimated":
         score -= 8
         checks["confidence"] = "estimated"

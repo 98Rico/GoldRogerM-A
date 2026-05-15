@@ -364,13 +364,13 @@ def test_pipeline_status_block_private_manual_mode_semantics():
             "private_financials_quality": "ESTIMATED",
             "private_peers_state": "WEAK",
             "private_provider_state": "PARTIAL",
-            "private_valuation_mode": "INDICATIVE_MANUAL_REVENUE",
+            "private_valuation_mode": "INDICATIVE_MANUAL",
             "private_state": "VALUATION_READY_MANUAL_REVENUE",
             "private_manual_revenue_used": True,
         }
     )
-    assert "Valuation: INDICATIVE_MANUAL_REVENUE" in block
-    assert "Private valuation mode: INDICATIVE_MANUAL_REVENUE" in block
+    assert "Valuation: INDICATIVE_MANUAL" in block
+    assert "Private valuation mode: INDICATIVE_MANUAL" in block
     assert "Revenue confidence: manual_user_provided" in block
     assert "Manual revenue override: yes (user-provided, unverified)" in block
 

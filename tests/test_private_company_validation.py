@@ -345,7 +345,7 @@ def test_private_manual_revenue_enables_valuation_with_resolved_identity(monkeyp
     )
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_revenue_quality")) == "MANUAL"
-    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
     assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
     assert str(ps.get("private_identity_status")) == "RESOLVED_STRONG"
     assert bool(ps.get("private_manual_revenue_used")) is True
@@ -371,14 +371,14 @@ def test_private_manual_revenue_can_unlock_with_manual_identity_confirmation(mon
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_revenue_quality")) == "MANUAL"
     assert bool(ps.get("private_manual_revenue_used")) is True
-    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
     assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
     assert str(ps.get("private_identity_status")) == "UNRESOLVED"
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
     assert "manual_user_input" in (analysis.sources_md or "").lower()
 
 
-def test_private_manual_revenue_without_identity_confirmation_is_indicative_with_identity_warning(monkeypatch):
+def test_private_manual_revenue_without_identity_confirmation_stays_screen_only(monkeypatch):
     weak_md = _md(company="Personio", source="crunchbase", revenue_m=None, confidence="inferred", sector="Technology")
     analysis = _run_private_case(
         monkeypatch,
@@ -394,9 +394,9 @@ def test_private_manual_revenue_without_identity_confirmation_is_indicative_with
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_revenue_quality")) == "MANUAL"
     assert str(ps.get("private_identity_status")) == "UNRESOLVED"
-    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
-    assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
-    assert str(ps.get("confidence")).lower() in {"low", "medium"}
+    assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
+    assert str(ps.get("private_state")) == "IDENTITY_UNRESOLVED"
+    assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
 
 
 def test_private_manual_revenue_with_weak_identity_is_indicative_only(monkeypatch):
@@ -417,7 +417,7 @@ def test_private_manual_revenue_with_weak_identity_is_indicative_only(monkeypatc
     ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(ps.get("private_identity_status")) == "RESOLVED_WEAK"
     assert str(ps.get("private_revenue_quality")) == "MANUAL"
-    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL_REVENUE"
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
     assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
     assert "LOW CONVICTION" in str(analysis.valuation.recommendation or "").upper()

@@ -304,7 +304,7 @@ This mechanism already exists in the current codebase and is used by `--type pri
   - no revenue or low-confidence inferred/triangulated revenue -> `SCREEN_ONLY` + `INCONCLUSIVE`
   - weak identity resolution -> `SCREEN_ONLY` + `INCONCLUSIVE`
   - only verified/high-confidence revenue with resolved identity can be `VALUATION_GRADE`
-  - manual revenue can unlock only `INDICATIVE_MANUAL_REVENUE` with explicit confidence caps
+  - manual revenue can unlock only `INDICATIVE_MANUAL` with explicit confidence caps
 
 ### 5b) Private status semantics
 
@@ -313,7 +313,7 @@ Private runs use private-specific trust labels in `Pipeline status`:
 - `Revenue`: `VERIFIED` / `HIGH_CONFIDENCE_ESTIMATE` / `LOW_CONFIDENCE_ESTIMATE` / `UNAVAILABLE`
 - `Financials`: `VERIFIED` / `ESTIMATED` / `UNAVAILABLE`
 - `Private peers`: `OK` / `WEAK` / `FAILED`
-- `Private valuation mode`: `VALUATION_GRADE` / `INDICATIVE_MANUAL_REVENUE` / `SCREEN_ONLY` / `FAILED`
+- `Private valuation mode`: `VALUATION_GRADE` / `INDICATIVE_MANUAL` / `SCREEN_ONLY` / `FAILED`
 
 Private state-machine states:
 - `IDENTITY_UNRESOLVED`
@@ -337,7 +337,7 @@ When `SCREEN_ONLY` is active:
 Identity-gate policy:
 - `RESOLVED_STRONG` + verified/high-confidence/manual revenue can unlock valuation.
 - `RESOLVED_WEAK` + verified/manual revenue can unlock only low-conviction valuation.
-- `UNRESOLVED` + manual revenue can unlock `INDICATIVE_MANUAL_REVENUE` only (not valuation-grade), with explicit legal-identity warning and capped confidence.
+- `UNRESOLVED` + manual revenue can unlock `INDICATIVE_MANUAL` only (not valuation-grade), with explicit legal-identity warning and capped confidence.
 - `UNRESOLVED` without manual revenue remains `SCREEN_ONLY`.
 
 Private qualitative peer buckets now prefer context-specific taxonomy when available, for example:
@@ -434,7 +434,7 @@ uv run python -m goldroger.cli \
 
 Manual-input behavior:
 - Revenue is tagged `manual user-provided, unverified`.
-- Pipeline status shows `Private valuation mode: INDICATIVE_MANUAL_REVENUE`.
+- Pipeline status shows `Private valuation mode: INDICATIVE_MANUAL`.
 - Confidence is capped; output remains indicative and non-client-ready.
 
 ### Typical outcomes (private prototype)
@@ -446,7 +446,7 @@ Manual-input behavior:
 - **Personio (DE) without legal identifier/revenue**
   - typically `UNRESOLVED` + revenue unavailable -> `SCREEN_ONLY`, `INCONCLUSIVE`.
 - **Personio (DE) with manual revenue**
-  - can unlock `INDICATIVE_MANUAL_REVENUE` with explicit identity/revenue caveats and capped confidence.
+  - can unlock `INDICATIVE_MANUAL` with explicit identity/revenue caveats and capped confidence.
 
 ### Export artifacts
 

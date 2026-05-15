@@ -704,7 +704,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     )
     if _is_private:
         _p_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
-        if _p_val_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL_REVENUE", "SCREEN_ONLY", "FAILED"}:
+        if _p_val_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL", "SCREEN_ONLY", "FAILED"}:
             valuation_state = _p_val_mode
     rec_state = str(pipeline_status.get("recommendation", "N/A"))
     _qual_backed_avail = pipeline_status.get("source_backed_market_context_available")
@@ -855,7 +855,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             f"\n  Private state: {_private_state or 'SCREEN_ONLY'}"
             f"\n  Private valuation mode: {_private_val_mode or 'SCREEN_ONLY'}"
         )
-        if _private_val_mode == "INDICATIVE_MANUAL_REVENUE":
+        if _private_val_mode in {"INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL"}:
             block += "\n  Revenue confidence: manual_user_provided"
         if isinstance(_private_used, list) and _private_used:
             block += "\n  Used providers: " + ", ".join(str(x) for x in _private_used if str(x).strip())
@@ -945,7 +945,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         except Exception:
             pass
     if _is_private:
-        if _private_val_mode == "INDICATIVE_MANUAL_REVENUE":
+        if _private_val_mode in {"INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL"}:
             _valuation_inputs_state = "private market data + manual revenue input (unverified)"
         elif _private_val_mode == "VALUATION_GRADE" and _private_rev_quality in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}:
             _valuation_inputs_state = "private market data + verified quantitative context"
@@ -1765,6 +1765,24 @@ def main():
         help="Fiscal year for --manual-revenue (for provenance only).",
     )
     parser.add_argument(
+        "--manual-ebitda-margin",
+        type=float,
+        default=None,
+        help="Optional manual EBITDA margin in percent points (private, indicative only).",
+    )
+    parser.add_argument(
+        "--manual-growth",
+        type=float,
+        default=None,
+        help="Optional manual revenue growth in percent points (private, indicative only).",
+    )
+    parser.add_argument(
+        "--manual-net-debt",
+        type=float,
+        default=None,
+        help="Optional manual net debt in millions (private, indicative only).",
+    )
+    parser.add_argument(
         "--manual-revenue-source-note",
         default="",
         help="Short provenance note for manual revenue input.",
@@ -1862,6 +1880,9 @@ def main():
                                    manual_revenue_currency=args.manual_revenue_currency,
                                    manual_revenue_year=args.manual_revenue_year,
                                    manual_revenue_source_note=args.manual_revenue_source_note,
+                                   manual_ebitda_margin=args.manual_ebitda_margin,
+                                   manual_growth=args.manual_growth,
+                                   manual_net_debt=args.manual_net_debt,
                                    manual_identity_confirmed=bool(args.manual_identity_confirmed),
                                    quick_mode=args.quick, full_report=args.full_report,
                                    debug=args.debug, cli_mode=True)
