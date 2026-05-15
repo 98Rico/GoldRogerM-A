@@ -190,6 +190,12 @@ def _score_private(market_data, checks, warnings, score: int, has_estimated_inpu
 
     checks["provider_record"] = "ok"
     conf = (market_data.confidence or "inferred").lower()
+    if market_data.revenue_ttm is None:
+        score -= 12
+        checks["confidence"] = "unavailable"
+        warnings.append("Private revenue unavailable")
+        has_estimated_inputs = True
+        return score, has_estimated_inputs
     if conf == "verified":
         checks["confidence"] = "verified"
     elif conf == "estimated":

@@ -330,6 +330,7 @@ When `SCREEN_ONLY` is active:
 - football-field scenarios are suppressed,
 - LBO feasibility is treated as diagnostic and not rendered as investable output,
 - qualitative peers can still be shown for context (`qualitative peer only`, 0% weight; reference-only, not used in valuation math),
+- peer status is reported as `REFERENCE_PEERS_ONLY` or `REFERENCE_PEERS_WEAK` (not comps-ready labels),
 - key financial lines are shown as non-valuation-grade when necessary,
 - Value Sources mark unavailable lines as `not available — excluded from valuation` (not model output).
 

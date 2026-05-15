@@ -81,8 +81,12 @@ def _fetch_company_suggestions(query: str, company_type: str, country_hint: str 
                         "country_hint": country_hint or "",
                     }
                 )
-            if out:
+            if out and company_type == "public":
                 return out[:7]
+            if out and company_type != "public":
+                # Keep yahoo/name hints for private confirmation, but do not
+                # short-circuit registry lookups (Infogreffe/Companies House/etc.).
+                out = out[:7]
     except Exception:
         pass
     # Public fallback: use internal ticker resolver and direct ticker heuristic.
@@ -775,6 +779,12 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _thesis_mode = "source-backed"
     else:
         _thesis_mode = "generic fallback"
+    # Private screen-only runs should use reference-peer semantics, not comps-ready wording.
+    if _is_private and str(pipeline_status.get("private_valuation_mode", "") or "").upper() == "SCREEN_ONLY":
+        if peers_state in {"PURE_COMPS_OK", "MIXED_COMPS_OK", "ADJACENT_COMPS_OK", "ADJACENT_COMPS", "NO_PURE_COMPS"}:
+            peers_state = "REFERENCE_PEERS_ONLY"
+        elif peers_state in {"PEERS_FAILED", "PEERS_DEGRADED"}:
+            peers_state = "REFERENCE_PEERS_WEAK"
     block = (
         "[bold]Pipeline status:[/bold]\n"
         f"  Market data: {market_data_state}\n"
@@ -808,6 +818,11 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _private_rev_quality = str(pipeline_status.get("private_revenue_quality", "") or "").strip().upper()
         _private_fin_q = str(pipeline_status.get("private_financials_quality", "") or "").strip().upper()
         _private_peers = str(pipeline_status.get("private_peers_state", "") or "").strip().upper()
+        if _private_val_mode == "SCREEN_ONLY":
+            if _private_peers in {"OK", "WEAK"}:
+                _private_peers = f"{_private_peers}_REFERENCE_ONLY"
+            elif not _private_peers:
+                _private_peers = "WEAK_REFERENCE_ONLY"
         _private_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
         _private_state = str(pipeline_status.get("private_state", "") or "").strip().upper()
         _private_provider_state = str(pipeline_status.get("private_provider_state", "") or "").strip().upper()
@@ -978,10 +993,17 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     _adj_w = pipeline_status.get("adjacent_peer_weight")
     if _pure_w is not None and _adj_w is not None:
         try:
-            block += (
-                f"\n  Pure peer weight: {float(_pure_w):.1%} | "
-                f"Adjacent peer weight: {float(_adj_w):.1%}"
-            )
+            if _is_private and str(pipeline_status.get("private_valuation_mode", "") or "").upper() == "SCREEN_ONLY":
+                block += (
+                    f"\n  Reference peer mix: {float(_pure_w):.1%} core / "
+                    f"{float(_adj_w):.1%} adjacent"
+                    "\n  Valuation peer weight: 0.0% because private valuation is gated"
+                )
+            else:
+                block += (
+                    f"\n  Pure peer weight: {float(_pure_w):.1%} | "
+                    f"Adjacent peer weight: {float(_adj_w):.1%}"
+                )
         except Exception:
             pass
     _norm_status = str(pipeline_status.get("normalization_status", "") or "").strip()

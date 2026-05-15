@@ -341,8 +341,11 @@ def test_pipeline_status_block_uses_private_status_semantics():
     assert "Used providers: infogreffe" in block
     assert "Skipped providers: pappers" in block
     assert "Private valuation mode: SCREEN_ONLY" in block
+    assert "Peers: REFERENCE_PEERS_WEAK" in block
+    assert "Private peers: FAILED" in block or "Private peers: WEAK_REFERENCE_ONLY" in block
     assert "Screen-only reasons: legal identity weakly resolved (no strong legal identifier), verified revenue unavailable" in block
     assert "What would unlock valuation:" in block
+    assert "Valuation inputs: none — valuation gated" in block
 
 
 def test_pipeline_status_block_private_manual_mode_semantics():
@@ -375,3 +378,29 @@ def test_pipeline_status_block_private_manual_mode_semantics():
 def test_infer_source_note_screen_only_values_are_not_logged_as_analysis_output():
     note = _infer_source_note("Revenue Growth", "N/A [screen-only: non-valuation-grade]", {})
     assert "excluded from valuation" in note
+
+
+def test_pipeline_status_block_private_screen_only_reference_peer_mix():
+    block, _ = _render_pipeline_status_block(
+        {
+            "company_type": "private",
+            "research_enrichment": "PARTIAL_FALLBACK",
+            "peers": "MIXED_COMPS_OK",
+            "valuation": "FAILED",
+            "confidence": "Low",
+            "recommendation": "INCONCLUSIVE",
+            "private_revenue_status": "unavailable",
+            "private_revenue_quality": "UNAVAILABLE",
+            "private_identity_status": "RESOLVED_STRONG",
+            "private_financials_quality": "UNAVAILABLE",
+            "private_peers_state": "OK_REFERENCE_ONLY",
+            "private_provider_state": "PARTIAL",
+            "private_valuation_mode": "SCREEN_ONLY",
+            "pure_peer_weight": 0.8,
+            "adjacent_peer_weight": 0.2,
+        }
+    )
+    assert "Peers: REFERENCE_PEERS_ONLY" in block
+    assert "Private peers: OK_REFERENCE_ONLY" in block
+    assert "Reference peer mix: 80.0% core / 20.0% adjacent" in block
+    assert "Valuation peer weight: 0.0% because private valuation is gated" in block

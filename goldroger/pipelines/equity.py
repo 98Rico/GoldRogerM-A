@@ -2724,7 +2724,12 @@ def run_analysis(
     if _missing_consumer_ecosystem_bucket and peers_status == "OK":
         peers_status = "OK_ADJACENT"
     if company_type == "private":
-        if peer_multiples and (peer_multiples.n_valuation_peers or 0) >= 3:
+        if _private_screen_only:
+            if peer_multiples and (peer_multiples.n_peers or 0) > 0:
+                _private_peers_state = "OK_REFERENCE_ONLY"
+            else:
+                _private_peers_state = "WEAK_REFERENCE_ONLY"
+        elif peer_multiples and (peer_multiples.n_valuation_peers or 0) >= 3:
             _private_peers_state = "OK"
         elif peer_multiples and (peer_multiples.n_peers or 0) > 0:
             _private_peers_state = "WEAK"
@@ -4501,6 +4506,11 @@ def run_analysis(
             _peers_display_status = "ADJACENT_COMPS_OK"
         else:
             _peers_display_status = "NO_PURE_COMPS"
+    if company_type == "private" and _private_screen_only:
+        if peer_multiples and (peer_multiples.n_peers or 0) > 0:
+            _peers_display_status = "REFERENCE_PEERS_ONLY"
+        else:
+            _peers_display_status = "REFERENCE_PEERS_WEAK"
     _peers_is_low_conf = _peers_display_status in {
         "ADJACENT_COMPS_LOW_DIVERSITY",
         "ADJACENT_COMPS",
