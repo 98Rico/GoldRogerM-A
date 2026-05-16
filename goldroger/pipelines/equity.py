@@ -4024,12 +4024,11 @@ def run_analysis(
             elif _m.name.startswith("Trading Comps"):
                 _m.low = str(round(scenarios_out.bear.comps_ev_mid, 1))
                 _m.high = str(round(scenarios_out.bull.comps_ev_mid, 1))
-        _blend_name = (
-            "DCF-only Valuation"
-            if (_w_dcf == 100 and _w_comp == 0 and _w_tx == 0)
-            else "Blended Valuation"
+        _dcf_only_mode = bool(_w_dcf == 100 and _w_comp == 0 and _w_tx == 0)
+        _blend_name = "Final Indicative Manual EV" if (company_type == "private" and _dcf_only_mode) else (
+            "DCF-only Valuation" if _dcf_only_mode else "Blended Valuation"
         )
-        if not (_w_dcf == 100 and _w_comp == 0 and _w_tx == 0):
+        if not _dcf_only_mode:
             val.methods.append(
                 ValuationMethod(
                     name=_blend_name,
@@ -4039,6 +4038,12 @@ def run_analysis(
                     weight=100,
                 )
             )
+        elif company_type == "private":
+            # Keep method table explicit and consistent when DCF is the only
+            # valuation-grade method included.
+            for _m in val.methods:
+                if _m.name == "DCF":
+                    _m.weight = 100
         # Ensure base scenario reconciles with current method outputs and blend.
         if football_field.base:
             if result.dcf:
@@ -4047,6 +4052,22 @@ def run_analysis(
                 football_field.base.comps_ev = _fmt_ev(result.comps.mid)
             if blended_ev:
                 football_field.base.blended_ev = _fmt_ev(blended_ev)
+        if company_type == "private" and football_field and football_field.bear and football_field.base and football_field.bull:
+            _ev_low_m = scenarios_out.bear.blended_ev
+            _ev_base_m = blended_ev if blended_ev is not None else scenarios_out.base.blended_ev
+            _ev_high_m = scenarios_out.bull.blended_ev
+            sources.add_once(
+                "Indicative Manual EV Range",
+                f"{_fmt_ev_human(_ev_low_m, _quote_ccy)}–{_fmt_ev_human(_ev_high_m, _quote_ccy)}",
+                "scenario_blended",
+                "inferred",
+            )
+            sources.add_once(
+                "Indicative Manual EV Base",
+                _fmt_ev_human(_ev_base_m, _quote_ccy),
+                "valuation_engine",
+                "inferred",
+            )
         # Scenario-based fair-value range in price space, must contain point estimate.
         if (
             rec.intrinsic_price is not None
@@ -4141,6 +4162,16 @@ def run_analysis(
             rec.intrinsic_price = None
             valuation_status = "FAILED"
             _private_cap_reason = "valuation integrity failed (scenario ordering); manual-indicative output suppressed"
+            result.field_sources["Enterprise Value (blended)"] = (
+                "N/A",
+                "valuation_suppressed_integrity_failure",
+                "unavailable",
+            )
+            result.field_sources["Indicative Manual EV"] = (
+                "N/A",
+                "valuation_suppressed_integrity_failure",
+                "unavailable",
+            )
 
     # ── 5c. IC SCORING ────────────────────────────────────────────────────
     try:

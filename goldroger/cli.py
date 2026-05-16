@@ -395,11 +395,21 @@ def _metric_source_keys(metric: str) -> list[str]:
         "Terminal Growth": ["Terminal Growth"],
         "Blended Valuation": ["Blended EV Calculation", "Enterprise Value (blended)"],
         "DCF-only Valuation": ["Blended EV Calculation", "Enterprise Value (blended)"],
+        "Indicative Manual EV Range": ["Indicative Manual EV Range"],
+        "Indicative Manual EV Base": ["Indicative Manual EV Base", "Enterprise Value (blended)"],
     }
     return aliases.get(metric, [metric])
 
 
 def _infer_source_note(metric: str, value: str, src_map: dict[str, dict[str, str]]) -> str:
+    if metric in {"Indicative Manual EV", "Indicative Manual EV Base", "Indicative Manual EV Range"}:
+        entry = src_map.get(metric) or src_map.get("Enterprise Value (blended)")
+        if entry:
+            if entry.get("source") == "valuation_suppressed_integrity_failure":
+                return f"{metric}: not available — valuation integrity failed"
+            return f"{metric}: {entry['source']} ({entry['confidence']})"
+        if str(value or "").strip().upper() in {"N/A", ""}:
+            return f"{metric}: not available — valuation integrity failed"
     if metric == "Fair Value Range":
         entry = src_map.get("Fair Value Range")
         if entry:
@@ -1140,7 +1150,7 @@ def print_result(result, debug: bool = False):
     console.print()
     _target_display = "N/A" if (_is_inconclusive or _private_screen_only_mode) else (v.target_price or v.implied_value)
     _confidence = str(_pipeline_status.get("confidence", "")).lower()
-    if (not _is_inconclusive) and _confidence == "low" and isinstance(_target_display, str):
+    if (not _is_inconclusive) and _confidence == "low" and isinstance(_target_display, str) and not _private_indicative_manual_mode:
         _pt = _extract_first_number(_target_display)
         if _pt is not None:
             _target_display = f"~{_fmt_price_human(_pt, _run_ccy, decimals=0)}"
@@ -1163,10 +1173,12 @@ def print_result(result, debug: bool = False):
     _pt_label = "Indicative Value" if ((not _is_inconclusive) and _confidence == "low") else "Point Estimate"
     _is_low_conf = ((not _is_inconclusive) and _confidence == "low")
     if _private_screen_only_mode:
-        _target_line = "Target: N/A | Private screen-only profile (identity/revenue gates not satisfied)"
+        _target_line = "Private screen-only profile (identity/revenue gates not satisfied)"
     elif _private_indicative_manual_mode:
-        _ev_range = _value_with_source("Fair Value Range", _fv_range or "N/A")
-        _ev_base = _value_with_source("Enterprise Value (blended)", _target_display)
+        _ev_range_raw = _source_value("Indicative Manual EV Range") or "N/A"
+        _ev_base_raw = _source_value("Indicative Manual EV Base") or _source_value("Enterprise Value (blended)") or _target_display
+        _ev_range = _value_with_source("Indicative Manual EV Range", _ev_range_raw)
+        _ev_base = _value_with_source("Indicative Manual EV Base", _ev_base_raw)
         if _is_inconclusive or str(_target_display).strip().upper() in {"", "N/A"}:
             _target_line = "Indicative Manual EV: N/A | Manual revenue input — valuation integrity failed"
         else:
@@ -1416,9 +1428,9 @@ def print_result(result, debug: bool = False):
         and (not _private_screen_only_mode)
         and _ev_bridge
     ):
-        _tag_ev = footnotes.tag(_infer_source_note("Enterprise Value (blended)", _ev_bridge, src_map))
-        _ev_range = src_map.get("Fair Value Range", {}).get("value") or "N/A"
-        _tag_rng = footnotes.tag(_infer_source_note("Fair Value Range", _ev_range, src_map))
+        _tag_ev = footnotes.tag(_infer_source_note("Indicative Manual EV Base", _ev_bridge, src_map))
+        _ev_range = src_map.get("Indicative Manual EV Range", {}).get("value") or "N/A"
+        _tag_rng = footnotes.tag(_infer_source_note("Indicative Manual EV Range", _ev_range, src_map))
         console.print(
             f"[dim]Private indicative EV:[/] Base EV {_ev_bridge}{_tag_ev} | EV Range {_ev_range}{_tag_rng}"
         )
