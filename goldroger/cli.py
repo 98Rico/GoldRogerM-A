@@ -403,7 +403,7 @@ def _metric_source_keys(metric: str) -> list[str]:
 
 def _infer_source_note(metric: str, value: str, src_map: dict[str, dict[str, str]]) -> str:
     if metric in {"Indicative Manual EV", "Indicative Manual EV Base", "Indicative Manual EV Range"}:
-        entry = src_map.get(metric) or src_map.get("Enterprise Value (blended)")
+        entry = src_map.get(metric)
         if entry:
             if entry.get("source") == "valuation_suppressed_integrity_failure":
                 return f"{metric}: not available — valuation integrity failed"
@@ -1378,6 +1378,8 @@ def print_result(result, debug: bool = False):
             f"  Total: {_fmt_timing_s(_timings.get('total', 'N/A'))}"
         )
     _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
+    if _is_private_run:
+        _ev_bridge = src_map.get("Indicative Manual EV Base", {}).get("value") or _ev_bridge
     _eq_bridge = src_map.get("Equity Value", {}).get("value")
     _nd_bridge = src_map.get("Net Debt", {}).get("value")
     _nd_bridge_orig = src_map.get("Net Debt (original currency)", {}).get("value") or _nd_bridge
@@ -1696,6 +1698,8 @@ def print_result(result, debug: bool = False):
                 source_metric = "Transaction Comps"
             elif method.name == "DCF":
                 source_metric = "WACC"
+            elif method.name == "Final Indicative Manual EV":
+                source_metric = "Indicative Manual EV Base"
             else:
                 source_metric = method.name
             method_note = footnotes.tag(_infer_source_note(source_metric, method.mid or "", src_map))

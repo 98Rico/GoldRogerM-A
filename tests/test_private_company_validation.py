@@ -76,6 +76,24 @@ def _peer_stub() -> PeerMultiples:
     )
 
 
+def _qual_only_peer_stub() -> PeerMultiples:
+    peers = [
+        PeerData(name="PayPal", ticker="PYPL", ev_ebitda=6.0, market_cap=40_000.0, bucket="fintech_payments", role="qualitative peer only", weight=0.0),
+        PeerData(name="Nubank", ticker="NU", ev_ebitda=None, market_cap=60_000.0, bucket="fintech_digital_bank", role="qualitative peer only", weight=0.0),
+    ]
+    return PeerMultiples(
+        peers=peers,
+        n_peers=2,
+        n_valuation_peers=0,
+        n_qualitative_peers=2,
+        effective_peer_count=0.0,
+        pure_peer_weight_share=0.0,
+        adjacent_peer_weight_share=1.0,
+        peer_set_type="adjacent_reference_set",
+        source="yfinance_peers_low_confidence",
+    )
+
+
 def _run_private_case(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -90,6 +108,9 @@ def _run_private_case(
     manual_revenue_currency: str = "USD",
     manual_revenue_year: int | None = None,
     manual_revenue_source_note: str = "",
+    manual_ebitda_margin: float | None = None,
+    manual_growth: float | None = None,
+    manual_net_debt: float | None = None,
     manual_identity_confirmed: bool = False,
     company_identifier: str = "",
     peer_multiples_override: PeerMultiples | None = None,
@@ -141,6 +162,9 @@ def _run_private_case(
         manual_revenue_currency=manual_revenue_currency,
         manual_revenue_year=manual_revenue_year,
         manual_revenue_source_note=manual_revenue_source_note,
+        manual_ebitda_margin=manual_ebitda_margin,
+        manual_growth=manual_growth,
+        manual_net_debt=manual_net_debt,
         manual_identity_confirmed=manual_identity_confirmed,
     )
 
@@ -328,7 +352,7 @@ def test_private_missing_pappers_key_is_logged_as_limitation(monkeypatch):
 
 
 def test_private_manual_revenue_enables_valuation_with_resolved_identity(monkeypatch):
-    md = _md(company="Revolut Ltd", source="companies_house", revenue_m=None, confidence="inferred", sector="Financials")
+    md = _md(company="Revolut Ltd", source="companies_house", revenue_m=None, confidence="inferred", sector="Technology")
     md.additional_metadata = {"company_number": "08804411", "financial_currency": "GBP"}
     analysis = _run_private_case(
         monkeypatch,
@@ -454,6 +478,163 @@ def test_private_screen_only_still_surfaces_qualitative_peers(monkeypatch):
     assert analysis.peer_comps is not None
     assert len(analysis.peer_comps.peers) >= 1
     assert all((p.role or "").lower() == "qualitative peer only" for p in analysis.peer_comps.peers)
+
+
+def test_private_manual_integrity_failure_marks_ev_unavailable_and_ebitda_not_manual(monkeypatch):
+    import goldroger.pipelines.equity as eq
+
+    def _boom(*args, **kwargs):
+        raise ValueError("scenario ordering failed (blended low/base/high invariant violated)")
+
+    monkeypatch.setattr(eq, "run_scenarios", _boom)
+    md = _md(company="Doctolib", source="infogreffe", revenue_m=None, confidence="inferred", sector="Healthcare")
+    md.additional_metadata = {"siren": "794598813", "country": "France"}
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Doctolib",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+        company_identifier="794598813",
+        manual_revenue=350.0,
+        manual_revenue_currency="EUR",
+        manual_revenue_year=2024,
+    )
+    assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
+    assert analysis.football_field is None
+    src = _parse_sources_md(analysis.sources_md or "")
+    assert src.get("Indicative Manual EV Range", {}).get("source") == "valuation_suppressed_integrity_failure"
+    assert src.get("Indicative Manual EV Base", {}).get("source") == "valuation_suppressed_integrity_failure"
+    assert src.get("EBITDA Margin", {}).get("source") != "manual_user_input"
+
+
+def test_private_manual_dcf_only_has_explicit_final_row_and_reference_peers_status(monkeypatch):
+    import goldroger.pipelines.equity as eq
+    from goldroger.finance.core.scenarios import ScenariosOutput, ScenarioResult
+
+    def _good_scenarios(*args, **kwargs):
+        return ScenariosOutput(
+            bear=ScenarioResult(
+                name="Bear",
+                label="Downside",
+                dcf_ev=1800.0,
+                comps_ev_low=0.0,
+                comps_ev_mid=0.0,
+                comps_ev_high=0.0,
+                tx_ev=0.0,
+                blended_ev=1800.0,
+                wacc_used=0.12,
+                terminal_growth_used=0.02,
+                ebitda_margin_used=0.12,
+                revenue_year1=2000.0,
+            ),
+            base=ScenarioResult(
+                name="Base",
+                label="Base",
+                dcf_ev=4100.0,
+                comps_ev_low=0.0,
+                comps_ev_mid=0.0,
+                comps_ev_high=0.0,
+                tx_ev=0.0,
+                blended_ev=4100.0,
+                wacc_used=0.11,
+                terminal_growth_used=0.02,
+                ebitda_margin_used=0.12,
+                revenue_year1=2200.0,
+            ),
+            bull=ScenarioResult(
+                name="Bull",
+                label="Upside",
+                dcf_ev=8000.0,
+                comps_ev_low=0.0,
+                comps_ev_mid=0.0,
+                comps_ev_high=0.0,
+                tx_ev=0.0,
+                blended_ev=8000.0,
+                wacc_used=0.10,
+                terminal_growth_used=0.02,
+                ebitda_margin_used=0.12,
+                revenue_year1=2400.0,
+            ),
+        )
+
+    monkeypatch.setattr(eq, "run_scenarios", _good_scenarios)
+    md = _md(company="Revolut Ltd", source="companies_house", revenue_m=None, confidence="inferred", sector="Technology")
+    md.additional_metadata = {"company_number": "08804411"}
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Revolut Ltd",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="GB",
+        company_identifier="08804411",
+        manual_revenue=2200.0,
+        manual_revenue_currency="GBP",
+        manual_revenue_year=2024,
+        manual_revenue_source_note="manual validation",
+        peer_multiples_override=_qual_only_peer_stub(),
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("peers")) in {"REFERENCE_PEERS_ONLY", "NO_VALUATION_PEERS_REFERENCE_ONLY"}
+    methods = analysis.valuation.methods or []
+    dcf = next((m for m in methods if m.name == "DCF"), None)
+    final = next((m for m in methods if m.name == "Final Indicative Manual EV"), None)
+    assert dcf is not None
+    if final is None:
+        # If scenario integrity suppresses valuation, final row is not rendered.
+        assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
+        assert analysis.football_field is None
+    else:
+        assert int(dcf.weight or 0) == 100
+        assert str(dcf.mid) == str(final.mid)
+        assert str(dcf.low) == str(final.low)
+        assert str(dcf.high) == str(final.high)
+
+
+def test_private_manual_source_tagging_only_marks_explicit_manual_fields(monkeypatch):
+    md = _md(company="Doctolib", source="infogreffe", revenue_m=None, confidence="inferred", sector="Healthcare")
+    md.additional_metadata = {"siren": "794598813", "country": "France"}
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Doctolib",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="FR",
+        company_identifier="794598813",
+        manual_revenue=350.0,
+        manual_revenue_currency="EUR",
+        manual_revenue_year=2024,
+    )
+    src = _parse_sources_md(analysis.sources_md or "")
+    assert src.get("Revenue TTM", {}).get("source") == "manual_user_input"
+    assert src.get("Modeled Revenue Growth", {}).get("source") != "manual_user_input"
+    assert src.get("EBITDA Margin", {}).get("source") != "manual_user_input"
+
+
+def test_private_manual_source_tagging_with_growth_and_ebitda_overrides(monkeypatch):
+    md = _md(company="Revolut Ltd", source="companies_house", revenue_m=None, confidence="inferred", sector="Financials")
+    md.additional_metadata = {"company_number": "08804411"}
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Revolut Ltd",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="GB",
+        company_identifier="08804411",
+        manual_revenue=2200.0,
+        manual_revenue_currency="GBP",
+        manual_revenue_year=2024,
+        manual_ebitda_margin=12.0,
+        manual_growth=30.0,
+    )
+    src = _parse_sources_md(analysis.sources_md or "")
+    assert src.get("Revenue TTM", {}).get("source") == "manual_user_input"
+    assert src.get("Modeled Revenue Growth", {}).get("source") == "manual_user_input"
+    assert src.get("EBITDA Margin", {}).get("source") == "manual_user_input"
 
 
 def test_private_identity_status_semantics_strong_weak_unresolved(monkeypatch):

@@ -945,6 +945,7 @@ def run_analysis(
                 market_data.additional_metadata.setdefault("quote_currency_normalized", _manual_revenue_ccy)
                 market_data.additional_metadata.setdefault("market_cap_currency", _manual_revenue_ccy)
                 market_data.additional_metadata["manual_revenue_user_provided"] = True
+                market_data.additional_metadata["manual_revenue_used"] = True
                 market_data.additional_metadata["manual_revenue_year"] = _manual_revenue_year
                 market_data.additional_metadata["manual_revenue_source_note"] = _manual_revenue_note
                 market_data.additional_metadata["manual_ebitda_margin"] = _manual_ebitda_margin
@@ -3245,10 +3246,19 @@ def run_analysis(
                 _w_comp = 0
             if not _tx_valuation_ready:
                 _w_tx = 0
-        if _w_dcf <= 0 and (_w_comp > 0 or _w_tx > 0):
+        if _w_comp == 0 and _w_tx == 0 and result.dcf:
+            _w_dcf = 100
+        elif _w_dcf <= 0 and (_w_comp > 0 or _w_tx > 0):
             _w_dcf = 100 - (_w_comp + _w_tx)
         if _w_dcf <= 0 and _w_comp <= 0 and _w_tx <= 0 and result.dcf:
             _w_dcf = 100
+        _w_total = _w_dcf + _w_comp + _w_tx
+        if _w_total > 0 and _w_total != 100:
+            _w_dcf = round((_w_dcf / _w_total) * 100)
+            _w_comp = round((_w_comp / _w_total) * 100)
+            _w_tx = round((_w_tx / _w_total) * 100)
+            _drift = 100 - (_w_dcf + _w_comp + _w_tx)
+            _w_dcf += _drift
 
     _methods: list = []
     if result.has_revenue and result.dcf and _w_dcf > 0:
@@ -3277,6 +3287,13 @@ def run_analysis(
             mid=str(round(result.transactions.implied_value, 1)),
             weight=_w_tx,
         ))
+    _private_dcf_only_mode = bool(company_type == "private" and _w_dcf == 100 and _w_comp == 0 and _w_tx == 0 and result.dcf)
+    if _private_dcf_only_mode and result.dcf:
+        blended_ev = float(result.dcf.enterprise_value)
+        try:
+            rec.ev_blended = blended_ev
+        except Exception:
+            pass
 
     # ── 5a. SOTP (conglomerates / multi-segment) ──────────────────────────
     _quote_ccy = str(normalization_audit.get("quote_currency") or "USD")
@@ -3924,6 +3941,11 @@ def run_analysis(
             except (ValueError, TypeError):
                 pass
 
+        _scenario_weights = {
+            "dcf": float(_w_dcf) / 100.0,
+            "comps": float(_w_comp) / 100.0,
+            "transactions": float(_w_tx) / 100.0,
+        }
         scenarios_out = run_scenarios(
             base_revenue=revenue_series,
             base_ebitda_margin=_ebitda_margin,
@@ -3945,7 +3967,7 @@ def run_analysis(
             da_pct=svc._resolve_da_pct(
                 market_data, revenue_series[-1] if revenue_series else None
             ),
-            weights=result.weights_used,
+            weights=_scenario_weights,
             y0_revenue=_y0_rev,
         )
 
@@ -4044,6 +4066,18 @@ def run_analysis(
             for _m in val.methods:
                 if _m.name == "DCF":
                     _m.weight = 100
+                    _m.low = str(round(scenarios_out.bear.dcf_ev, 1))
+                    _m.mid = str(round(float(result.dcf.enterprise_value), 1))
+                    _m.high = str(round(scenarios_out.bull.dcf_ev, 1))
+            val.methods.append(
+                ValuationMethod(
+                    name="Final Indicative Manual EV",
+                    low=str(round(scenarios_out.bear.dcf_ev, 1)),
+                    mid=str(round(float(result.dcf.enterprise_value), 1)),
+                    high=str(round(scenarios_out.bull.dcf_ev, 1)),
+                    weight=100,
+                )
+            )
         # Ensure base scenario reconciles with current method outputs and blend.
         if football_field.base:
             if result.dcf:
@@ -4053,9 +4087,14 @@ def run_analysis(
             if blended_ev:
                 football_field.base.blended_ev = _fmt_ev(blended_ev)
         if company_type == "private" and football_field and football_field.bear and football_field.base and football_field.bull:
-            _ev_low_m = scenarios_out.bear.blended_ev
-            _ev_base_m = blended_ev if blended_ev is not None else scenarios_out.base.blended_ev
-            _ev_high_m = scenarios_out.bull.blended_ev
+            if _dcf_only_mode and result.dcf:
+                _ev_low_m = scenarios_out.bear.dcf_ev
+                _ev_base_m = float(result.dcf.enterprise_value)
+                _ev_high_m = scenarios_out.bull.dcf_ev
+            else:
+                _ev_low_m = scenarios_out.bear.blended_ev
+                _ev_base_m = blended_ev if blended_ev is not None else scenarios_out.base.blended_ev
+                _ev_high_m = scenarios_out.bull.blended_ev
             sources.add_once(
                 "Indicative Manual EV Range",
                 f"{_fmt_ev_human(_ev_low_m, _quote_ccy)}–{_fmt_ev_human(_ev_high_m, _quote_ccy)}",
@@ -4064,6 +4103,16 @@ def run_analysis(
             )
             sources.add_once(
                 "Indicative Manual EV Base",
+                _fmt_ev_human(_ev_base_m, _quote_ccy),
+                "valuation_engine",
+                "inferred",
+            )
+            result.field_sources["Indicative Manual EV Range"] = (
+                f"{_fmt_ev_human(_ev_low_m, _quote_ccy)}–{_fmt_ev_human(_ev_high_m, _quote_ccy)}",
+                "scenario_blended",
+                "inferred",
+            )
+            result.field_sources["Indicative Manual EV Base"] = (
                 _fmt_ev_human(_ev_base_m, _quote_ccy),
                 "valuation_engine",
                 "inferred",
@@ -4168,6 +4217,28 @@ def run_analysis(
                 "unavailable",
             )
             result.field_sources["Indicative Manual EV"] = (
+                "N/A",
+                "valuation_suppressed_integrity_failure",
+                "unavailable",
+            )
+            result.field_sources["Indicative Manual EV Range"] = (
+                "N/A",
+                "valuation_suppressed_integrity_failure",
+                "unavailable",
+            )
+            result.field_sources["Indicative Manual EV Base"] = (
+                "N/A",
+                "valuation_suppressed_integrity_failure",
+                "unavailable",
+            )
+            sources.add_once(
+                "Indicative Manual EV Range",
+                "N/A",
+                "valuation_suppressed_integrity_failure",
+                "unavailable",
+            )
+            sources.add_once(
+                "Indicative Manual EV Base",
                 "N/A",
                 "valuation_suppressed_integrity_failure",
                 "unavailable",
@@ -4636,7 +4707,10 @@ def run_analysis(
     if peers_status in {"FAILED", "TIMEOUT", "DEGRADED_API_CAPACITY"}:
         _peers_display_status = "PEERS_FAILED"
     elif not peer_multiples or peer_multiples.n_valuation_peers <= 0:
-        _peers_display_status = "PEERS_FAILED"
+        if company_type == "private" and peer_multiples and (peer_multiples.n_peers or 0) > 0:
+            _peers_display_status = "REFERENCE_PEERS_ONLY"
+        else:
+            _peers_display_status = "PEERS_FAILED"
     else:
         _pure_share = float(peer_multiples.pure_peer_weight_share or 0.0)
         _eff_disp = float(peer_multiples.effective_peer_count or 0.0)
@@ -4903,16 +4977,33 @@ def run_analysis(
 
     # Final canonical sync after confidence guardrails so every module uses the same recommendation string.
     if thesis and val:
-        _fv_src = result.field_sources.get("Fair Value Range")
-        _fv_txt = _fv_src[0] if _fv_src and _fv_src[0] else "N/A"
-        _pt_txt = val.target_price or "N/A"
         _final_rec = val.recommendation or _rec or "N/A"
-        thesis.thesis = _sync_canonical_recommendation_text(
-            thesis.thesis or "",
-            _fv_txt,
-            _pt_txt,
-            _final_rec,
-        )
+        if company_type == "private":
+            _txt = str(thesis.thesis or "").strip()
+            _txt = _re.sub(r"(?im)^Valuation reference \(canonical\):[^\n]*\n*", "", _txt).strip()
+            if _private_screen_only:
+                _gate_reason = "valuation gated because legal identity is unresolved" if _private_identity_status == "UNRESOLVED" else "private valuation gates not satisfied"
+                _canon = f"Valuation reference (canonical): valuation N/A; {_gate_reason}; recommendation {_final_rec}."
+            elif valuation_status == "FAILED" or _scenario_integrity_failed:
+                _canon = "Valuation reference (canonical): valuation N/A; valuation suppressed due to scenario integrity failure."
+            else:
+                _ev_rng = (result.field_sources.get("Indicative Manual EV Range") or ("N/A", "", ""))[0]
+                _ev_base = (result.field_sources.get("Indicative Manual EV Base") or ("N/A", "", ""))[0]
+                _canon = (
+                    "Valuation reference (canonical): indicative manual EV range "
+                    f"{_ev_rng}; base EV {_ev_base}; recommendation {_final_rec}."
+                )
+            thesis.thesis = f"{_canon}\n\n{_txt}".strip()
+        else:
+            _fv_src = result.field_sources.get("Fair Value Range")
+            _fv_txt = _fv_src[0] if _fv_src and _fv_src[0] else "N/A"
+            _pt_txt = val.target_price or "N/A"
+            thesis.thesis = _sync_canonical_recommendation_text(
+                thesis.thesis or "",
+                _fv_txt,
+                _pt_txt,
+                _final_rec,
+            )
 
     _market_context_latest_date = ""
     if market_context_pack is not None:
