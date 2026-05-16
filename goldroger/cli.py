@@ -628,6 +628,26 @@ def _extract_two_numbers(raw: str) -> Optional[tuple[float, float]]:
         return None
 
 
+def _parse_money_to_millions(raw: str) -> Optional[float]:
+    txt = str(raw or "").strip()
+    if not txt:
+        return None
+    m = re.search(r"(-?\d[\d,]*\.?\d*)\s*([TMB])\b", txt, flags=re.IGNORECASE)
+    if not m:
+        # Fallback: bare numbers are already in millions for many internal valuation fields.
+        n = _extract_first_number(txt)
+        return float(n) if n is not None else None
+    try:
+        v = float(m.group(1).replace(",", ""))
+        u = m.group(2).upper()
+        mult = {"M": 1.0, "B": 1_000.0, "T": 1_000_000.0}.get(u)
+        if mult is None:
+            return None
+        return v * mult
+    except Exception:
+        return None
+
+
 def _run_currency(pipeline_status: dict, src_map: dict[str, dict[str, str]]) -> str:
     ccy = str((pipeline_status or {}).get("quote_currency") or "").upper().strip()
     if ccy:
@@ -714,7 +734,10 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
     )
     if _is_private:
         _p_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
-        if _p_val_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL", "SCREEN_ONLY", "FAILED"}:
+        _p_out_status = str(pipeline_status.get("private_valuation_output_status", "") or "").strip().upper()
+        if _p_out_status == "SUPPRESSED_INTEGRITY_FAILURE":
+            valuation_state = "INDICATIVE_MANUAL_SUPPRESSED"
+        elif _p_val_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL", "SCREEN_ONLY", "FAILED"}:
             valuation_state = _p_val_mode
     rec_state = str(pipeline_status.get("recommendation", "N/A"))
     _qual_backed_avail = pipeline_status.get("source_backed_market_context_available")
@@ -836,6 +859,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         _private_val_mode = str(pipeline_status.get("private_valuation_mode", "") or "").strip().upper()
         _private_state = str(pipeline_status.get("private_state", "") or "").strip().upper()
         _private_provider_state = str(pipeline_status.get("private_provider_state", "") or "").strip().upper()
+        _private_out_status = str(pipeline_status.get("private_valuation_output_status", "") or "").strip().upper()
         _private_manual = bool(pipeline_status.get("private_manual_revenue_used"))
         _private_used = pipeline_status.get("private_used_providers") or []
         _private_skipped = pipeline_status.get("private_skipped_providers") or []
@@ -864,6 +888,7 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
             f"\n  Private providers: {_private_provider_state or 'FAILED'}"
             f"\n  Private state: {_private_state or 'SCREEN_ONLY'}"
             f"\n  Private valuation mode: {_private_val_mode or 'SCREEN_ONLY'}"
+            f"\n  Valuation output: {_private_out_status or 'GATED'}"
         )
         if _private_val_mode in {"INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL"}:
             block += "\n  Revenue confidence: manual_user_provided"
@@ -955,7 +980,12 @@ def _render_pipeline_status_block(pipeline_status: dict) -> tuple[str, str]:
         except Exception:
             pass
     if _is_private:
-        if _private_val_mode in {"INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL"}:
+        _private_out_status = str(pipeline_status.get("private_valuation_output_status", "") or "").strip().upper()
+        if _private_out_status == "SUPPRESSED_INTEGRITY_FAILURE":
+            _valuation_inputs_state = (
+                "manual revenue input provided, but valuation output suppressed due to scenario integrity failure"
+            )
+        elif _private_val_mode in {"INDICATIVE_MANUAL_REVENUE", "INDICATIVE_MANUAL"}:
             _valuation_inputs_state = "private market data + manual revenue input (unverified)"
         elif _private_val_mode == "VALUATION_GRADE" and _private_rev_quality in {"VERIFIED", "HIGH_CONFIDENCE_ESTIMATE"}:
             _valuation_inputs_state = "private market data + verified quantitative context"
@@ -1379,7 +1409,7 @@ def print_result(result, debug: bool = False):
         )
     _ev_bridge = src_map.get("Enterprise Value (blended)", {}).get("value")
     if _is_private_run:
-        _ev_bridge = src_map.get("Indicative Manual EV Base", {}).get("value") or _ev_bridge
+        _ev_bridge = src_map.get("Indicative Manual EV Base", {}).get("value") or _ev_bridge or v.implied_value
     _eq_bridge = src_map.get("Equity Value", {}).get("value")
     _nd_bridge = src_map.get("Net Debt", {}).get("value")
     _nd_bridge_orig = src_map.get("Net Debt (original currency)", {}).get("value") or _nd_bridge
@@ -1436,6 +1466,46 @@ def print_result(result, debug: bool = False):
         console.print(
             f"[dim]Private indicative EV:[/] Base EV {_ev_bridge}{_tag_ev} | EV Range {_ev_range}{_tag_rng}"
         )
+        # Manual/private indicative sanity framing: keep valuation math interpretable.
+        _p_mode = str((_pipeline_status or {}).get("private_valuation_mode", "") or "").strip().upper()
+        _p_out = str((_pipeline_status or {}).get("private_valuation_output_status", "") or "").strip().upper()
+        if _p_out in {"", "AVAILABLE"}:
+            _base_ev_m = _parse_money_to_millions(str(_ev_bridge))
+            _rev_raw = _source_value("Revenue TTM") or _source_value("Revenue")
+            _rev_m = _parse_money_to_millions(str(_rev_raw))
+            _ebitda_margin_raw = _source_value("EBITDA Margin")
+            _ebitda_margin_pct = _extract_first_number(str(_ebitda_margin_raw or ""))
+            _ev_rev_txt = "N/A"
+            _ev_ebitda_txt = "N/A"
+            if _base_ev_m and _rev_m and _rev_m > 0:
+                _ev_rev_txt = f"{(_base_ev_m / _rev_m):.1f}x"
+            if _base_ev_m and _rev_m and _rev_m > 0 and _ebitda_margin_pct is not None:
+                _ebitda_m = _rev_m * (float(_ebitda_margin_pct) / 100.0)
+                if _ebitda_m > 0:
+                    _ev_ebitda_txt = f"{(_base_ev_m / _ebitda_m):.1f}x"
+            _rev_note = _infer_source_note("Revenue", _rev_raw or "N/A", src_map)
+            _ebitda_note = _infer_source_note("EBITDA Margin", _ebitda_margin_raw or "N/A", src_map)
+            _weighted_methods = [
+                m
+                for m in (v.methods or [])
+                if int(getattr(m, "weight", 0) or 0) > 0
+            ]
+            _weighted_names = [str(getattr(m, "name", "") or "") for m in _weighted_methods]
+            _method_basis = "DCF-only, no valuation-weighted peer comps"
+            _has_non_dcf = any(
+                ("comps" in n.lower()) or ("transaction" in n.lower())
+                for n in _weighted_names
+            )
+            if _has_non_dcf:
+                _method_basis = "multi-method (see valuation table)"
+            console.print(
+                "[bold]Manual Valuation Sanity Check:[/bold]\n"
+                f"  Base EV / Revenue: {_ev_rev_txt}\n"
+                f"  Base EV / EBITDA: {_ev_ebitda_txt}\n"
+                f"  Revenue source: {_rev_note}\n"
+                f"  EBITDA margin source: {_ebitda_note}\n"
+                f"  Method basis: {_method_basis}"
+            )
     _mcap_val = src_map.get("Market Cap", {}).get("value")
     _valuation_failed = str(_pipeline_status.get("valuation", "")).upper() == "FAILED"
     _sanity_suppressed = bool(_pipeline_status.get("sanity_breaker_triggered"))

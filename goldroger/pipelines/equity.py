@@ -738,6 +738,7 @@ def run_analysis(
     _private_manual_identity_override = False
     _private_provider_state = "FAILED"
     _private_identity_source_state = "unavailable"
+    _private_valuation_output_status = "GATED"
     _private_used_providers: list[str] = []
     _private_skipped_providers: list[str] = []
     if company_type == "private":
@@ -3753,7 +3754,7 @@ def run_analysis(
         _target_price = None
         _ev_str = "N/A"
     if company_type == "private":
-        if _private_screen_only or _rec == "INCONCLUSIVE":
+        if _private_screen_only:
             _private_valuation_mode = "SCREEN_ONLY"
         elif valuation_status == "FAILED":
             _private_valuation_mode = "FAILED"
@@ -3761,6 +3762,12 @@ def run_analysis(
             _private_valuation_mode = "INDICATIVE_MANUAL"
         else:
             _private_valuation_mode = "VALUATION_GRADE"
+        if _private_valuation_mode == "SCREEN_ONLY":
+            _private_valuation_output_status = "GATED"
+        elif _private_valuation_mode == "FAILED":
+            _private_valuation_output_status = "FAILED"
+        else:
+            _private_valuation_output_status = "AVAILABLE"
         if _private_valuation_mode == "FAILED":
             _private_state = "VALUATION_FAILED"
         elif _private_valuation_mode in {"VALUATION_GRADE", "INDICATIVE_MANUAL"}:
@@ -3783,6 +3790,12 @@ def run_analysis(
         sources.add_once(
             "Private State",
             _private_state,
+            "private_valuation_gate",
+            "inferred",
+        )
+        sources.add_once(
+            "Private Valuation Output",
+            _private_valuation_output_status,
             "private_valuation_gate",
             "inferred",
         )
@@ -4211,6 +4224,7 @@ def run_analysis(
             rec.intrinsic_price = None
             valuation_status = "FAILED"
             _private_cap_reason = "valuation integrity failed (scenario ordering); manual-indicative output suppressed"
+            _private_valuation_output_status = "SUPPRESSED_INTEGRITY_FAILURE"
             result.field_sources["Enterprise Value (blended)"] = (
                 "N/A",
                 "valuation_suppressed_integrity_failure",
@@ -4984,8 +4998,16 @@ def run_analysis(
             if _private_screen_only:
                 _gate_reason = "valuation gated because legal identity is unresolved" if _private_identity_status == "UNRESOLVED" else "private valuation gates not satisfied"
                 _canon = f"Valuation reference (canonical): valuation N/A; {_gate_reason}; recommendation {_final_rec}."
+                _valuation_line = (
+                    "- Valuation: model signal is unavailable because valuation gates are not satisfied; "
+                    f"final recommendation is {_final_rec}."
+                )
             elif valuation_status == "FAILED" or _scenario_integrity_failed:
                 _canon = "Valuation reference (canonical): valuation N/A; valuation suppressed due to scenario integrity failure."
+                _valuation_line = (
+                    "- Valuation: model signal is unavailable/suppressed due to scenario integrity failure; "
+                    f"final recommendation is {_final_rec}."
+                )
             else:
                 _ev_rng = (result.field_sources.get("Indicative Manual EV Range") or ("N/A", "", ""))[0]
                 _ev_base = (result.field_sources.get("Indicative Manual EV Base") or ("N/A", "", ""))[0]
@@ -4993,6 +5015,12 @@ def run_analysis(
                     "Valuation reference (canonical): indicative manual EV range "
                     f"{_ev_rng}; base EV {_ev_base}; recommendation {_final_rec}."
                 )
+                _valuation_line = ""
+            if _valuation_line:
+                if _re.search(r"(?im)^- Valuation:.*$", _txt):
+                    _txt = _re.sub(r"(?im)^- Valuation:.*$", _valuation_line, _txt)
+                else:
+                    _txt = (_txt + "\n" + _valuation_line).strip()
             thesis.thesis = f"{_canon}\n\n{_txt}".strip()
         else:
             _fv_src = result.field_sources.get("Fair Value Range")
@@ -5273,6 +5301,7 @@ def run_analysis(
                 "private_financials_quality": _private_financials_quality if company_type == "private" else "",
                 "private_peers_state": _private_peers_state if company_type == "private" else "",
                 "private_valuation_mode": _private_valuation_mode if company_type == "private" else "",
+                "private_valuation_output_status": _private_valuation_output_status if company_type == "private" else "",
                 "private_screen_only_reasons": list(dict.fromkeys(_private_screen_only_reasons)) if company_type == "private" else [],
                 "private_state": _private_state if company_type == "private" else "",
                 "private_provider_state": _private_provider_state if company_type == "private" else "",

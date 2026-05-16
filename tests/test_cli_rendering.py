@@ -375,6 +375,34 @@ def test_pipeline_status_block_private_manual_mode_semantics():
     assert "Manual revenue override: yes (user-provided, unverified)" in block
 
 
+def test_pipeline_status_block_private_manual_suppressed_integrity_semantics():
+    block, _ = _render_pipeline_status_block(
+        {
+            "company_type": "private",
+            "research_enrichment": "PARTIAL_FALLBACK",
+            "peers": "REFERENCE_PEERS_ONLY",
+            "valuation": "FAILED",
+            "confidence": "Low",
+            "recommendation": "INCONCLUSIVE",
+            "private_revenue_status": "manual",
+            "private_revenue_quality": "MANUAL",
+            "private_identity_status": "RESOLVED_STRONG",
+            "private_identity_source_state": "source-backed",
+            "private_financials_quality": "ESTIMATED",
+            "private_peers_state": "WEAK_REFERENCE_ONLY",
+            "private_provider_state": "PARTIAL",
+            "private_valuation_mode": "INDICATIVE_MANUAL",
+            "private_valuation_output_status": "SUPPRESSED_INTEGRITY_FAILURE",
+            "private_state": "VALUATION_READY_MANUAL_REVENUE",
+            "private_manual_revenue_used": True,
+        }
+    )
+    assert "Valuation: INDICATIVE_MANUAL_SUPPRESSED" in block
+    assert "Private valuation mode: INDICATIVE_MANUAL" in block
+    assert "Valuation output: SUPPRESSED_INTEGRITY_FAILURE" in block
+    assert "Valuation inputs: manual revenue input provided, but valuation output suppressed due to scenario integrity failure" in block
+
+
 def test_infer_source_note_screen_only_values_are_not_logged_as_analysis_output():
     note = _infer_source_note("Revenue Growth", "N/A [screen-only: non-valuation-grade]", {})
     assert "excluded from valuation" in note
@@ -404,3 +432,23 @@ def test_pipeline_status_block_private_screen_only_reference_peer_mix():
     assert "Private peers: OK_REFERENCE_ONLY" in block
     assert "Reference peer mix: 80.0% core / 20.0% adjacent" in block
     assert "Valuation peer weight: 0.0% because private valuation is gated" in block
+
+
+def test_public_pipeline_status_block_has_no_private_manual_labels():
+    block, _ = _render_pipeline_status_block(
+        {
+            "company_type": "public",
+            "research_enrichment": "RESEARCH_PARTIAL_SOURCE_BACKED",
+            "peers": "MIXED_COMPS_OK",
+            "valuation": "DEGRADED",
+            "confidence": "Low",
+            "recommendation": "HOLD / LOW CONVICTION",
+        }
+    )
+    lower = block.lower()
+    assert "private screen-only" not in lower
+    assert "indicative manual ev" not in lower
+    assert "manual_user_input" not in lower
+    assert "valuation gated" not in lower
+    assert "manual identity confirmed" not in lower
+    assert "private valuation mode" not in lower

@@ -114,6 +114,7 @@ def _run_private_case(
     manual_identity_confirmed: bool = False,
     company_identifier: str = "",
     peer_multiples_override: PeerMultiples | None = None,
+    quick_mode: bool = True,
 ):
     import goldroger.data.private_triangulation as tri_mod
     import goldroger.data.source_selector as selector_mod
@@ -153,7 +154,7 @@ def _run_private_case(
     return run_analysis(
         company=company,
         company_type="private",
-        quick_mode=True,
+        quick_mode=quick_mode,
         cli_mode=True,
         country_hint=country_hint,
         company_identifier=company_identifier,
@@ -398,7 +399,9 @@ def test_private_manual_revenue_can_unlock_with_manual_identity_confirmation(mon
     assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
     assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
     assert str(ps.get("private_identity_status")) == "UNRESOLVED"
+    assert str(ps.get("private_identity_source_state")) == "unavailable"
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
+    assert str(analysis.valuation.recommendation).upper() in {"INDICATIVE / LOW CONVICTION", "INCONCLUSIVE"}
     assert "manual_user_input" in (analysis.sources_md or "").lower()
 
 
@@ -501,8 +504,15 @@ def test_private_manual_integrity_failure_marks_ev_unavailable_and_ebitda_not_ma
         manual_revenue_currency="EUR",
         manual_revenue_year=2024,
     )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
     assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
     assert analysis.football_field is None
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
+    assert str(ps.get("private_valuation_output_status")) == "SUPPRESSED_INTEGRITY_FAILURE"
+    th = str((analysis.thesis.thesis if analysis.thesis else "") or "").lower()
+    assert "valuation suppressed due to scenario integrity failure" in th
+    assert "final recommendation is inconclusive" in th
+    assert "final recommendation is indicative / low conviction" not in th
     src = _parse_sources_md(analysis.sources_md or "")
     assert src.get("Indicative Manual EV Range", {}).get("source") == "valuation_suppressed_integrity_failure"
     assert src.get("Indicative Manual EV Base", {}).get("source") == "valuation_suppressed_integrity_failure"
@@ -591,6 +601,46 @@ def test_private_manual_dcf_only_has_explicit_final_row_and_reference_peers_stat
         assert str(dcf.mid) == str(final.mid)
         assert str(dcf.low) == str(final.low)
         assert str(dcf.high) == str(final.high)
+        th = str((analysis.thesis.thesis if analysis.thesis else "") or "").lower()
+        assert "valuation reference (canonical): indicative manual ev range" in th
+        assert "base ev" in th
+        assert str(ps.get("private_valuation_output_status")) in {"AVAILABLE", ""}
+
+
+def test_private_manual_sanity_inputs_are_available_for_valid_indicative_ev(monkeypatch):
+    md = _md(company="Revolut Ltd", source="companies_house", revenue_m=None, confidence="inferred", sector="Technology")
+    md.additional_metadata = {"company_number": "08804411"}
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Revolut Ltd",
+        registry_md=md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="GB",
+        company_identifier="08804411",
+        manual_revenue=2200.0,
+        manual_revenue_currency="GBP",
+        manual_revenue_year=2024,
+        manual_ebitda_margin=12.0,
+        manual_growth=30.0,
+        peer_multiples_override=_qual_only_peer_stub(),
+        quick_mode=False,
+    )
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
+    assert str(ps.get("private_valuation_output_status")) in {"AVAILABLE", ""}
+    src = _parse_sources_md(analysis.sources_md or "")
+    assert src.get("Revenue TTM", {}).get("source") == "manual_user_input"
+    assert src.get("EBITDA Margin", {}).get("source") == "manual_user_input"
+    methods = analysis.valuation.methods or []
+    dcf = next((m for m in methods if m.name == "DCF"), None)
+    final = next((m for m in methods if m.name == "Final Indicative Manual EV"), None)
+    assert dcf is not None and final is not None
+    base_ev_m = float(final.mid or 0.0)
+    revenue_m = 2200.0
+    ebitda_m = revenue_m * 0.12
+    assert base_ev_m / revenue_m == pytest.approx(1.86, rel=0.2)
+    assert base_ev_m / ebitda_m == pytest.approx(15.5, rel=0.2)
 
 
 def test_private_manual_source_tagging_only_marks_explicit_manual_fields(monkeypatch):
