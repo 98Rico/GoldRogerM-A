@@ -1485,6 +1485,16 @@ def print_result(result, debug: bool = False):
                     _ev_ebitda_txt = f"{(_base_ev_m / _ebitda_m):.1f}x"
             _rev_note = _infer_source_note("Revenue", _rev_raw or "N/A", src_map)
             _ebitda_note = _infer_source_note("EBITDA Margin", _ebitda_margin_raw or "N/A", src_map)
+            _rev_note_l = _rev_note.lower()
+            _ebitda_note_l = _ebitda_note.lower()
+            if "manual_user_input" in _rev_note_l:
+                _rev_note = "manual user input, unverified"
+            else:
+                _rev_note = _rev_note.replace("Revenue: ", "")
+            if "manual_user_input" in _ebitda_note_l:
+                _ebitda_note = "manual user input"
+            else:
+                _ebitda_note = _ebitda_note.replace("EBITDA Margin: ", "")
             _weighted_methods = [
                 m
                 for m in (v.methods or [])

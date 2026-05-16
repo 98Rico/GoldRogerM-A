@@ -1172,10 +1172,16 @@ def run_analysis(
                 if _has_strong_id
                 else ("RESOLVED_WEAK" if _has_weak_identity else "UNRESOLVED")
             )
+            if _private_identity_status == "UNRESOLVED" and _private_manual_identity_override:
+                _private_identity_status = "RESOLVED_MANUAL"
             _private_identity_source_state = (
                 "source-backed"
                 if _private_identity_status == "RESOLVED_STRONG"
-                else ("weak source-backed" if _private_identity_status == "RESOLVED_WEAK" else "unavailable")
+                else (
+                    "weak source-backed"
+                    if _private_identity_status == "RESOLVED_WEAK"
+                    else ("manual confirmed (unverified)" if _private_identity_status == "RESOLVED_MANUAL" else "unavailable")
+                )
             )
             _rev_source = str(market_data.data_source or "").strip().lower()
             if _private_revenue_status == "verified":
@@ -3843,9 +3849,11 @@ def run_analysis(
     sources.add_once("Target Price", _target_price or "N/A", "valuation_engine", "inferred")
     sources.add_once("Upside/Downside", val.upside_downside or "N/A", "valuation_engine", "inferred")
 
+    _pending_lbo_line: str | None = None
+    _pending_sensitivity_line: tuple[str, str] | None = None
     if result.lbo and not (company_type == "private" and _private_screen_only):
         lbo = result.lbo
-        console.print(
+        _pending_lbo_line = (
             f"  LBO: {'✓ FEASIBLE' if lbo.is_feasible else '✗ INFEASIBLE'} — "
             f"IRR {lbo.irr:.1%} / {lbo.moic:.1f}x MOIC / "
             f"{lbo.leverage_at_entry:.1f}x entry leverage"
@@ -3863,14 +3871,9 @@ def run_analysis(
             _i_dn = max(_wi - 1, 0)
             _ev_up = _sr.ev_matrix[_i_up][_ti]
             _ev_dn = _sr.ev_matrix[_i_dn][_ti]
-            console.print(
-                f"  [dim]Sensitivity (WACC ±100bps): {_fmt_ev_human(_ev_dn, _quote_ccy)} to {_fmt_ev_human(_ev_up, _quote_ccy)}[/dim]"
-            )
-            sources.add_once(
-                "Sensitivity (WACC ±100bps)",
+            _pending_sensitivity_line = (
+                f"  [dim]Sensitivity (WACC ±100bps): {_fmt_ev_human(_ev_dn, _quote_ccy)} to {_fmt_ev_human(_ev_up, _quote_ccy)}[/dim]",
                 f"{_fmt_ev_human(_ev_dn, _quote_ccy)} to {_fmt_ev_human(_ev_up, _quote_ccy)}",
-                "valuation_engine",
-                "inferred",
             )
         except Exception:
             pass
@@ -4256,6 +4259,25 @@ def run_analysis(
                 "N/A",
                 "valuation_suppressed_integrity_failure",
                 "unavailable",
+            )
+    _private_integrity_suppressed = bool(
+        company_type == "private"
+        and str(_private_valuation_output_status).upper() == "SUPPRESSED_INTEGRITY_FAILURE"
+    )
+    if _private_integrity_suppressed:
+        console.print("  [yellow]Valuation diagnostics suppressed:[/yellow] scenario integrity failed.")
+        result.lbo = None
+        result.sensitivity = None
+    else:
+        if _pending_lbo_line:
+            console.print(_pending_lbo_line)
+        if _pending_sensitivity_line:
+            console.print(_pending_sensitivity_line[0])
+            sources.add_once(
+                "Sensitivity (WACC ±100bps)",
+                _pending_sensitivity_line[1],
+                "valuation_engine",
+                "inferred",
             )
 
     # ── 5c. IC SCORING ────────────────────────────────────────────────────

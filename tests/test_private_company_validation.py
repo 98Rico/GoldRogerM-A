@@ -398,8 +398,8 @@ def test_private_manual_revenue_can_unlock_with_manual_identity_confirmation(mon
     assert bool(ps.get("private_manual_revenue_used")) is True
     assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
     assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
-    assert str(ps.get("private_identity_status")) == "UNRESOLVED"
-    assert str(ps.get("private_identity_source_state")) == "unavailable"
+    assert str(ps.get("private_identity_status")) == "RESOLVED_MANUAL"
+    assert str(ps.get("private_identity_source_state")) == "manual confirmed (unverified)"
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
     assert str(analysis.valuation.recommendation).upper() in {"INDICATIVE / LOW CONVICTION", "INCONCLUSIVE"}
     assert "manual_user_input" in (analysis.sources_md or "").lower()
@@ -514,6 +514,7 @@ def test_private_manual_integrity_failure_marks_ev_unavailable_and_ebitda_not_ma
     assert "final recommendation is inconclusive" in th
     assert "final recommendation is indicative / low conviction" not in th
     src = _parse_sources_md(analysis.sources_md or "")
+    assert "Sensitivity (WACC ±100bps)" not in src
     assert src.get("Indicative Manual EV Range", {}).get("source") == "valuation_suppressed_integrity_failure"
     assert src.get("Indicative Manual EV Base", {}).get("source") == "valuation_suppressed_integrity_failure"
     assert src.get("EBITDA Margin", {}).get("source") != "manual_user_input"
