@@ -1180,7 +1180,7 @@ def run_analysis(
                 else (
                     "weak source-backed"
                     if _private_identity_status == "RESOLVED_WEAK"
-                    else ("manual confirmed (unverified)" if _private_identity_status == "RESOLVED_MANUAL" else "unavailable")
+                    else ("manual user-confirmed (unverified)" if _private_identity_status == "RESOLVED_MANUAL" else "unavailable")
                 )
             )
             _rev_source = str(market_data.data_source or "").strip().lower()
@@ -3230,6 +3230,16 @@ def run_analysis(
             "  [red]⚠ Valuation blocked:[/red] currency/share normalization checks failed. "
             "Run is screen-only until data normalization is resolved."
         )
+    elif (
+        company_type == "private"
+        and _private_revenue_quality == "MANUAL"
+        and _private_identity_status == "UNRESOLVED"
+        and not _private_manual_identity_override
+    ):
+        console.print(
+            "  [yellow]⚠ Manual revenue provided, but legal identity is unresolved — "
+            "quantitative valuation remains gated.[/yellow]"
+        )
     elif not result.has_revenue:
         console.print(
             "  [yellow]⚠ No revenue data — quantitative valuation skipped. "
@@ -3927,7 +3937,10 @@ def run_analysis(
     ic_summary: ICScoreSummary | None = None
     try:
         if company_type == "private" and _private_screen_only:
-            raise ValueError("private screen-only mode: valuation scenarios suppressed (identity/revenue gate)")
+            _screen_gate_reason = "identity/revenue gate"
+            if _private_revenue_quality == "MANUAL" and _private_identity_status == "UNRESOLVED":
+                _screen_gate_reason = "identity gate"
+            raise ValueError(f"private screen-only mode: valuation scenarios suppressed ({_screen_gate_reason})")
         if normalization_blocked:
             raise ValueError("valuation blocked due to failed currency/share normalization")
         if _hard_suppression_reasons:
@@ -4199,10 +4212,16 @@ def run_analysis(
                 "after sanity-breaker trigger."
             )
         if "private screen-only mode" in _scenario_err.lower():
-            console.print(
-                "  [yellow]Scenarios suppressed:[/yellow] private run is screen-only until identity and revenue "
-                "quality gates are satisfied."
-            )
+            if "identity gate" in _scenario_err.lower():
+                console.print(
+                    "  [yellow]Scenarios suppressed:[/yellow] private run is screen-only until the legal identity "
+                    "gate is satisfied."
+                )
+            else:
+                console.print(
+                    "  [yellow]Scenarios suppressed:[/yellow] private run is screen-only until identity and revenue "
+                    "quality gates are satisfied."
+                )
         if "scenario ordering failed" in _scenario_err.lower():
             _scenario_integrity_failed = True
             quality.warnings.append("Scenario ordering failed; football field suppressed.")
@@ -5015,6 +5034,9 @@ def run_analysis(
     if thesis and val:
         _final_rec = val.recommendation or _rec or "N/A"
         if company_type == "private":
+            if valuation_status == "FAILED" or _scenario_integrity_failed:
+                _final_rec = "INCONCLUSIVE"
+                val.recommendation = _final_rec
             _txt = str(thesis.thesis or "").strip()
             _txt = _re.sub(r"(?im)^Valuation reference \(canonical\):[^\n]*\n*", "", _txt).strip()
             if _private_screen_only:

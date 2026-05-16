@@ -262,5 +262,65 @@
     "ev_ebitda": 12.4,
     "ev_revenue": 3.8,
     "source": "https://www.unitedhealthgroup.com/newsroom/2022/2022-10-17-optum-to-acquire-change-healthcare.html"
+  },
+  {
+    "target": "Newcrest Mining",
+    "acquirer": "Newmont Corporation",
+    "sector": "Gold Mining",
+    "year": 2023,
+    "ev_m": 19500.0,
+    "revenue_m": 4260.0,
+    "ebitda_m": 1800.0,
+    "ev_ebitda": 10.8,
+    "ev_revenue": 4.6,
+    "source": "https://www.mining.com/newmont-completes-19-5-billion-acquisition-of-newcrest/"
+  },
+  {
+    "target": "Nutrien Ag Solutions (\u90e8\u5206\u8d44\u4ea7)",
+    "acquirer": "Mosaic Company",
+    "sector": "Fertilizers",
+    "year": 2021,
+    "ev_m": 730.0,
+    "revenue_m": 1000.0,
+    "ebitda_m": null,
+    "ev_ebitda": null,
+    "ev_revenue": 0.7,
+    "source": "https://investors.themosaiccompany.com/news-releases/news-release-details/mosaic-completes-acquisition-nutrien-ag-solutions-phosphates-business"
+  },
+  {
+    "target": "Linde AG (Praxair merger)",
+    "acquirer": "Linde plc",
+    "sector": "Industrial Gases",
+    "year": 2020,
+    "ev_m": 90000.0,
+    "revenue_m": 28000.0,
+    "ebitda_m": 6500.0,
+    "ev_ebitda": 13.8,
+    "ev_revenue": 3.2,
+    "source": "https://www.linde.com/about-linde/merger"
+  },
+  {
+    "target": "Huntsman Corporation's Performance Products division",
+    "acquirer": "Indorama Ventures",
+    "sector": "Chemicals",
+    "year": 2023,
+    "ev_m": 2100.0,
+    "revenue_m": 1600.0,
+    "ebitda_m": 250.0,
+    "ev_ebitda": 8.4,
+    "ev_revenue": 1.3,
+    "source": "https://www.indoramaventures.com/en/media/press-releases/indorama-ventures-completes-acquisition-of-huntsman-s-performance-products-division"
+  },
+  {
+    "target": "K+S Salt Business",
+    "acquirer": "Stone Canyon Industries Holdings",
+    "sector": "Salt & Minerals",
+    "year": 2021,
+    "ev_m": 3200.0,
+    "revenue_m": 1000.0,
+    "ebitda_m": 200.0,
+    "ev_ebitda": 16.0,
+    "ev_revenue": 3.2,
+    "source": "https://www.kpluss.com/en/newsroom/news/2021/k-s-completes-sale-of-its-salt-business"
   }
 ]

@@ -399,7 +399,7 @@ def test_private_manual_revenue_can_unlock_with_manual_identity_confirmation(mon
     assert str(ps.get("private_valuation_mode")) == "INDICATIVE_MANUAL"
     assert str(ps.get("private_state")) == "VALUATION_READY_MANUAL_REVENUE"
     assert str(ps.get("private_identity_status")) == "RESOLVED_MANUAL"
-    assert str(ps.get("private_identity_source_state")) == "manual confirmed (unverified)"
+    assert str(ps.get("private_identity_source_state")) == "manual user-confirmed (unverified)"
     assert str(ps.get("confidence")).lower() in {"low", "medium"}
     assert str(analysis.valuation.recommendation).upper() in {"INDICATIVE / LOW CONVICTION", "INCONCLUSIVE"}
     assert "manual_user_input" in (analysis.sources_md or "").lower()
@@ -424,6 +424,30 @@ def test_private_manual_revenue_without_identity_confirmation_stays_screen_only(
     assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
     assert str(ps.get("private_state")) == "IDENTITY_UNRESOLVED"
     assert str(analysis.valuation.recommendation).upper().startswith("INCONCLUSIVE")
+
+
+def test_private_manual_revenue_unresolved_identity_message_is_identity_gate_not_revenue(monkeypatch, capsys):
+    weak_md = _md(company="Personio", source="crunchbase", revenue_m=None, confidence="inferred", sector="Technology")
+    analysis = _run_private_case(
+        monkeypatch,
+        company="Personio",
+        registry_md=weak_md,
+        selected_providers=[],
+        triangulation_result=None,
+        country_hint="DE",
+        manual_revenue=300.0,
+        manual_revenue_currency="EUR",
+        manual_identity_confirmed=False,
+    )
+    out = capsys.readouterr().out
+    lower = out.lower()
+    assert "manual revenue provided, but legal identity is unresolved" in lower
+    assert "no revenue data — quantitative valuation skipped" not in lower
+    ps = (analysis.data_quality or {}).get("pipeline_status", {})
+    assert str(ps.get("private_valuation_mode")) == "SCREEN_ONLY"
+    assert str(ps.get("private_identity_status")) == "UNRESOLVED"
+    reasons = [str(x).lower() for x in (ps.get("private_screen_only_reasons") or [])]
+    assert any("legal identity unresolved" in r for r in reasons)
 
 
 def test_private_manual_revenue_with_weak_identity_is_indicative_only(monkeypatch):
